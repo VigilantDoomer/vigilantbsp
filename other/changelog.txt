@@ -1,0 +1,6 @@
+Changelog for VigilantBSP
+
+VigilantBSP 0.67a 
+- Initial alpha build
+
+
