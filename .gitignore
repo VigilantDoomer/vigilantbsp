@@ -12,8 +12,7 @@
 !LICENSE
 !COPYING
 !other/*.*
-
-# !Makefile
+!Makefile
 
 # ...even if they are in subdirectories
 !*/ 

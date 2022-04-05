@@ -290,7 +290,8 @@ func init() {
 func PrintHelp() {
 	Log.Printf("Usage: vigilantbsp {-options} filename.wad {-o output.wad}\n")
 	Log.Printf("\n")
-	Log.Printf("-x+ turn on option -x- turn off option * = default")
+	//Log.Printf("-x+ turn on option -x- turn off option * = default")
+	Log.Printf("-x+ turn on option -x- turn off option")
 	Log.Printf("\n")
 	Log.Printf("-b Rebuild BLOCKMAP.\n")
 	Log.Printf("	o= Offset configuration\n")
