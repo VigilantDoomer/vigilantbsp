@@ -56,6 +56,8 @@ type NodesInput struct {
 	createNodeSS    CreateNodeSSFunc // SS stands for "single sector". In case you worried.
 	diagonalPenalty int
 	pickNodeFactor  int
+	minorIsBetter   MinorIsBetterFunc
+	linesToIgnore   []bool // dummy linedefs such as for scrolling
 }
 
 // Returned from nodes builder goroutine through a channel
@@ -108,6 +110,7 @@ type NodesWork struct {
 	diagonalPenalty int
 	pickNodeFactor  int
 	pickNodeUser    int
+	minorIsBetter   MinorIsBetterFunc
 }
 
 type NodeVertex struct {
@@ -191,7 +194,8 @@ func NodesGenerator(input *NodesInput) {
 	// be split if possible)
 	input.lines.DetectPolyobjects()
 
-	allSegs, intVertices := createSegs(input.lines, input.sidedefs)
+	allSegs, intVertices := createSegs(input.lines, input.sidedefs,
+		input.linesToIgnore)
 	if len(allSegs) == 0 {
 		Log.Error("Failed to create any SEGs (BAD). Quitting (%s)\n.", time.Since(start))
 		// First respond to solid blocks control goroutine that we won't serve
@@ -279,6 +283,7 @@ func NodesGenerator(input *NodesInput) {
 		diagonalPenalty: input.diagonalPenalty,
 		pickNodeFactor:  input.pickNodeFactor,
 		pickNodeUser:    input.pickNodeUser,
+		minorIsBetter:   input.minorIsBetter,
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
@@ -385,7 +390,9 @@ func (w *NodesWork) tooManySegs() bool {
 // line has same sector on both sides and doesn't seem to be part of
 // self-referencing sector effect nor was tagged as precious, has no textures
 // either (handled by culler)
-func createSegs(lines WriteableLines, sidedefs []Sidedef) ([]*NodeSeg, []NodeVertex) {
+// 5. Fast/remote scroller effect dummy lines (linesToIgnore[i] == true)
+func createSegs(lines WriteableLines, sidedefs []Sidedef,
+	linesToIgnore []bool) ([]*NodeSeg, []NodeVertex) {
 	res := make([]*NodeSeg, 0, 65536)
 	var rootCs, lastCs *NodeSeg
 	// This is responsible for handling for which lines we don't create segs,
@@ -409,6 +416,9 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef) ([]*NodeSeg, []NodeVer
 	myVertices := make([]NodeVertex, lines.GetVerticesCount())
 	l := lines.Len()
 	for i := uint16(0); i < l; i++ {
+		if linesToIgnore != nil && linesToIgnore[i] {
+			continue
+		}
 		x1, y1, x2, y2 := lines.GetAllXY(i)
 		vidx1, vidx2 := lines.GetLinedefVertices(i)
 		storeNodeVertex(myVertices, x1, y1, uint32(vidx1))

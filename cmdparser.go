@@ -351,6 +351,37 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 				}
 				p = rest
 			}
+		case 'p': // new in v0.69a
+			{
+				nos, rest := readNumeric("-np", p[1:])
+				if nos.whichType == ARG_ENABLED || nos.whichType == ARG_DISABLED {
+					Log.Error("You are supposted to pass -np=<digit>, not -np+ or -np-.")
+				} else {
+					switch nos.value {
+					case 0:
+						{
+							c.MinorCmpUser = MINOR_CMP_NOOP
+						}
+					case 1:
+						{
+							c.MinorCmpUser = MINOR_CMP_SEGS
+						}
+					case 2:
+						{
+							c.MinorCmpUser = MINOR_CMP_SECTORS
+						}
+					case 3:
+						{
+							c.MinorCmpUser = MINOR_CMP_BALANCE
+						}
+					default:
+						{
+							Log.Error("Ignoring invalid (out of range) value for the type of secondary score to use for partition selection.")
+						}
+					}
+				}
+				p = rest
+			}
 		case 'i':
 			{
 				nos, rest := readNumeric("-ni", p[1:])

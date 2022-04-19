@@ -77,17 +77,19 @@ type RejectWork struct {
 	p1, p2, p3, p4 IntVertex        // memory optimization: used in rejectLOS.go -> initializeWorld, another non-reentrant function
 	seenLines      [65536 / 8]uint8 // replaces checkLine bool array, here we use unsigned bytes to store them compactly
 	// rejectDFS.go junk
-	graphTable GraphTable
+	graphTable    GraphTable
+	linesToIgnore []bool
 }
 
 type RejectInput struct {
-	lines      AbstractLines
-	bounds     LevelBounds
-	sectors    []Sector
-	sidedefs   []Sidedef
-	bcontrol   chan BconRequest
-	bgenerator chan BgenRequest
-	rejectChan chan<- []byte
+	lines         AbstractLines
+	bounds        LevelBounds
+	sectors       []Sector
+	sidedefs      []Sidedef
+	bcontrol      chan BconRequest
+	bgenerator    chan BgenRequest
+	rejectChan    chan<- []byte
+	linesToIgnore []bool
 }
 
 type IntVertex struct {
@@ -153,8 +155,9 @@ type Neighboring struct {
 func RejectGenerator(input RejectInput) {
 	start := time.Now()
 	r := &RejectWork{
-		numSectors: len(input.sectors),
-		input:      &input,
+		numSectors:    len(input.sectors),
+		input:         &input,
+		linesToIgnore: input.linesToIgnore,
 	}
 	r.prepareReject()
 	if r.setupLines() {
@@ -331,6 +334,10 @@ func (r *RejectWork) setupLines() bool {
 		cull.EnablePerimeterSink(config.RejectSelfRefMode == REJ_SELFREF_PEDANTIC) // reference to global: config
 	}
 	for i := uint16(0); i < numLines; i++ {
+		// Skip dummy lines from fast/remote scroller effect implementation
+		if r.linesToIgnore != nil && r.linesToIgnore[i] {
+			continue
+		}
 		x1, y1, x2, y2 := r.input.lines.GetAllXY(i)
 		vertices[int(i)<<1] = IntVertex{X: x1, Y: y1}
 		vertices[int(i)<<1+1] = IntVertex{X: x2, Y: y2}
@@ -400,6 +407,7 @@ func (r *RejectWork) setupLines() bool {
 			YOffset:         0,
 			useZeroHeader:   false,
 			internalPurpose: true,
+			linesToIgnore:   r.linesToIgnore,
 		})
 		it = GetBlockityLines(bm)
 		lineTraces := make(map[[2]OrientedVertex]CollinearOrientedVertices)
@@ -447,7 +455,7 @@ func (r *RejectWork) setupLines() bool {
 	return numTransLines > 0
 }
 
-// FIXME there remains errors in this function. Traces one of the sectors in
+// FIXME there remain errors in this function. Traces one of the sectors in
 // first map of Hexen as self-referencing because it picks wrong side of the
 // line by mistake. Looks like there are things to improve...
 func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,

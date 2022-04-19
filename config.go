@@ -20,8 +20,7 @@ import (
 	"os"
 )
 
-// TODO test scroller speed specials more thoroughly
-const VERSION = "0.67a"
+const VERSION = "0.69a"
 
 /*
 -b Rebuild BLOCKMAP.
@@ -56,6 +55,11 @@ const VERSION = "0.67a"
 		1 Visplane reduction per Lee Killough
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
+	p= Use secondary score for partition selection.
+		0 Don't use (the first pick with best primary score wins)
+		1 Favor nodes that do not split segs
+		2 Favor nodes that do not create subsectors
+		3 Favor both of above equally
 	i= Cull (don't create segs from) invisible linedefs.
 		0 Don't cull (default)
 		1 Cull, use faulty check to preserve self-referencing sectors.
@@ -127,6 +131,13 @@ const (
 	PENALIZE_DIAGONALITY_NEVER
 )
 
+const (
+	MINOR_CMP_NOOP = iota
+	MINOR_CMP_SEGS
+	MINOR_CMP_SECTORS
+	MINOR_CMP_BALANCE
+)
+
 // PickNodeFunc is a signature of all PickNode* function variants (see
 // picknode.go)
 // Yes, I consciously use a function reference stored in structs in lieu of
@@ -138,6 +149,9 @@ type PickNodeFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeSeg
 // CreateNodeSSFunc exists.
 // SS stands for "single sector". In case you worried.
 type CreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeInProcess
+
+// Which secondary metric to use
+type MinorIsBetterFunc func(current, prev MinorCosts) bool
 
 type ProgramConfig struct {
 	InputFileName          string
@@ -164,6 +178,9 @@ type ProgramConfig struct {
 	PickNodeUser int              // <- This is the actual config option
 	PickNode     PickNodeFunc     // don't assign directly! Derived from PickNodeUser
 	CreateNodeSS CreateNodeSSFunc // don't assign directly! Derived from PickNodeUser
+	// Secondary metric for picking a partition
+	MinorCmpUser int               // <- This is the actual config option
+	MinorCmpFunc MinorIsBetterFunc // don't assign directly! Derived from MinorCmpUser and PickNodeUser
 	//
 	BlockmapSearchAbortion int    // when trying multiple offsets, finish the search for a good blockmap as soon as it fits the limit
 	UseGraphsForLOS        bool   // use graphs for LOS calculations (build reject faster)
@@ -222,6 +239,31 @@ func CreateNodeSSFromOption(userOption int) CreateNodeSSFunc {
 	return CreateNode
 }
 
+func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
+	switch userOption {
+	case MINOR_CMP_NOOP:
+		{
+			return minorIsBetter_Dummy
+		}
+	case MINOR_CMP_SEGS:
+		{
+			return minorIsBetter_Segs
+		}
+	case MINOR_CMP_SECTORS:
+		{
+			return minorIsBetter_Sectors
+		}
+	case MINOR_CMP_BALANCE:
+		{
+			return minorIsBetter_Balanced
+		}
+	default:
+		{
+			panic("Invalid argument")
+		}
+	}
+}
+
 func init() {
 	Log.Printf("VigilantBSP ver %s\n", VERSION)
 	Log.Printf("Copyright (c)   2022 VigilantDoomer\n")
@@ -269,6 +311,7 @@ func init() {
 		PickNodeFactor:         PICKNODE_FACTOR,
 		DiagonalPenalty:        DIAGONAL_PENALTY,
 		PenalizeDiagonality:    PENALIZE_DIAGONALITY_HEXEN,
+		MinorCmpUser:           MINOR_CMP_BALANCE,
 	})
 	// Proceed to parse command line
 	if !(config.FromCommandLine()) {
@@ -285,6 +328,7 @@ func init() {
 	// Set derivative options in config
 	config.PickNode = PickNodeFuncFromOption(config.PickNodeUser)
 	config.CreateNodeSS = CreateNodeSSFromOption(config.PickNodeUser)
+	config.MinorCmpFunc = MinorCmpFuncFromOption(config.MinorCmpUser)
 }
 
 func PrintHelp() {
@@ -325,6 +369,11 @@ func PrintHelp() {
 	Log.Printf("		1 Visplane reduction per Lee Killough\n")
 	Log.Printf("		2 Advanced visplane reduction\n")
 	Log.Printf("		3 Maelstrom - fastest build speed\n")
+	Log.Printf("	p= Use secondary score for partition selection.\n")
+	Log.Printf("		0 Don't use (the first pick with best primary score wins)\n")
+	Log.Printf("		1 Favor nodes that do not split segs\n")
+	Log.Printf("		2 Favor nodes that do not create subsectors\n")
+	Log.Printf("		3 Favor both of above equally (default)\n")
 	Log.Printf("	i= Cull (don't create segs from) invisible linedefs.\n")
 	Log.Printf("		0 Don't cull (default)\n")
 	Log.Printf("		1 Cull, use faulty check to preserve self-referencing sectors.\n")

@@ -62,6 +62,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	var absLines AbstractLines
 	var solidLines AbstractLines
 	l.newLines = nil
+	var linesToIgnore []bool
 	var sidedefs []Sidedef
 	var sectors []Sector
 	var bounds LevelBounds
@@ -182,7 +183,16 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 					// nodes are being rebuilt, as they reference linedefs.
 					// Also, without rebuilding nodes, the LINEDEF lump is not
 					// modified
-					linedefs = RefreshScrollerSpeed(linedefs, vertices)
+					linedefs, linesToIgnore = RefreshScrollerSpeed(linedefs,
+						vertices, false)
+				} else {
+					// Otherwise if either only blockmap or only nodes are
+					// being rebuilt, we still need to locate scrollers to mark
+					// them as omitted from either
+					if config.RebuildBlockmap || config.RebuildNodes {
+						_, linesToIgnore = RefreshScrollerSpeed(linedefs,
+							vertices, true)
+					}
 				}
 
 				absLines = &DoomLinedefs{
@@ -224,10 +234,11 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			bcontrol = make(chan BconRequest)
 			bgenerator = make(chan BgenRequest)
 			go SolidBlocks_Control(SolidBlocks_Input{
-				lines:     solidLines,
-				bounds:    bounds,
-				control:   bcontrol,
-				genworker: bgenerator,
+				lines:         solidLines,
+				bounds:        bounds,
+				control:       bcontrol,
+				genworker:     bgenerator,
+				linesToIgnore: linesToIgnore,
 			})
 
 			// And this actually generates BLOCKMAP lump
@@ -242,6 +253,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 					useZeroHeader:   config.UseZeroHeader,
 					internalPurpose: false,
 					gcShield:        nil,
+					linesToIgnore:   linesToIgnore,
 				}, l.BlockmapLumpChannel)
 			}
 		}
@@ -261,13 +273,14 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			rejectDone = true // don't trigger twice
 			l.RejectChan = make(chan []byte)
 			go RejectGenerator(RejectInput{
-				lines:      absLines,
-				bounds:     bounds,
-				sectors:    sectors,
-				sidedefs:   sidedefs,
-				rejectChan: l.RejectChan,
-				bcontrol:   bcontrol,
-				bgenerator: bgenerator,
+				lines:         absLines,
+				bounds:        bounds,
+				sectors:       sectors,
+				sidedefs:      sidedefs,
+				rejectChan:    l.RejectChan,
+				bcontrol:      bcontrol,
+				bgenerator:    bgenerator,
+				linesToIgnore: linesToIgnore,
 			})
 		}
 
@@ -301,6 +314,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				createNodeSS:    config.CreateNodeSS,   // global config
 				pickNodeFactor:  config.PickNodeFactor, // global config
 				diagonalPenalty: diagonalPenalty,
+				minorIsBetter:   config.MinorCmpFunc, // global config
+				linesToIgnore:   linesToIgnore,
 			})
 		}
 	}
@@ -458,10 +473,19 @@ func (l *Level) WriteNodes(nodesResult NodesResult) {
 // Implements scroll speed multipliers by ensuring appropriate number of
 // dummy linedefs with Action = 48 exist. Because they could have been created
 // before, this is how they are checked for whether additional need to be
-// created, or some need to be deleted.
+// created, or some need to be deleted. If parameter dryRun == true, no linedefs
+// are created / deleted. In either case, all dummy linedefs are marked in a
+// second return parameter to be skipped from included in both BSP tree and
+// blockmap
 // NOTE for action = 1048, only 2 last digits decide scroll speed, not the
 // entire tag number
-func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex) []Linedef {
+// TODO the dummy linedefs should not now be included in seg list or blockmap.
+// They might need to also be moved to the end of the list so that they may be
+// beyond >=65535 index as they're not going to be referenced by 2-byte integer
+// from other wad file structures (check if vanilla could correctly operate on
+// them still, else it might be in vain)
+func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex, dryRun bool) ([]Linedef,
+	[]bool) {
 	scrollerGroupList := make([]ScrollerGroup, 0)
 	backSdefForGroup := make([]uint16, 0) // not part of identity, but needs to be copied
 	// map from ScrollerGroup to array of producers (linedef indices)
@@ -519,10 +543,12 @@ func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex) []Linedef {
 
 	if len(scrollerGroupList) == 0 {
 		// No scrollers - no modifications needed
-		return linedefs
+		return linedefs, nil
 	}
 
-	// Otherwise we need to match scrolling effect multipliers to the tags
+	// Otherwise we need to match scrolling effect multipliers to the tags, and
+	// also mark all dummy linedefs as excluded from blockmap and BSP tree
+	dummies := make([]bool, len(linedefs))
 
 	addLineCount := make([]uint16, len(scrollerGroupList))
 	linedefsToCull := make([]int, 0)
@@ -553,9 +579,20 @@ func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex) []Linedef {
 				// Also let's reset tag value (except for the first, of course)
 				if idx != 0 {
 					linedefs[j].Tag = 0
+					// Only if dryRun == true are dummies recorded here rather
+					// than later, because if dryRun == false some may be
+					// removed
+					if dryRun {
+						dummies[j] = true
+					}
 				}
 			}
 		}
+
+		if dryRun {
+			continue
+		}
+
 		if currPower == scrollPower {
 			// This group has nothing to add or remove
 			addLineCount[i] = 0
@@ -583,6 +620,13 @@ func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex) []Linedef {
 		}
 	}
 
+	if dryRun {
+		// We are not changing linedefs, merely locating dummy ones to omit them
+		// fromm blockmap/nodes (of which lumps only one is being built)
+		return linedefs, dummies
+	}
+	// now dryRun definitely false
+
 	// Create new array of linedefs
 	ret := make([]Linedef, len(linedefs))
 
@@ -602,6 +646,37 @@ func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex) []Linedef {
 	}
 	ret = ret[:len(linedefs)-removed]
 
+	// Locate all remaining linedefs, add them to dummies. Remember that
+	// some may have changed index, so compute new index
+	for _, scrollerGroup := range scrollerGroupList {
+		producers := scrollerToProducerMap[scrollerGroup]
+		for idx, j := range producers {
+			if linedefs[j].Action == 48 {
+				// If it's the first line, is not dummy
+				if idx != 0 {
+					// Actualize the number or skip altogether, if it is
+					// deleted
+					deleted := false
+					shift := 0
+					for _, chk := range linedefsToCull {
+						if chk == j {
+							deleted = true
+							break
+						} else {
+							if chk < j {
+								shift++
+							}
+						}
+					}
+					if deleted {
+						continue
+					}
+					dummies[j-shift] = true
+				}
+			}
+		}
+	}
+
 	// Add new linedefs to the end
 	for i := 0; i < len(addLineCount); i++ {
 		cnt := addLineCount[i]
@@ -616,11 +691,12 @@ func RefreshScrollerSpeed(linedefs []Linedef, vertices []Vertex) []Linedef {
 				Tag:         0,
 				Action:      48,
 			})
+			dummies = append(dummies, true)
 		}
 	}
 
 	// The new array of linedefs is returned
-	return ret
+	return ret, dummies
 }
 
 func addProducer(scrollerGroupList *[]ScrollerGroup, backSdefForGroup *[]uint16,

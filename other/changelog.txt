@@ -1,6 +1,11 @@
 Changelog for VigilantBSP
 
-VigilantBSP 0.67a 
+v0.69a
+- Reformatted changelog
+- Added option named: "Use secondary score for partition selection"
+- Fixed bug: dummy linedefs created by nodebuilder to implement fast/remote scrolling should not be added to blockmap and bsp tree
+
+v0.67a 
 - Initial alpha build
 
 

@@ -128,6 +128,11 @@ is either a suboption of option above it, or a possible value:
 		1 Visplane reduction per Lee Killough
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
+	p= Use secondary score for partition selection.
+		0 Don't use (the first pick with best primary score wins)
+		1 Favor nodes that do not split segs
+		2 Favor nodes that do not create subsectors
+		3 Favor both of above equally
 	i= Cull (don't create segs from) invisible linedefs.
 		0 Don't cull (default)
 		1 Cull, use faulty check to preserve self-referencing sectors.
@@ -777,7 +782,70 @@ It produces worse results limit-wise than even the "seg balancing only"
 algorithm, but it achieves graceful running times even on very large and
 complex levels.
 
-07:02 'i' - Cull (don't create segs from) invisible linedefs
+07:02 'p' - Use secondary score for partition selection
+-------------------------------------------------------
+Note: this option was introduced in v0.69a of VigilantBSP
+
+This experimental option allows to make slight alterations to partition
+selection algorithm. Currently it only has effect when na=2 (advanced
+visplane reduction) is selected, for performance as well as other reasons.
+It may result in more effecient tree built (less deep and/or fewer segs
+overall), although no guarantees on either that or it not compromising
+the goal of reducing visplanes can be provided. 
+
+It exists because it has been reported to me that ZokumBSP produces
+similar visplane results but with less segs/drawsegs. Hopefully, this
+new addition will make the efficiency gap a bit smaller.
+
+In case this option, which defaults to np=3, produces worse results
+than v.067a version of VigilantBSP did, you can use np=0 to get back
+the results produced by that version.
+
+Also, it is important to note that since the metric is applied on each
+partition iteration, it cannot really guarantee the best outcome after
+many of those iteration run. It just tries to do so on best effort
+basis. Thus, if you really are struggling with getting particular
+map under limits, you might want to experiment with setting different
+values to this option.
+
+p=0 Don't use (the first pick with best primary score wins)
+
+This mimics the behavior of 0.67a version of VigilantBSP, making it
+operate similar to BSP nodebuilder that uses singular metric (called
+partition "cost", which is an integer sum of all "cost penalties"
+assigned due to "undesirable" partition traits) and picks
+the earliest partition choice with least value for that metric.
+
+It is often that multiple possible choices give the same minimal score,
+and picking the earliest one found may miss a better choice that would
+result in fewer segs or other better parameters.
+
+All modes below still use this metric, but only as a start: when multiple
+partition candidates score the same, three additional scores will be
+computed separately each: number of "should not split" segs split, 
+overall segs split, sector equivalencies split (compatible sectors
+counted once). Every one of them is best lowest, but the priority is:
+as little as possible "should not split" segs split, the rest depends
+on specific option choosed.
+
+p=1 Favor nodes that do not split segs
+
+This will try to reduce seg split number (which results in creation of
+new segs), but this might not result in a well balanced tree, might also
+result in more visplanes than even naive np=0 algorithm.
+
+p=2 Favor nodes that do not create subsectors
+
+Seg splits don't really correspond to subsectors splits, this one may
+be better for balanced tree (but not necessary same or better visplane
+count) thus, but might produce even more segs than np=0.
+
+p=3 Favor both of above equally
+
+This will keep visplane reduction as close as the algorithm chosen
+can provide, but also result in less segs. 
+
+07:03 'i' - Cull (don't create segs from) invisible linedefs
 ------------------------------------------------------------
 
 This option is similar to option "Ignore invisible linedefs" in Zennode
@@ -835,7 +903,7 @@ non-polygons being thrown away). In event of doubt or failure within
 perimiter computation algorithm (the code in VigilantBSP misses some part
 of original because of the rush to release it), linedefs are preserved.
 
-07:03 'c' - NODES format compatibility
+07:04 'c' - NODES format compatibility
 --------------------------------------
 
 There are various BSP tree formats even for "software" (non-GL) nodes. 
@@ -867,7 +935,7 @@ people into thinking the accuracy is being provided when it is not. When
 the computation accuracy will be raised, the format support will be 
 implemented.
 
-07:04 'f' - Tuning factor (seg split cost, etc.)
+07:05 'f' - Tuning factor (seg split cost, etc.)
 ------------------------------------------------
 
 This factor is a constant that is used in partition selection evaluation
@@ -878,13 +946,16 @@ and also some other (depends on algorithm) undesirable choices. On each
 iteration of partitioning process, the candidate partition line with the
 lowest cost wins. 
 
+This factor affects only the primary cost. It doesn't change the 
+secondary cost evaluation affected by np=x parameter.
+
 Since there are other contributors to that cost, altering this value
 will change its relative contribution and the resulting node tree will
 be different.
 
 Default value is 17, same as BSP v5.2
 
-07:05 'd' - Penalty factor for diagonal lines
+07:06 'd' - Penalty factor for diagonal lines
 ---------------------------------------------
 
 Similar to the previous parameter, but this is penalty factor
@@ -900,7 +971,7 @@ Whether it can be benefits, has not been yet confirmed.
 Explicitly specifying non-zero value will enable it for all levels,
 while explicitly specifying 0 will disable it even for Hexen levels.
 
-07:06 Ongoing research
+07:07 Ongoing research
 ----------------------
 
 Besides the need to eliminate more VPOs still, there is a need to
@@ -912,8 +983,13 @@ adjustments to advanced visplane reduction algorithm were able to
 get some progress in that regard but negatively affected the
 visplane count - increasing it in some areas - which led me to
 so far discard those adjustments as VPO reducing is a priority. 
+After more tweaking, I decided to implement "secondary score 
+selection" for advanced visplane reduction algorithm ONLY in 
+v0.69a, but my satisfaction with it remains low. The insight can't
+be easily gained from studying ZokumBSP either, because the source
+code of that nodebuilder is very hard to comprehend.
 
-I am not giving back on it but will have to invent something really
+I am not giving up on it but will have to invent something really
 novel it seems, maybe using the results of reject computation (and
 that one, even with its slowness, has still areas where it's 
 accuracy can be improved)

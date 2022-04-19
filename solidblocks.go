@@ -41,10 +41,11 @@ const (
 )
 
 type SolidBlocks_Input struct {
-	lines     AbstractLines
-	bounds    LevelBounds
-	control   <-chan BconRequest
-	genworker chan BgenRequest
+	lines         AbstractLines
+	bounds        LevelBounds
+	control       <-chan BconRequest
+	genworker     chan BgenRequest
+	linesToIgnore []bool
 }
 
 type BconRequest struct {
@@ -75,6 +76,7 @@ func SolidBlocks_Control(input SolidBlocks_Input) {
 		useZeroHeader:   false,
 		internalPurpose: true,
 		gcShield:        nil,
+		linesToIgnore:   input.linesToIgnore,
 	}
 	blockmapScheduled := false
 	go bmi.SolidBlocks_Generator(input.genworker)

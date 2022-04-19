@@ -56,6 +56,87 @@ const SEG_FAST_THRESHHOLD = 200
 
 // TODO port "passing through a vertex of precious linedef" check from AJ-BSP
 
+// secondary metric to balance costs
+type MinorCosts struct {
+	PreciousSplit int // number of "do not split" seg split
+	SegsSplit     int // number of segs split
+	SectorsSplit  int // number of sectors split
+}
+
+func minorIsBetter_Dummy(current, prev MinorCosts) bool {
+	return false
+}
+
+func minorIsBetter_Segs(current, prev MinorCosts) bool {
+	if current.PreciousSplit < prev.PreciousSplit {
+		return true
+	} else if current.PreciousSplit > prev.PreciousSplit {
+		return false
+	}
+
+	if current.SegsSplit < prev.SegsSplit {
+		return true
+	} else if current.SegsSplit > prev.SegsSplit {
+		return false
+	}
+
+	if current.SectorsSplit < prev.SectorsSplit {
+		return true
+	}
+
+	return false
+}
+
+func minorIsBetter_Sectors(current, prev MinorCosts) bool {
+	if current.PreciousSplit < prev.PreciousSplit {
+		return true
+	} else if current.PreciousSplit > prev.PreciousSplit {
+		return false
+	}
+
+	if current.SectorsSplit < prev.SectorsSplit {
+		return true
+	} else if current.SectorsSplit > prev.SectorsSplit {
+		return false
+	}
+
+	if current.SegsSplit < prev.SegsSplit {
+		return true
+	}
+
+	return false
+}
+
+func minorIsBetter_Balanced(current, prev MinorCosts) bool {
+	if current.PreciousSplit < prev.PreciousSplit {
+		return true
+	} else if current.PreciousSplit > prev.PreciousSplit {
+		return false
+	}
+
+	// Balanced - consider both splits equally
+	curMetric := current.SegsSplit + current.SectorsSplit
+	prevMetric := prev.SegsSplit + prev.SectorsSplit
+
+	if curMetric < prevMetric {
+		return true
+	} else if curMetric > prevMetric {
+		return false
+	}
+
+	if current.SectorsSplit < prev.SectorsSplit {
+		return true
+	} else if current.SectorsSplit > prev.SectorsSplit {
+		return false
+	}
+
+	if current.SegsSplit < prev.SegsSplit {
+		return true
+	}
+
+	return false
+}
+
 // PickNode_traditional is an implementation of PickNode that is classic (since
 // DEU5beta source code (c) Raphael Quinet) way to pick a partition: partitions
 // are chosen based on seg so that there is minimal amount of seg splits and the
@@ -556,6 +637,11 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeSeg {
 	best := ts                        // make sure always got something to return
 	bestcost := int(INITIAL_BIG_COST) //
+	bestMinors := MinorCosts{
+		PreciousSplit: int(INITIAL_BIG_COST),
+		SegsSplit:     int(INITIAL_BIG_COST),
+		SectorsSplit:  int(INITIAL_BIG_COST),
+	}
 	cnt := 0
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
@@ -589,6 +675,11 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 		previousPart = part // used for check above
 		cost := 0
+		minors := MinorCosts{
+			PreciousSplit: 0,
+			SegsSplit:     0,
+			SectorsSplit:  0,
+		}
 		tot := 0
 		slen := 0 // length of partition that is incidental with segs
 		diff := cnt
@@ -607,7 +698,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		w.blocksHit = w.blocksHit[:0]
 		hasLeft := false
 		prune := w.evalPartitionWorker_VisplaneVigilant(super, part, &tot, &diff,
-			&cost, bestcost, &slen, &hasLeft)
+			&cost, bestcost, &slen, &hasLeft, &minors)
 		if prune { // Early exit and skip past the tests below
 			continue
 		}
@@ -652,6 +743,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			}
 			if w.sectorHits[tot] >= 4 {
 				unmerged++
+				minors.SectorsSplit++
 			}
 			if w.sectorHits[tot] != 0 {
 				flat++
@@ -676,7 +768,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// candidates for splitting multiple distinct sectors
 			cost += unmerged * w.pickNodeFactor
 		}
-		if cost >= bestcost {
+		if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 			continue
 		}
 
@@ -691,7 +783,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// rather where it is in other functions.
 			if w.diagonalPenalty != 0 && (part.pdx != 0 && part.pdy != 0) {
 				cost += w.diagonalPenalty
-				if cost >= bestcost {
+				if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 					continue
 				}
 			}
@@ -739,7 +831,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// than 1/2 of its length cutting through open (not void) space.
 			if slen < l {
 				cost += w.pickNodeFactor
-				if cost >= bestcost {
+				if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 					continue
 				}
 			}
@@ -758,13 +850,14 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// upon as accurate
 		if !hasLeft && VigilantGuard_IsBadPartition(part, ts, cnt) {
 			cost += w.pickNodeFactor * ONESIDED_MULTIPLY
-			if cost >= bestcost {
+			if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 				continue
 			}
 		}
 
 		// We have a new better choice
 		bestcost = cost
+		bestMinors = minors
 		best = part // Remember which Seg
 	}
 	w.incidental = w.incidental[:0]
@@ -776,7 +869,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *int,
-	hasLeft *bool) bool {
+	hasLeft *bool, minors *MinorCosts) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -830,6 +923,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 						} else {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
 						}
+						minors.PreciousSplit++
 					}
 
 					*cost += w.pickNodeFactor
@@ -839,6 +933,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 						return true
 					}
 					(*tot)++
+					minors.SegsSplit++
 					mask = uint8(4)
 				} else if checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
 					leftside = true
@@ -882,7 +977,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 		}
 
 		if w.evalPartitionWorker_VisplaneVigilant(block.subs[num], part, tot, diff,
-			cost, bestcost, slen, hasLeft) {
+			cost, bestcost, slen, hasLeft, minors) {
 			return true
 		}
 	}
