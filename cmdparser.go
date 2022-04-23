@@ -40,9 +40,14 @@ func (c *ProgramConfig) FromCommandLine() bool {
 	outputModifier := false
 	outputModifierUsed := false
 	hasOutputFile := false
-	for _, arg := range args {
+	skip := false
+	for argIdx, arg := range args {
 		if len(arg) < 1 {
 			break
+		}
+		if skip {
+			skip = false
+			continue
 		}
 
 		if arg[0] != '-' && !outputModifier {
@@ -134,6 +139,39 @@ func (c *ProgramConfig) FromCommandLine() bool {
 				}
 				outputModifier = true
 				outputModifierUsed = true
+			}
+		case '-':
+			{
+				// TODO refactor. Will probably have more double hyphen
+				// arguments in the future. Current code mess is for files only
+				// and hard to read or extend
+				fileSatisfied := false
+				// parameter starts with double hyphen, e.g. --something
+				if bytes.Equal([]byte(arg), []byte("--cpuprofile")) {
+					// Parameter: write cpu profile to file following this
+					// parameter
+					fileSatisfied = (len(arg) > (argIdx + 1)) &&
+						(args[argIdx+1] != "")
+					c.Profile = true
+					c.ProfilePath = args[argIdx+1]
+					skip = true
+				} else if bytes.Equal([]byte(arg), []byte("--memprofile")) {
+					// Parameter: write memory allocations (Go "allocs")
+					// profile to file following this parameter
+					fileSatisfied = (len(arg) > (argIdx + 1)) &&
+						(args[argIdx] != "")
+					c.MemProfile = true
+					c.MemProfilePath = args[argIdx+1]
+					skip = true
+				} else {
+					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
+					return false
+				}
+				if !fileSatisfied {
+					Log.Error("Modifier '%s' was present without a file name following it - aborting.\n",
+						arg)
+					return false
+				}
 			}
 		default:
 			{
