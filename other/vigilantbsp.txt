@@ -26,9 +26,10 @@ Index
 06. Determinism option
 07. Nodes builder
 08. Reject builder
-09. Changelog
-10. Operating system and platform availability
-11. Other node builders
+09. Debug parameters
+10. Changelog
+11. Operating system and platform availability
+12. Other node builders
 
 Section 01: Project goals
 =========================
@@ -1118,12 +1119,76 @@ always visible just in case.
 
 Future versions will improve the accuracy of these algos definitely.
 
-Section 09: Changelog
+Section 09: Debug parameters
+============================
+
+Some parameters are not shown in the list. They are used for 
+debugging purposes by programmers and testers capable of understanding
+program code. All such parameters start with double hyphen ('--' 
+rather than single hyphen ('-').
+
+If you don't know programming or don't understand how to work with
+the output (are not familiar with Go tools), these options are of
+no use to you.
+
+The following parameters are currently supported:
+--cpuprofile <filename>
+Write cpu profile to the file described by filename following
+the parameter after a space. If file exists already, it will be
+overwritten. The result file contains data on how much each function
+call within program has taken and is supported by Go profiling 
+analysing tool such as "go tool pprof <filename>". 
+
+It is recommended to give this file an extension of ".prof"
+
+NOTE You might need to supply such tools (not to VigilantBSP) 
+path to the source code of VigilantBSP if using an official version 
+of VigilantBSP or you built it with Makefile provided or stripped 
+this information from the VigilantBSP executable otherwise. Be sure
+to have checked out the source for that specific version! The 
+executables themselves and the profiles never contain source code.
+
+--memprofile <filename>
+Write memory allocations profile to  the file described by
+filename forllowing the parameter after a space. If file
+exists already, it will be overwritten. The result file contains
+data on how much each function call within program has allocated
+(above a certain threshold IIRC) and is supported by Go profiling
+analysing tool such as "go tool pprof <filename>".
+
+It is recommended to give this file an extension of ".prof"
+
+NOTE You might need to supply such tools (not to VigilantBSP) 
+path to the source code of VigilantBSP if using an official version 
+of VigilantBSP or you built it with Makefile provided or stripped 
+this information from the VigilantBSP executable otherwise. Be sure
+to have checked out the source for that specific version! The 
+executables themselves and the profiles never contain source code.
+
+Just as a side note, the source to "go tool pprof ..." can be
+provided when already inside the pprof program, by typing
+
+source_path = /home/user/go/src
+
+for GNU/Linux system where go is installed into default location
+for user 'user', and the go module "github.com/vigilantdoomer/vigilantbsp"
+checked out inside that source_path. If you checked out vigilantbsp
+in some other location (and if you are doing report against a release,
+or some previous state of vigilantbsp main branch, you most likely did),
+you will need to provide a different source_path of course, and possibly
+also omit a part of relative path via something like:
+
+trim_path = github.com/vigilantdoomer/vigilantbsp/
+
+so your entire path to the folder with VigilantBSP sources matching
+your executables will need to be in source_path instead.
+
+Section 10: Changelog
 =====================
 
 See file named 'changelog.txt'. 
 
-Section 10: Operating system and platform availability
+Section 11: Operating system and platform availability
 ======================================================
 
 VigilantBSP is intended to be run on both Windows and GNU/Linux
@@ -1134,7 +1199,7 @@ on each one of those systems/platforms for each target.
 
 Other targets are not tested, and DOS support isn't even considered.
 
-Section 11: Other node builders
+Section 12: Other node builders
 ===============================
 
 16:01 Regular node builders
