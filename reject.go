@@ -170,7 +170,8 @@ func RejectGenerator(input RejectInput) {
 		r.finishLineSetup()
 		r.eliminateTrivialCases()
 		r.maxDistance = 0xFFFFFFFF // TODO RMB support
-		r.testLines = make([]*SolidLine, len(r.solidLines))
+
+		r.testLines = make([]*SolidLine, len(r.solidLines)+1)      // Vigilant: needs + 1 to avoid out-of-bounds write in rejectLOS.go!findInterveningLines
 		r.polyPoints = make([]*IntVertex, 2*(len(r.solidLines)+2)) // this is going to be reused many times to hold both lower and upper polygons (rejectLOS.go!InitializeWorld, etc)
 		r.reSectors = make([]*RejSector, len(r.sectors))
 		for i := 0; i < len(r.sectors); i++ {
