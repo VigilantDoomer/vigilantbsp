@@ -68,7 +68,7 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte) {
 	// Some lines may be excluded from blockmap, their vertices don't count
 	// And neither should any vertices added from building nodes on a map that
 	// was later edited
-	input.bounds = RecomputeBounds(input.lines)
+	input.bounds = RecomputeBounds(input.lines, input.linesToIgnore)
 	Log.Printf("Blockmap: collidable part of map goes from (%d,%d) to (%d,%d). These values are before offsets would be applied.\n",
 		input.bounds.Ymax, input.bounds.Xmin, input.bounds.Ymin, input.bounds.Xmax)
 
@@ -477,13 +477,16 @@ func IsBlockmapGoodEnough(bm *Blockmap) bool {
 // even be valid to them.
 // Also, this operation is only executed once even if multiple blockmaps with
 // different offsets are generated
-func RecomputeBounds(lines AbstractLines) LevelBounds {
+func RecomputeBounds(lines AbstractLines, linesToIgnore []bool) LevelBounds {
 	Xmax := -2147483648
 	Ymax := -2147483648
 	Xmin := 2147483647
 	Ymin := 2147483647
 	linesCount := lines.Len()
-	for i := uint16(0); i < linesCount-1; i++ {
+	for i := uint16(0); i < linesCount; i++ {
+		if linesToIgnore != nil && linesToIgnore[i] {
+			continue
+		}
 		if lines.BlockmapSkipThis(i) {
 			continue
 		}
