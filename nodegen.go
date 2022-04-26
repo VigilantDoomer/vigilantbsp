@@ -38,6 +38,23 @@ import (
 // TODO "wide trees" algorithm, possible using multiple threads + partitioning
 // single sector doesn't affect visplanes, so this part can be done with
 // convexity.go and without wide treatment
+// TODO potentially mergeable sectors in "advanced visplane reduction" - since
+// visplanes are built separately for ceilings and floors, maybe sector
+// equivalencies also need to be split into ceiling and floor equivalencies.
+// This proposition will increase algorithm's running time and complexity,
+// however, I also wonder how often it will actually make a difference and how
+// often a positive one. It actually may be very difficult to estimate,
+// something like this should be more of a secondary score
+// TODO ZokumBSP (maybe Zennode too) sorts segs in case splits upset "seg
+// ordering", as some effects (which ones?) allegedly depend on the order of
+// segs in subsectors matching the numerical order of linedefs. Currently, in
+// VigilantBSP there is a definitive source of disruption, in case "cull
+// invisible segs" is used: when segs that could have been invisible determined
+// to be NOT so, they are inserted at the END of the seg array, write before
+// a single node is created. This might trigger that condition of wrong order.
+// If those effects ZokumBSP alludes to exist, at the very least "cull segs"
+// option should result in "unculled" segs to be inserted at their "original"
+// spots into initial segs list - where their creation was first skipped
 
 const SSECTOR_NORMAL_MASK = 0x8000
 const SSECTOR_DEEP_MASK = 0x80000000
@@ -100,7 +117,6 @@ type NodesWork struct {
 	incidental      []VertexPairC // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
 	solidMap        *Blockmap
 	nonVoidCache    map[int]NonVoidPerAlias
-	sectorEquiv     []uint16
 	blockity        *BlockityLines
 	deepNodes       []DeepNode
 	deepSubsectors  []DeepSubSector
@@ -248,12 +264,10 @@ func NodesGenerator(input *NodesInput) {
 		solidMap = <-blockmapGetter
 	}
 
-	sectorEquiv := input.computeSectorEquivalence()
-	var whichLen int
+	sectorEquiv, whichLen := input.computeSectorEquivalence()
 	if sectorEquiv == nil {
 		whichLen = len(input.sectors)
 	} else {
-		whichLen = len(sectorEquiv)
 		input.applySectorEquivalence(allSegs, sectorEquiv)
 	}
 
@@ -277,7 +291,6 @@ func NodesGenerator(input *NodesInput) {
 		incidental:      make([]VertexPairC, 0),
 		solidMap:        solidMap,
 		nonVoidCache:    make(map[int]NonVoidPerAlias),
-		sectorEquiv:     sectorEquiv,
 		SsectorMask:     ssectorMask,
 		blocksHit:       make([]BlocksHit, 0),
 		diagonalPenalty: input.diagonalPenalty,
@@ -1485,12 +1498,13 @@ func (w *NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 // The existence of visplane merging was verified and documented by Lee Killough
 // upon Doom source release, but he never adjusted logic in BSP nodebuilder to
 // account for equivalence. --VigilantDoomer
-func (ni *NodesInput) computeSectorEquivalence() []uint16 {
+func (ni *NodesInput) computeSectorEquivalence() ([]uint16, int) {
 	if ni.pickNodeUser != PICKNODE_VISPLANE_ADV { // not used by other node picking algos
-		return nil
+		return nil, 0
 	}
 	equiv := make([]uint16, len(ni.sectors))
 	hmap := make(map[Sector]uint16)
+	uniq := 0
 	for i, sector := range ni.sectors {
 		// Don't consider sectors that have specials or are assigned tags
 		// as being equivalent to any other sectors, even to sectors with same
@@ -1510,12 +1524,19 @@ func (ni *NodesInput) computeSectorEquivalence() []uint16 {
 			if ok {
 				equiv[i] = v
 			} else { // first instance of this
-				hmap[ASector] = uint16(i)
-				equiv[i] = uint16(i)
+				hmap[ASector] = uint16(uniq)
+				equiv[i] = uint16(uniq)
+				uniq++
 			}
+		} else {
+			// This was branch was absent up to and including to v0.69a,
+			// which was an error (all non-mergeable sectors where "merged"
+			// into sector 0)
+			equiv[i] = uint16(uniq)
+			uniq++
 		}
 	}
-	return equiv
+	return equiv, uniq
 }
 
 func sanitizeName(a []byte) []byte {

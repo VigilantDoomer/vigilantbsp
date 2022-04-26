@@ -1,5 +1,8 @@
 Changelog for VigilantBSP
 
+v0.70a
+- Fixed bug: some sectors wrongly considered compatible with each other and sector 0 in "advanced visplane reduction" algorithm 
+
 v0.69a
 - Reformatted changelog
 - Added option named: "Use secondary score for partition selection"

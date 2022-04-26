@@ -20,7 +20,7 @@ import (
 	"os"
 )
 
-const VERSION = "0.69a"
+const VERSION = "0.70a"
 
 /*
 -b Rebuild BLOCKMAP.
