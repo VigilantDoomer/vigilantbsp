@@ -590,8 +590,6 @@ func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	s.pdy = s.pey - s.psy
 	s.perp = s.pdx*s.psy - s.psx*s.pdy
 	s.Linedef = i
-	// TODO can s.pdx*s.pdx overflow if conversion is done after multiplication
-	// instead of before?
 	s.flen = math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
 	s.len = int(s.flen)
 	s.Offset = 0
@@ -716,7 +714,9 @@ func (c *IntersectionContext) computeIntersection() (int, int) {
 	}
 	// Cast porn is courtesy of bsp v5.2 - this is what is written there looks
 	// when translated from C to Go
-	l2 := float64(int(math.Sqrt(float64(dx2*dx2 + dy2*dy2))))
+	// UPD: made conversion more resistant to numerical overflow. This might
+	// have performance impact, especially on 32-bit computers.
+	l2 := float64(int64(math.Sqrt(float64(dx2)*float64(dx2) + float64(dy2)*float64(dy2))))
 
 	a := float64(dx)        // no normalization of a,b necessary,
 	b := float64(dy)        // since division by d in formula for w
@@ -778,9 +778,12 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 		if dx2 == 0 && dy2 == 0 {
 			a = 0
 		} else {
-			l := dx2*dx2 + dy2*dy2 // If either ends of the split
-			if l < 4 {             // are smaller than 2 pixs then
-				a = 0 // assume this starts on part line
+			l := int64(dx2)*int64(dx2) + int64(dy2)*int64(dy2)
+			if l < 4 {
+				// If either ends of the split
+				// are smaller than 2 pixs then
+				// assume this starts on part line
+				a = 0
 			}
 		}
 		dx3 = c.lex - x // Find distance from line end
@@ -788,7 +791,7 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 		if dx3 == 0 && dy3 == 0 {
 			b = 0
 		} else {
-			l := dx3*dx3 + dy3*dy3
+			l := int64(dx3)*int64(dx3) + int64(dy3)*int64(dy3)
 			if l < 4 { // same as start of line
 				b = 0
 			}
