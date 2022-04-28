@@ -485,6 +485,9 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 						c.PenalizeDiagonality = PENALIZE_DIAGONALITY_NEVER
 					}
 					if nos.value >= 0 {
+						if nos.value > 0 {
+							c.PenalizeDiagonality = PENALIZE_DIAGONALITY_ALWAYS
+						}
 						c.DiagonalPenalty = nos.value
 					} else {
 						Log.Error("Diagonal penalty can't be negative. Will disable it instead.\n")
