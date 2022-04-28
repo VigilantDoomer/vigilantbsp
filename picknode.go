@@ -629,10 +629,6 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 // it seemed that blocking them always is not a good idea - I may be wrong)
 // 5. Additional options are supported, like penalizing sector splits. These
 // are currently not exposed to user, though.
-// NOTE I tried to use secondary scores like in Zennode to achieve lower depth
-// or fewer seg splits (overall seg count). However, going for either tend to
-// make some VPOs more easy to trigger on the test map I use. I need to come up
-// with something way better than that.
 func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeSeg {
 	best := ts                        // make sure always got something to return
@@ -741,9 +737,11 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 					diff--
 				}
 			}
+			if w.sectorHits[tot] >= 3 {
+				minors.SectorsSplit++
+			}
 			if w.sectorHits[tot] >= 4 {
 				unmerged++
-				minors.SectorsSplit++
 			}
 			if w.sectorHits[tot] != 0 {
 				flat++

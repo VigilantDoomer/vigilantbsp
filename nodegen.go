@@ -44,7 +44,9 @@ import (
 // This proposition will increase algorithm's running time and complexity,
 // however, I also wonder how often it will actually make a difference and how
 // often a positive one. It actually may be very difficult to estimate,
-// something like this should be more of a secondary score
+// something like this should be more of a secondary score. Current experiments,
+// however, didn't lead to improvements on maps I tested - the code for them
+// was moved into separate branch
 // TODO ZokumBSP (maybe Zennode too) sorts segs in case splits upset "seg
 // ordering", as some effects (which ones?) allegedly depend on the order of
 // segs in subsectors matching the numerical order of linedefs. Currently, in
@@ -55,6 +57,13 @@ import (
 // If those effects ZokumBSP alludes to exist, at the very least "cull segs"
 // option should result in "unculled" segs to be inserted at their "original"
 // spots into initial segs list - where their creation was first skipped
+// TODO Found Zennode's formula for depth reduction in it's changelog. That's
+// arcane. ZokumBSP's modification of it is even more arcane though, and yet
+// it gives some good results on reducing tree depth indeed. While tree depth
+// doesn't really guarantee anything visplane-wise, it may help get some wads
+// under a normal nodes format limit, reducing circumstances where extended or
+// deep nodes are needed. I'll see if I can reproduce that trick, it is very
+// hard to understand in original code
 
 const SSECTOR_NORMAL_MASK = 0x8000
 const SSECTOR_DEEP_MASK = 0x80000000
