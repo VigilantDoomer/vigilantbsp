@@ -20,6 +20,8 @@ import (
 	"sort"
 )
 
+const VERY_BAD_SCORE = -2147483648
+
 // zenscore module - provides the partition score system from Zennode family
 // of nodebuilders. It is designed to reduce depth.
 // This code is basically ported from Zennode v1.2.1 (c) Mark Rousseau and
@@ -73,19 +75,19 @@ const ZEN_Y4 = 0
 
 type DepthScoreBundle struct {
 	seg           *NodeSeg
-	preciousSplit int  // lesser value wins
-	scoreSeg      uint // greater value wins
-	scoreSector   uint // greater value wins
-	scoreTotal    uint // greater value wins
+	preciousSplit int // lesser value wins
+	scoreSeg      int // greater value wins
+	scoreSector   int // greater value wins
+	scoreTotal    int // greater value wins
 }
 
 type ZenIntermediary struct {
-	segL    uint
-	segR    uint
-	segS    uint
-	sectorL uint
-	sectorR uint
-	sectorS uint
+	segL    int
+	segR    int
+	segS    int
+	sectorL int
+	sectorR int
+	sectorS int
 }
 
 type DepthScoresBySeg []DepthScoreBundle
@@ -153,7 +155,7 @@ func (x DepthScoresByTotal) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 // The argument is mutated. Code is courtesy of Zennode (c) Mark Rousseau
 func ZenPickBestScore(sc []DepthScoreBundle) {
 	sort.Sort(DepthScoresBySeg(sc))
-	rank := uint(0)
+	rank := 0
 	for i := 0; i < len(sc); i++ {
 		sc[i].scoreSeg = rank
 		if i < len(sc)-1 && sc[i].scoreSeg != sc[i+1].scoreSeg {
@@ -178,12 +180,12 @@ func ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 	sectorHits []uint8, depthArtifacts bool) {
 	for i, _ := range sc {
 		inter := ZenIntermediary{
-			segL:    uint(0),
-			segR:    uint(0),
-			segS:    uint(0),
-			sectorL: uint(0),
-			sectorR: uint(0),
-			sectorS: uint(0),
+			segL:    0,
+			segR:    0,
+			segS:    0,
+			sectorL: 0,
+			sectorR: 0,
+			sectorS: 0,
 		}
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
@@ -216,80 +218,74 @@ func ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 		sc[i].scoreSeg = (inter.segL + inter.segS) * (inter.segR + inter.segS)
 		sc[i].scoreSector = (inter.sectorL + inter.sectorS) * (inter.sectorR + inter.sectorS)
 
+		if sc[i].scoreSeg == 0 {
+			// one-sided (bad). Force it to rank lowest
+			sc[i].scoreSeg = VERY_BAD_SCORE
+			sc[i].scoreSector = VERY_BAD_SCORE
+			continue
+		}
+
 		// TODO computations below feature both multiplication and division,
 		// there might be condition when they overflow on 32-bit system
 
 		// Finish computing seg metric
-		if sc[i].scoreSeg > 0 {
-			if inter.segS > 0 {
-				// Have seg splits, so
-				tmp := ZEN_X1 * inter.segS
-				if ZEN_X2 < tmp {
-					sc[i].scoreSeg = ZEN_X2 * sc[i].scoreSeg / tmp
-				}
-				// TODO Undeflow possible?
-				if depthArtifacts {
-					// ZokumBSP calibrated formula differently
-					sc[i].scoreSeg -= (ZEN_X3*inter.segS*(inter.segS/3) +
-						ZEN_X4) * inter.segS
-				} else {
-					sc[i].scoreSeg -= (ZEN_X3*inter.segS + ZEN_X4) * inter.segS
-				}
-			} else { // Logic introduced in ZokumBSP, activated when no SEG splits are preferred
-				// It also makes better balanced partitions with respect to SEG
-				// count on both sides score better (higher)
-				sc[i].scoreSeg = uint(0xFFFFFFFF) - UintAbsDiff(inter.segL,
-					inter.segR)
+		if inter.segS > 0 {
+			// Have seg splits, so
+			tmp := ZEN_X1 * inter.segS
+			if ZEN_X2 < tmp {
+				sc[i].scoreSeg = ZEN_X2 * sc[i].scoreSeg / tmp
 			}
+			if depthArtifacts {
+				// ZokumBSP calibrated formula differently
+				sc[i].scoreSeg -= (ZEN_X3*inter.segS*(inter.segS/3) +
+					ZEN_X4) * inter.segS
+			} else {
+				sc[i].scoreSeg -= (ZEN_X3*inter.segS + ZEN_X4) * inter.segS
+			}
+		} else { // Logic introduced in ZokumBSP, activated when no SEG splits are preferred
+			// It also makes better balanced partitions with respect to SEG
+			// count on both sides score better (higher)
+			sc[i].scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
+				inter.segR)
 		}
 
 		// Finish computing sector metric
 		if depthArtifacts {
 			// Ok, both Zennode and ZokumBSP use ZEN_X* rather than ZEN_Y*
 			// consts. That is not the only change here, however
-			if sc[i].scoreSector > 0 {
-				if inter.sectorS > 0 {
-					tmp := ZEN_X1 * inter.sectorS
-					if ZEN_X2 < tmp {
-						sc[i].scoreSector = ZEN_X2 * sc[i].scoreSector / tmp
-					}
-					// Bye bye sanity - yes the last multiplicative is number
-					// of split segs not sectors in Zennode and ZokumBSP
-					// --VigilantDoomer
-					// TODO Undeflow possible?
-					sc[i].scoreSector -= (ZEN_X3*inter.sectorS + ZEN_X4) * inter.segS
-				} else { // Logic introduced in ZokumBSP, activated when no SECTOR splits are preferred
-					// It also makes better balanced partitions with respect to
-					// SECTOR count on both sides score better (higher)
-					sc[i].scoreSector = uint(0xFFFFFFFF) - UintAbsDiff(inter.sectorL,
-						inter.sectorR)
+			if inter.sectorS > 0 {
+				tmp := ZEN_X1 * inter.sectorS
+				if ZEN_X2 < tmp {
+					sc[i].scoreSector = ZEN_X2 * sc[i].scoreSector / tmp
 				}
+				// Bye bye sanity - yes the last multiplicative is number
+				// of split segs not sectors in Zennode and ZokumBSP
+				// --VigilantDoomer
+				sc[i].scoreSector -= (ZEN_X3*inter.sectorS + ZEN_X4) * inter.segS
+			} else { // Logic introduced in ZokumBSP, activated when no SECTOR splits are preferred
+				// It also makes better balanced partitions with respect to
+				// SECTOR count on both sides score better (higher)
+				sc[i].scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+					inter.sectorR)
 			}
 		} else {
 			// What I though it would be
-			if sc[i].scoreSector > 0 {
-				if inter.sectorS > 0 {
-					tmp := ZEN_Y1 * inter.sectorS
-					if ZEN_Y2 < tmp {
-						sc[i].scoreSector = ZEN_Y2 * sc[i].scoreSector / tmp
-					}
-					// Next formula is not what Zennode and ZokumBSP defacto
-					// use
-					// TODO Undeflow possible?
-					sc[i].scoreSector -= (ZEN_Y3*inter.sectorS + ZEN_Y4) * inter.sectorS
-				} else { // Logic introduced in ZokumBSP, activated when no SECTOR splits are preferred
-					// It also makes better balanced partitions with respect to
-					// SECTOR count on both sides score better (higher)
-					sc[i].scoreSector = uint(0xFFFFFFFF) - UintAbsDiff(inter.sectorL,
-						inter.sectorR)
+			if inter.sectorS > 0 {
+				tmp := ZEN_Y1 * inter.sectorS
+				if ZEN_Y2 < tmp {
+					sc[i].scoreSector = ZEN_Y2 * sc[i].scoreSector / tmp
 				}
+				// Next formula is not what Zennode and ZokumBSP defacto
+				// use
+				sc[i].scoreSector -= (ZEN_Y3*inter.sectorS + ZEN_Y4) * inter.sectorS
+			} else { // Logic introduced in ZokumBSP, activated when no SECTOR splits are preferred
+				// It also makes better balanced partitions with respect to
+				// SECTOR count on both sides score better (higher)
+				sc[i].scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+					inter.sectorR)
 			}
 		}
 	}
-}
-
-func UintAbsDiff(x1, x2 uint) uint {
-	return uint(Abs(int(x1) - int(x2)))
 }
 
 func evalPartitionWorker_Zen(block *Superblock, rec *DepthScoreBundle,
@@ -298,12 +294,12 @@ func evalPartitionWorker_Zen(block *Superblock, rec *DepthScoreBundle,
 	num := BoxOnLineSide(block, part)
 	if num < 0 {
 		// LEFT
-		intermediate.segL += uint(block.realNum)
+		intermediate.segL += block.realNum
 		block.MarkSectorsHitNoCached(sectorHits, uint8(0x0F))
 		return
 	} else if num > 0 {
 		// RIGHT
-		intermediate.segR += uint(block.realNum)
+		intermediate.segR += block.realNum
 		block.MarkSectorsHitNoCached(sectorHits, uint8(0xF0))
 		return
 	}

@@ -319,7 +319,7 @@ func init() {
 		DiagonalPenalty:        DIAGONAL_PENALTY,
 		PenalizeDiagonality:    PENALIZE_DIAGONALITY_HEXEN,
 		MinorCmpUser:           MINOR_CMP_BALANCE,
-		DepthArtifacts:         false,
+		DepthArtifacts:         true,
 	})
 	// Proceed to parse command line
 	if !(config.FromCommandLine()) {

@@ -893,7 +893,9 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		newSectorHits := make([]uint8, len(w.sectors))
 		ZenComputeScores(super, depthScores, newSectorHits, w.depthArtifacts)
 		ZenPickBestScore(depthScores)
-		best = depthScores[0].seg
+		if depthScores[0].scoreSeg != VERY_BAD_SCORE {
+			best = depthScores[0].seg
+		}
 	}
 	return best // All finished, return best Seg
 }
