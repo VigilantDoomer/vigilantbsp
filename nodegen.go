@@ -84,6 +84,8 @@ type NodesInput struct {
 	pickNodeFactor  int
 	minorIsBetter   MinorIsBetterFunc
 	linesToIgnore   []bool // dummy linedefs such as for scrolling
+	multipart       bool   // whether multiple partition with same primary costs are considered (for depth evaluation)
+	depthArtifacts  bool
 }
 
 // Returned from nodes builder goroutine through a channel
@@ -136,6 +138,8 @@ type NodesWork struct {
 	pickNodeFactor  int
 	pickNodeUser    int
 	minorIsBetter   MinorIsBetterFunc
+	multipart       bool
+	depthArtifacts  bool
 }
 
 type NodeVertex struct {
@@ -306,6 +310,8 @@ func NodesGenerator(input *NodesInput) {
 		pickNodeFactor:  input.pickNodeFactor,
 		pickNodeUser:    input.pickNodeUser,
 		minorIsBetter:   input.minorIsBetter,
+		multipart:       input.multipart,
+		depthArtifacts:  input.depthArtifacts,
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)

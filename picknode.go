@@ -63,6 +63,11 @@ type MinorCosts struct {
 	SectorsSplit  int // number of sectors split
 }
 
+type SegMinorBundle struct {
+	seg   *NodeSeg
+	minor MinorCosts
+}
+
 func minorIsBetter_Dummy(current, prev MinorCosts) bool {
 	return false
 }
@@ -135,6 +140,12 @@ func minorIsBetter_Balanced(current, prev MinorCosts) bool {
 	}
 
 	return false
+}
+
+// Needed for depth mode to aggregate all partition candidates with the
+// same PRIMARY metric (cost)
+func minorIsBetter_Always(current, prev MinorCosts) bool {
+	return true
 }
 
 // PickNode_traditional is an implementation of PickNode that is classic (since
@@ -638,6 +649,10 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		SegsSplit:     int(INITIAL_BIG_COST),
 		SectorsSplit:  int(INITIAL_BIG_COST),
 	}
+	var parts []SegMinorBundle
+	if w.multipart {
+		parts = make([]SegMinorBundle, 0)
+	}
 	cnt := 0
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
@@ -761,9 +776,10 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 
 		cost += diff
-		if config.PenalizeSectorSplits {
+		if config.PenalizeSectorSplits && !w.multipart {
 			// Another "vigilant visplanes" exclusive - penalize partition
 			// candidates for splitting multiple distinct sectors
+			// This path is disabled for depth evaluation, however
 			cost += unmerged * w.pickNodeFactor
 		}
 		if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
@@ -854,12 +870,31 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 
 		// We have a new better choice
+		if parts != nil { // multipart == true
+			if bestcost != cost {
+				// Different (lesser cost) found
+				// Forget all parts for previous bestcost
+				parts = parts[:0]
+			}
+			parts = append(parts, SegMinorBundle{
+				seg:   part,
+				minor: minors,
+			})
+		}
 		bestcost = cost
 		bestMinors = minors
 		best = part // Remember which Seg
 	}
 	w.incidental = w.incidental[:0]
-
+	if len(parts) > 1 {
+		// Use Zennode-like algorithm intended to choose partition so as to
+		// decrease BSP depth somewhat. Functions are in zenscore.go
+		depthScores := ZenSegMinorToDepthScores(parts)
+		newSectorHits := make([]uint8, len(w.sectors))
+		ZenComputeScores(super, depthScores, newSectorHits, w.depthArtifacts)
+		ZenPickBestScore(depthScores)
+		best = depthScores[0].seg
+	}
 	return best // All finished, return best Seg
 }
 

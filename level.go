@@ -316,6 +316,10 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				diagonalPenalty: diagonalPenalty,
 				minorIsBetter:   config.MinorCmpFunc, // global config
 				linesToIgnore:   linesToIgnore,
+
+				multipart: config.MinorCmpUser == MINOR_CMP_DEPTH, // global config
+
+				depthArtifacts: config.DepthArtifacts, // global config
 			})
 		}
 	}

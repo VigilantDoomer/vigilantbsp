@@ -231,6 +231,23 @@ func (s *Superblock) MarkSecEquivsHit(sectorsHit []uint8, mask uint8) {
 	}
 }
 
+// Like MarkSectorsHit, but doesn't assume there is a built already cache
+// for sectors belonging to superblock
+func (s *Superblock) MarkSectorsHitNoCached(sectorsHit []uint8, mask uint8) {
+	for seg := s.segs; seg != nil; seg = seg.nextInSuper {
+		sectorsHit[seg.sector] |= mask
+	}
+
+	// Recurse!
+	for num := 0; num < 2; num++ {
+		if s.subs[num] == nil {
+			continue
+		}
+
+		s.subs[num].MarkSectorsHitNoCached(sectorsHit, mask)
+	}
+}
+
 func UtilPerpDist(part *NodeSeg, x, y float64) float64 {
 	return (x*float64(part.pdy) - y*float64(part.pdx) +
 		float64(part.perp)) / part.flen

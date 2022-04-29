@@ -136,6 +136,7 @@ const (
 	MINOR_CMP_SEGS
 	MINOR_CMP_SECTORS
 	MINOR_CMP_BALANCE
+	MINOR_CMP_DEPTH
 )
 
 // PickNodeFunc is a signature of all PickNode* function variants (see
@@ -199,8 +200,9 @@ type ProgramConfig struct {
 	RebuildBlockmap bool
 	PickNodeFactor  int
 	// Diagonal penalty and option to enable/disable it conditionally or always
-	DiagonalPenalty     int // the value itself
-	PenalizeDiagonality int // whether and when the penalty is applied
+	DiagonalPenalty     int  // the value itself
+	PenalizeDiagonality int  // whether and when the penalty is applied
+	DepthArtifacts      bool // whether to enable Zennode/ZokumBSP factual deviations from algorithm described in their docs
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -257,6 +259,11 @@ func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
 		{
 			return minorIsBetter_Balanced
 		}
+	case MINOR_CMP_DEPTH:
+		{
+			// the decisive minor comparison is done elsewhere
+			return minorIsBetter_Always
+		}
 	default:
 		{
 			panic("Invalid argument")
@@ -312,6 +319,7 @@ func init() {
 		DiagonalPenalty:        DIAGONAL_PENALTY,
 		PenalizeDiagonality:    PENALIZE_DIAGONALITY_HEXEN,
 		MinorCmpUser:           MINOR_CMP_BALANCE,
+		DepthArtifacts:         false,
 	})
 	// Proceed to parse command line
 	if !(config.FromCommandLine()) {
@@ -374,6 +382,9 @@ func PrintHelp() {
 	Log.Printf("		1 Favor nodes that do not split segs\n")
 	Log.Printf("		2 Favor nodes that do not create subsectors\n")
 	Log.Printf("		3 Favor both of above equally (default)\n")
+	Log.Printf("		4 Depth reduction - experimental \n")
+	Log.Printf("   !!! This option, the set of values and their meanings are\n")
+	Log.Printf("     going to be modified before next release\n")
 	Log.Printf("	i= Cull (don't create segs from) invisible linedefs.\n")
 	Log.Printf("		0 Don't cull (default)\n")
 	Log.Printf("		1 Cull, use faulty check to preserve self-referencing sectors.\n")

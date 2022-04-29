@@ -5,6 +5,7 @@ v0.70a
 - Changed what is considered to contribute to subsector creation when secondary metric is computed
 - Fixed bug: unlike what is written in documentation, specifying positive diagonal penalty didn't force enable it to all levels, now it does
 - Forced 64-bit math on 32-bit computers in critical areas of seg splitting code
+- Depth reduction added as a new option to secondary score in advanced visplane reduction algorithm  
 
 v0.69a
 - Reformatted changelog

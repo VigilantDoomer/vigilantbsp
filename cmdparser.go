@@ -412,6 +412,10 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 						{
 							c.MinorCmpUser = MINOR_CMP_BALANCE
 						}
+					case 4:
+						{
+							c.MinorCmpUser = MINOR_CMP_DEPTH
+						}
 					default:
 						{
 							Log.Error("Ignoring invalid (out of range) value for the type of secondary score to use for partition selection.")
