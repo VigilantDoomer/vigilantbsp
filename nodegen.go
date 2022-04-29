@@ -57,13 +57,6 @@ import (
 // If those effects ZokumBSP alludes to exist, at the very least "cull segs"
 // option should result in "unculled" segs to be inserted at their "original"
 // spots into initial segs list - where their creation was first skipped
-// TODO Found Zennode's formula for depth reduction in it's changelog. That's
-// arcane. ZokumBSP's modification of it is even more arcane though, and yet
-// it gives some good results on reducing tree depth indeed. While tree depth
-// doesn't really guarantee anything visplane-wise, it may help get some wads
-// under a normal nodes format limit, reducing circumstances where extended or
-// deep nodes are needed. I'll see if I can reproduce that trick, it is very
-// hard to understand in original code
 
 const SSECTOR_NORMAL_MASK = 0x8000
 const SSECTOR_DEEP_MASK = 0x80000000

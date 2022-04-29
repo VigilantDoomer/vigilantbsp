@@ -68,7 +68,7 @@ const ZEN_Y4 = 0
 // one
 
 // Use secondary score for partition selection:
-// - Split minimization with no tree balancing
+// - Split minimization (no tree balancing)
 // - Minimize depth, favor no split segs
 // - Minimize depth, favor fewer subsectors
 // - Minimize depth, favor both of above equally
