@@ -142,6 +142,9 @@ func (c *ProgramConfig) FromCommandLine() bool {
 			}
 		case '-':
 			{
+				// Encountered a beginning of double hyphen argument, which is
+				// entire "word" followed by a double hyphen, rather than one
+				// letter following a single one
 				// TODO refactor. Will probably have more double hyphen
 				// arguments in the future. Current code mess is for files only
 				// and hard to read or extend
@@ -173,6 +176,18 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					return false
 				}
 			}
+		case 'm':
+			{
+				// -m:mapxx parameter
+				if config.FilterLevel != nil {
+					Log.Error("You can't specify map list twice.\n")
+					return false
+				}
+				if !c.parseMapList([]byte(arg[2:])) {
+					Log.Error("There were errors parsing map list - aborting.\n")
+					return false
+				}
+			}
 		default:
 			{
 				Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
@@ -183,6 +198,45 @@ func (c *ProgramConfig) FromCommandLine() bool {
 	if outputModifier && !hasOutputFile {
 		Log.Error("Modifier '-o' was present without a file name following it - aborting.\n")
 		return false
+	}
+	return true
+}
+
+func (c *ProgramConfig) parseMapList(p []byte) bool {
+	if len(p) == 0 || p[0] != ':' {
+		Log.Error("Missing a colon: map list should be specified like this -m:map01+map02\n")
+		return false
+	}
+	c.FilterLevel = make([][]byte, 0)
+	rest := p[1:]
+	for len(rest) > 0 {
+		pin := bytes.IndexByte(rest, '+')
+		if pin == -1 {
+			pin = len(rest)
+		}
+		lname := rest[:pin]
+		if len(lname) > 0 {
+			lname = bytes.ToUpper(lname)
+			if IsALevel(lname) {
+				c.FilterLevel = append(c.FilterLevel, lname)
+			} else {
+				// ARGH!
+				Log.Error("%s is not a valid level name.\n", string(lname))
+				return false
+			}
+		} else {
+			Log.Error("'-m:' argument is missing a level name following or preceeding one of the separators.\n")
+			return false
+		}
+		if pin+1 < len(rest) {
+			rest = rest[pin+1:]
+		} else {
+			if pin == len(rest)-1 {
+				Log.Error("Map list should not end with a '+'\n")
+				return false
+			}
+			break
+		}
 	}
 	return true
 }

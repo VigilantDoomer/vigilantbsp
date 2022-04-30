@@ -284,6 +284,25 @@ func SetValiditySocket(lumpName string, reference []string, validitySub *[]int,
 	}
 }
 
+// Returns whether a level should be rebuilt based on current configuration
+// If user supplied arguments specifying precise levels that should be rebuilt,
+// they must have been stored in configuration in upper case, or this will fail
+// to work as intended
+func CanRebuildThisLevel(levelName []byte) bool {
+	// Go treats nil (null) array as having zero size
+	if len(config.FilterLevel) == 0 {
+		return true
+	}
+
+	for _, entry := range config.FilterLevel {
+		if bytes.Equal(entry, levelName) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // So, we have an input wad directory, and must return an output wad directory
 // Non-level lumps are copied intact, but level lumps need to:
 // 1. Be created when missing and creation is possible
@@ -489,7 +508,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Now that we are definitely having levels, let's organize a schedule of
+	// Now that we are definitely having lumps, let's organize a schedule of
 	// future "copy lump"/"process level" operations
 	ScheduleRoot := new(ScheduledLump)
 	action := ScheduleRoot
@@ -497,7 +516,7 @@ func main() {
 	action.Level = nil
 	action.DirIndex = -1
 	lvls := 0
-	PDummySector := new(Sector) // Looks I need a variable to obtain structure size
+	PDummySector := new(Sector) // I need a variable to obtain type size
 	troll := CreateTroll()
 	rejectsize := make(map[int]uint32)
 	validities := make([]LevelValidity, 0)
@@ -511,29 +530,37 @@ func main() {
 
 		moveToNew := true // becomes false if processing lump that belongs to a level
 		if IsALevel(bname) {
-			validity = new(LevelValidity)
-			// Log.Printf("Entry #%d is expected to denote a level %s \n", i, string(bname))
-			newAction.DirIndex = i
-			newAction.Level = make([]*ScheduledLump, 0, 12)
-			newAction.LevelFormat = FORMAT_DOOM
-			newAction.Next = nil // for now
-			validity = &LevelValidity{
-				scheduleEntry: newAction,
-				currentOrder:  make([]int, len(LUMP_SORT_ORDER)),
-				requisites:    make([]int, len(LUMP_MUSTEXIST)),
-				creatable:     make([]int, len(LUMP_CREATE)),
+			// Check to see if I should rebuild this level, or just copy it
+			if CanRebuildThisLevel(bname) {
+				// Ok, rebuild
+				newAction.DirIndex = i
+				newAction.Level = make([]*ScheduledLump, 0, 12)
+				newAction.LevelFormat = FORMAT_DOOM
+				newAction.Next = nil // for now
+				validity = &LevelValidity{
+					scheduleEntry: newAction,
+					currentOrder:  make([]int, len(LUMP_SORT_ORDER)),
+					requisites:    make([]int, len(LUMP_MUSTEXIST)),
+					creatable:     make([]int, len(LUMP_CREATE)),
+				}
+				for j, _ := range validity.currentOrder {
+					validity.currentOrder[j] = -1
+				}
+				for j, _ := range validity.requisites {
+					validity.requisites[j] = 0
+				}
+				for j, _ := range validity.creatable {
+					validity.creatable[j] = 0
+				}
+				validities = append(validities, *validity)
+				validity = &validities[len(validities)-1]
+			} else {
+				// Just copy
+				Log.Verbose(1, "will not rebuild level %s\n", string(bname))
+				newAction.DirIndex = i
+				newAction.Level = nil
+				newAction.Next = nil
 			}
-			for j, _ := range validity.currentOrder {
-				validity.currentOrder[j] = -1
-			}
-			for j, _ := range validity.requisites {
-				validity.requisites[j] = 0
-			}
-			for j, _ := range validity.creatable {
-				validity.creatable[j] = 0
-			}
-			validities = append(validities, *validity)
-			validity = &validities[len(validities)-1]
 		} else {
 			newAction.DirIndex = i
 			newAction.Level = nil
@@ -541,6 +568,8 @@ func main() {
 			if action.Level != nil {
 				// we are inside a level, check if it is a lump that is supposed
 				// to exist in it
+				// this path is not followed if a level is not being rebuilt but
+				// copied instead
 				isHexenSpec := bytes.Equal([]byte("BEHAVIOR"), bname)
 				isLevelSpec := isHexenSpec ||
 					bytes.Equal([]byte("SEGS"), bname) ||
@@ -604,10 +633,10 @@ func main() {
 	lvls = FindValidLevels(ScheduleRoot)
 
 	if lvls == 0 {
-		Log.Error("Unable to find any valid levels of supported format(s) - terminating.\n")
+		Log.Error("Unable to find any levels I can rebuild - terminating.\n")
 		os.Exit(1)
 	}
-	Log.Printf("Number of levels found (excluding invalid ones): %d\n", lvls)
+	Log.Printf("Number of levels that will be rebuilt: %d\n", lvls)
 
 	// All of our reject lumps will reuse a single pool of zeroes (lump
 	// overlapping is allowed by wad format)

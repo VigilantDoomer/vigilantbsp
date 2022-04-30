@@ -201,6 +201,11 @@ type ProgramConfig struct {
 	DiagonalPenalty     int  // the value itself
 	PenalizeDiagonality int  // whether and when the penalty is applied
 	DepthArtifacts      bool // whether to enable Zennode/ZokumBSP factual deviations from algorithm described in their docs
+
+	// FilterLevel is a list of level names to rebuild. All levels not in this list
+	// are to be copied along, not rebuilt. If list is nil or has zero size,
+	// there is no filter: all levels have to be rebuild.
+	FilterLevel [][]byte
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -318,6 +323,7 @@ func init() {
 		PenalizeDiagonality:    PENALIZE_DIAGONALITY_HEXEN,
 		MinorCmpUser:           MINOR_CMP_BALANCE,
 		DepthArtifacts:         true,
+		FilterLevel:            nil,
 	})
 	// Proceed to parse command line
 	if !(config.FromCommandLine()) {
