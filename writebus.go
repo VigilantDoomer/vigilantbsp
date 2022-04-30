@@ -92,6 +92,9 @@ func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool)
 	chFinish <- true
 }
 
+// TODO refactor method names to be different from function names in lumpwrite.go
+// Cause confused myself already
+
 func (c *WriteBusControl) WriteSliceLump(data []byte, lumpIdx int, s string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_BYTES,
