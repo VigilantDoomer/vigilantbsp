@@ -61,6 +61,7 @@ type MinorCosts struct {
 	PreciousSplit int // number of "do not split" seg split
 	SegsSplit     int // number of segs split
 	SectorsSplit  int // number of sectors split
+	Unmerged      int // number of sectors split rather directly
 }
 
 type SegMinorBundle struct {
@@ -132,6 +133,12 @@ func minorIsBetter_Balanced(current, prev MinorCosts) bool {
 	if current.SectorsSplit < prev.SectorsSplit {
 		return true
 	} else if current.SectorsSplit > prev.SectorsSplit {
+		return false
+	}
+
+	if current.Unmerged < prev.Unmerged {
+		return true
+	} else if current.Unmerged > prev.Unmerged {
 		return false
 	}
 
@@ -690,6 +697,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			PreciousSplit: 0,
 			SegsSplit:     0,
 			SectorsSplit:  0,
+			Unmerged:      0,
 		}
 		tot := 0
 		slen := 0 // length of partition that is incidental with segs
@@ -781,6 +789,12 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// candidates for splitting multiple distinct sectors
 			// This path is disabled for depth evaluation, however
 			cost += unmerged * w.pickNodeFactor
+		} else {
+			// On most wads, NOT applying the above addition to primary cost,
+			// but offloading it to secondary cost, seems to reduce depth
+			// Except on the vanilla wad I've in development, which needs the
+			// other approach ...
+			minors.Unmerged = unmerged
 		}
 		if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 			continue
@@ -895,6 +909,27 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		ZenPickBestScore(depthScores)
 		if depthScores[0].scoreSeg != VERY_BAD_SCORE {
 			best = depthScores[0].seg
+			tst1, tst2, tst3, tst4 := depthScores[0].preciousSplit,
+				depthScores[0].scoreTotal,
+				depthScores[0].equivSplit,
+				depthScores[0].segSplit
+			track := 1
+			for i := 1; i < len(depthScores); i++ {
+				if tst1 == depthScores[i].preciousSplit &&
+					tst2 == depthScores[i].scoreTotal &&
+					tst3 == depthScores[i].equivSplit &&
+					tst4 == depthScores[i].segSplit {
+					track++
+				} else {
+					break
+				}
+			}
+			if track > 1 {
+				// The frequency of this makes me wonder if Zennode's method
+				// was just a deterministic shuffle, like simulating random
+				// selection of a partition (except for few bad candidates)
+				Log.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+			}
 		}
 	}
 	return best // All finished, return best Seg

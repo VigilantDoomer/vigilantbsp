@@ -398,23 +398,13 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					switch nos.value {
 					case 0:
 						{
-							c.MinorCmpUser = MINOR_CMP_NOOP
+							c.MinorCmpUser = MINOR_CMP_BALANCE
+							c.PenalizeSectorSplits = true
 						}
 					case 1:
 						{
-							c.MinorCmpUser = MINOR_CMP_SEGS
-						}
-					case 2:
-						{
-							c.MinorCmpUser = MINOR_CMP_SECTORS
-						}
-					case 3:
-						{
 							c.MinorCmpUser = MINOR_CMP_BALANCE
-						}
-					case 4:
-						{
-							c.MinorCmpUser = MINOR_CMP_DEPTH
+							c.PenalizeSectorSplits = false
 						}
 					default:
 						{

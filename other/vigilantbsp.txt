@@ -129,11 +129,9 @@ is either a suboption of option above it, or a possible value:
 		1 Visplane reduction per Lee Killough
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
-	p= Use secondary score for partition selection.
-		0 Don't use (the first pick with best primary score wins)
-		1 Favor nodes that do not split segs
-		2 Favor nodes that do not create subsectors
-		3 Favor both of above equally
+	p= Priority for partition selection.
+		0 Split minimization
+		1 Depth reduction
 	i= Cull (don't create segs from) invisible linedefs.
 		0 Don't cull (default)
 		1 Cull, use faulty check to preserve self-referencing sectors.
@@ -783,24 +781,23 @@ It produces worse results limit-wise than even the "seg balancing only"
 algorithm, but it achieves graceful running times even on very large and
 complex levels.
 
-07:02 'p' - Use secondary score for partition selection
+07:02 'p' - Priority for partition selection
 -------------------------------------------------------
-Note: this option was introduced in v0.69a of VigilantBSP
+Note: this option was introduced in v0.69a of VigilantBSP, under the
+name "Use secondary score for partition selection". It has been since
+effectively overwritten, old options are no longer valid. It may be
+overwritten once again or removed in future versions.
 
 This experimental option allows to make slight alterations to partition
 selection algorithm. Currently it only has effect when na=2 (advanced
 visplane reduction) is selected, for performance as well as other reasons.
 It may result in more effecient tree built (less deep and/or fewer segs
-overall), although no guarantees on either that or it not compromising
-the goal of reducing visplanes can be provided. 
+overall), but which exact option will yield better/worse result is
+specific to each map.
 
 It exists because it has been reported to me that ZokumBSP produces
 similar visplane results but with less segs/drawsegs. Hopefully, this
 new addition will make the efficiency gap a bit smaller.
-
-In case this option, which defaults to np=3, produces worse results
-than v.067a version of VigilantBSP did, you can use np=0 to get back
-the results produced by that version.
 
 Also, it is important to note that since the metric is applied on each
 partition iteration, it cannot really guarantee the best outcome after
@@ -809,42 +806,34 @@ basis. Thus, if you really are struggling with getting particular
 map under limits, you might want to experiment with setting different
 values to this option.
 
-p=0 Don't use (the first pick with best primary score wins)
+p=0 Split minimization
 
-This mimics the behavior of 0.67a version of VigilantBSP, making it
-operate similar to BSP nodebuilder that uses singular metric (called
-partition "cost", which is an integer sum of all "cost penalties"
-assigned due to "undesirable" partition traits) and picks
-the earliest partition choice with least value for that metric.
+This gives priority to avoiding sector splits. Technically, it does
+not count sector splits directly but rather the number of groups of
+sectors whose flats and ceilings are visplane-compatible that have
+been split. The penalty factor is then applied per each group that
+has been split.
 
-It is often that multiple possible choices give the same minimal score,
-and picking the earliest one found may miss a better choice that would
-result in fewer segs or other better parameters.
+This behavior was common to all versions of VigilantBSP up to
+and including v0.69a. Additionally, this now enforces secondary
+metric that VigilantBSP v0.69a had by default, as it was determined
+as most efficient.
 
-All modes below still use this metric, but only as a start: when multiple
-partition candidates score the same, three additional scores will be
-computed separately each: number of "should not split" segs split, 
-overall segs split, sector equivalencies split (compatible sectors
-counted once). Every one of them is best lowest, but the priority is:
-as little as possible "should not split" segs split, the rest depends
-on specific option choosed.
+p=1 Depth reduction
 
-p=1 Favor nodes that do not split segs
+This moves "avoiding sector splits" lower in priority list, thus
+increasing the priority of balance between both segs and sectors.
 
-This will try to reduce seg split number (which results in creation of
-new segs), but this might not result in a well balanced tree, might also
-result in more visplanes than even naive np=0 algorithm.
+Contrary to the option's name, it will not necessarily produce
+less deep / smaller trees or result in more splits. It may have 
+something to do with bugs in advanced visplane reduction 
+algorithm, such as within the part of it that computes partition
+candidate line length without segments that cross the void, or
+something else. 
 
-p=2 Favor nodes that do not create subsectors
-
-Seg splits don't really correspond to subsectors splits, this one may
-be better for balanced tree (but not necessary same or better visplane
-count) thus, but might produce even more segs than np=0.
-
-p=3 Favor both of above equally
-
-This will keep visplane reduction as close as the algorithm chosen
-can provide, but also result in less segs. 
+I have tried to use Zennode's approach to reduce depth, but, being
+applied after visplane-sensitive algorithm, it didn't produce 
+results distinct from what is currently implemented. 
 
 07:03 'i' - Cull (don't create segs from) invisible linedefs
 ------------------------------------------------------------

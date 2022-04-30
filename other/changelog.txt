@@ -5,7 +5,7 @@ v0.70a
 - Changed what is considered to contribute to subsector creation when secondary metric is computed
 - Fixed bug: unlike what is written in documentation, specifying positive diagonal penalty didn't force enable it to all levels, now it does
 - Forced 64-bit math on 32-bit computers in critical areas of seg splitting code
-- Depth reduction added as a new option to secondary score in advanced visplane reduction algorithm  
+- Secondary score option changed to priority: split minimization or depth reduction. Some maps benefit from the former, other maps - from the latter.
 
 v0.69a
 - Reformatted changelog

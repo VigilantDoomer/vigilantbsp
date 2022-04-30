@@ -61,9 +61,8 @@ const ZEN_Y3 = 1
 
 const ZEN_Y4 = 0
 
-// So, important note about working on it: this metric is not cost, greater
-// value WINS. Pay attention to how callbacks passed to qsort are written in
-// Zennode / ZokumBSP
+// So, important note about working on it: this metric is not cost, so a greater
+// value may mean better, not worse for some of the fields
 // Also, maybe this will have to redefine all secondary modes, not just depth
 // one
 
@@ -76,9 +75,11 @@ const ZEN_Y4 = 0
 type DepthScoreBundle struct {
 	seg           *NodeSeg
 	preciousSplit int // lesser value wins
+	equivSplit    int // equivalencies split. Lesser value wins
+	segSplit      int
 	scoreSeg      int // greater value wins
 	scoreSector   int // greater value wins
-	scoreTotal    int // greater value wins
+	scoreTotal    int // lesser value wins (got this wrong at first)
 }
 
 type ZenIntermediary struct {
@@ -140,10 +141,36 @@ func (x DepthScoresByTotal) Less(i, j int) bool {
 		return false
 	}
 
+	// You know, I've gotten this final metric comparison backwards at first,
+	// and hardly could have seen a difference in results!
 	if x[i].scoreTotal < x[j].scoreTotal {
-		return false
-	} else if x[i].scoreTotal > x[j].scoreTotal {
 		return true
+	} else if x[i].scoreTotal > x[j].scoreTotal {
+		return false
+	}
+
+	// The above is not sufficient to produce an unique candidate. Let's try
+	// more checks, these ones are new to VigilantBSP, not borrowed elsewhere
+
+	/*iSum := x[i].equivSplit + x[i].segSplit
+	jSum := x[j].equivSplit + x[j].segSplit
+
+	if iSum < jSum {
+		return true
+	} else {
+		return false
+	}*/
+
+	if x[i].equivSplit < x[j].equivSplit {
+		return true
+	} else if x[i].equivSplit > x[j].equivSplit {
+		return false
+	}
+
+	if x[i].segSplit < x[j].segSplit {
+		return true
+	} else if x[i].segSplit > x[j].segSplit {
+		return false
 	}
 
 	return x[i].seg.Linedef < x[j].seg.Linedef
@@ -382,6 +409,8 @@ func ZenSegMinorToDepthScores(input []SegMinorBundle) []DepthScoreBundle {
 		res[i].scoreSeg = 0
 		res[i].scoreSector = 0
 		res[i].scoreTotal = 0
+		res[i].equivSplit = entry.minor.SectorsSplit
+		res[i].segSplit = entry.minor.SegsSplit
 	}
 	return res
 }

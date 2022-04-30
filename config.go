@@ -55,11 +55,9 @@ const VERSION = "0.70a"
 		1 Visplane reduction per Lee Killough
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
-	p= Use secondary score for partition selection.
-		0 Don't use (the first pick with best primary score wins)
-		1 Favor nodes that do not split segs
-		2 Favor nodes that do not create subsectors
-		3 Favor both of above equally
+	p= Priority for partition selection.
+		0 Split minimization (default)
+		1 Depth reduction
 	i= Cull (don't create segs from) invisible linedefs.
 		0 Don't cull (default)
 		1 Cull, use faulty check to preserve self-referencing sectors.
@@ -377,14 +375,9 @@ func PrintHelp() {
 	Log.Printf("		1 Visplane reduction per Lee Killough\n")
 	Log.Printf("		2 Advanced visplane reduction\n")
 	Log.Printf("		3 Maelstrom - fastest build speed\n")
-	Log.Printf("	p= Use secondary score for partition selection.\n")
-	Log.Printf("		0 Don't use (the first pick with best primary score wins)\n")
-	Log.Printf("		1 Favor nodes that do not split segs\n")
-	Log.Printf("		2 Favor nodes that do not create subsectors\n")
-	Log.Printf("		3 Favor both of above equally (default)\n")
-	Log.Printf("		4 Depth reduction - experimental \n")
-	Log.Printf("   !!! This option, the set of values and their meanings are\n")
-	Log.Printf("     going to be modified before next release\n")
+	Log.Printf("	p= Priority for partition selection.\n")
+	Log.Printf("		0 Split minimization (default)\n")
+	Log.Printf("		1 Depth reduction\n")
 	Log.Printf("	i= Cull (don't create segs from) invisible linedefs.\n")
 	Log.Printf("		0 Don't cull (default)\n")
 	Log.Printf("		1 Cull, use faulty check to preserve self-referencing sectors.\n")
