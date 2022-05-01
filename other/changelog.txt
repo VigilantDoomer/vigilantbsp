@@ -6,6 +6,7 @@ v0.70a
 - Fixed bug: unlike what is written in documentation, specifying positive diagonal penalty didn't force enable it to all levels, now it does
 - Forced 64-bit math on 32-bit computers in critical areas of seg splitting code
 - Secondary score option changed to priority: split minimization or depth reduction. Some maps benefit from the former, other maps - from the latter.
+- Sped-up 32-bit Windows executable by making bsp tree builder codebase use fixed-point math for superblocks. This shouldn't introduce any errors 
 
 v0.69a
 - Reformatted changelog

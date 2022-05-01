@@ -160,7 +160,6 @@ type NodeSeg struct {
 	psx, psy, pex, pey int // start, end coordinates
 	pdx, pdy, perp     int // used in intersection calculations
 	len                int
-	flen               float64
 	sector             uint16
 	secEquiv           uint16 // only initialized if sectorEquivalencies are computed
 	alias              int
@@ -513,7 +512,8 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
 			// Action = 1085 is do not render front side (zokumbsp)
 			if action == 1085 {
-				Log.Verbose(1, "Will not create seg for front sidedef of linedef %d - instructed so by action's numeric code set to 1085 on linedef.\n")
+				Log.Verbose(1, "Will not create seg for front sidedef of linedef %d - instructed so by action's numeric code set to 1085 on linedef.\n",
+					i)
 			} else {
 				lcs = addSeg(myVertices, i, vidx1, vidx2, rootCs,
 					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
@@ -531,7 +531,8 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
 			// Action = 1084 is do not render back side (zokumbsp)
 			if action == 1084 {
-				Log.Verbose(1, "Will not create seg for BACK sidedef of linedef %d - instructed so by action's numeric code set to 1084 on linedef.\n")
+				Log.Verbose(1, "Will not create seg for BACK sidedef of linedef %d - instructed so by action's numeric code set to 1084 on linedef.\n",
+					i)
 			} else {
 				rcs = addSeg(myVertices, i, vidx2, vidx1, rootCs,
 					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
@@ -589,8 +590,8 @@ func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	s.pdy = s.pey - s.psy
 	s.perp = s.pdx*s.psy - s.psx*s.pdy
 	s.Linedef = i
-	s.flen = math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
-	s.len = int(s.flen)
+	flen := math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
+	s.len = int(flen)
 	s.Offset = 0
 	if bamEffect.Action == BAM_REPLACE { // zokumbsp actions 1081, 1083
 		// Completely replaces value, computation not needed
@@ -1324,7 +1325,6 @@ func (w *NodesWork) recomputeSegs(originSeg, newSeg *NodeSeg) {
 	originNewLen := int(newSeg.Offset) - int(originSeg.Offset)
 	originSeg.len = originNewLen
 	newSeg.len = newSeg.len - originNewLen
-	newSeg.flen = newSeg.flen - float64(originNewLen)
 
 	oldAngle := originSeg.Angle
 	w.recomputeOneSeg(originSeg)

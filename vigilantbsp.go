@@ -180,7 +180,8 @@ func (fc *FileControl) Shutdown() {
 
 	if fc.tmp { // Aborting unsuccessful operation when a temp file has been created
 		if errFout != nil {
-			Log.Error("Couldn't delete temporary file '%s' because failed to close it already.\n")
+			Log.Error("Couldn't delete temporary file '%s' because failed to close it already.\n",
+				fc.outputFileName)
 			return
 		}
 		err := os.Remove(fc.outputFileName)

@@ -16,17 +16,17 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-import (
-	"math"
-)
-
 // The grand nodebuilding speed-up technique from AJ-BSP by Andrew Apted:
 // superblocks.
 
 // smallest distance between two points before being considered equal
 const DIST_EPSILON float64 = 1.0 / 128.0
 
+const DIST_SHIFT = 7 // << DIST_SHIFT = 8 (1 / DIST_EPSILON)
+
 const IFFY_LEN = 4.0
+
+const MARGIN_LEN = 6 // MUST EQUAL int(IFFY_LEN * 1.5)
 
 type Superblock struct {
 	// parent of this block, or nil for a top-level block
@@ -248,18 +248,35 @@ func (s *Superblock) MarkSectorsHitNoCached(sectorsHit []uint8, mask uint8) {
 	}
 }
 
-func UtilPerpDist(part *NodeSeg, x, y float64) float64 {
-	return (x*float64(part.pdy) - y*float64(part.pdx) +
-		float64(part.perp)) / part.flen
+// func UtilPerpDist(part *NodeSeg, x, y float64) float64 {
+// 		return (x*float64(part.pdy) - y*float64(part.pdx) +
+// 			float64(part.perp)) / part.flen
+// }
+
+// Returns (x * part.pdy - y * part.pdx + part.perp) / part.len
+// in fixed point scaled by (<< DIST_SHIFT). That is, 1 represents 1/128
+func UtilPerpDist(part *NodeSeg, x, y int) int64 {
+	return ((int64(x)*int64(part.pdy) - int64(y)*int64(part.pdx) +
+		int64(part.perp)) << DIST_SHIFT) / int64(part.len)
+}
+
+// Doesn't distinguish between zero and positive, before the use case doesn't
+// require it
+func Int64AbsAndSign(x int64) (int64, bool) {
+	if x >= 0 {
+		return x, false
+	}
+	return -x, true
 }
 
 // Returns -1 for left, +1 for right, or 0 for intersect.
-func PointOnLineSide(part *NodeSeg, x, y float64) int {
+func PointOnLineSide(part *NodeSeg, x, y int) int {
 	perp := UtilPerpDist(part, x, y)
-	if math.Abs(perp) <= DIST_EPSILON {
+	ab, sgn := Int64AbsAndSign(perp)
+	if ab <= 1 { // remember that UtilPerpDist returns value scaled (multiplied by 128)
 		return 0
 	}
-	if math.Signbit(perp) {
+	if sgn {
 		return -1
 	}
 	return +1
@@ -268,21 +285,21 @@ func PointOnLineSide(part *NodeSeg, x, y float64) int {
 // Which side of partition line is the superblock?
 // Returns -1 for left, +1 for right, or 0 for intersect.
 func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
-	x1 := float64(box.x1) - IFFY_LEN*1.5
-	y1 := float64(box.y1) - IFFY_LEN*1.5
-	x2 := float64(box.x2) + IFFY_LEN*1.5
-	y2 := float64(box.y2) + IFFY_LEN*1.5
+	x1 := box.x1 - MARGIN_LEN
+	y1 := box.y1 - MARGIN_LEN
+	x2 := box.x2 + MARGIN_LEN
+	y2 := box.y2 + MARGIN_LEN
 
 	var p1, p2 int
 
 	// handle simple cases (vertical & horizontal lines)
 	if part.pdx == 0 {
-		if x1 > float64(part.psx) {
+		if x1 > part.psx {
 			p1 = +1
 		} else {
 			p1 = -1
 		}
-		if x2 > float64(part.psx) {
+		if x2 > part.psx {
 			p2 = +1
 		} else {
 			p2 = -1
@@ -292,12 +309,12 @@ func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
 			p2 = -p2
 		}
 	} else if part.pdy == 0 {
-		if y1 < float64(part.psy) {
+		if y1 < part.psy {
 			p1 = +1
 		} else {
 			p1 = -1
 		}
-		if y2 < float64(part.psy) {
+		if y2 < part.psy {
 			p2 = +1
 		} else {
 			p2 = -1
