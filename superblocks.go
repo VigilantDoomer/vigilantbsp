@@ -22,7 +22,7 @@ package main
 // smallest distance between two points before being considered equal
 const DIST_EPSILON float64 = 1.0 / 128.0
 
-const DIST_SHIFT = 7 // << DIST_SHIFT = 8 (1 / DIST_EPSILON)
+const DIST_SHIFT = 7 // << DIST_SHIFT = 128 (1 / DIST_EPSILON)
 
 const IFFY_LEN = 4.0
 
