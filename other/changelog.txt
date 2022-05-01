@@ -2,7 +2,6 @@ Changelog for VigilantBSP
 
 v0.70a
 - Fixed bug: some sectors wrongly considered compatible with each other and sector 0 in "advanced visplane reduction" algorithm 
-- Changed what is considered to contribute to subsector creation when secondary metric is computed
 - Fixed bug: unlike what is written in documentation, specifying positive diagonal penalty didn't force enable it to all levels, now it does
 - Forced 64-bit math on 32-bit computers in critical areas of seg splitting code
 - Secondary score option changed to priority: split minimization or depth reduction. Some maps benefit from the former, other maps - from the latter.
