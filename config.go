@@ -275,14 +275,6 @@ func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
 }
 
 func init() {
-	Log.Printf("VigilantBSP ver %s\n", VERSION)
-	Log.Printf("Copyright (c)   2022 VigilantDoomer\n")
-	Log.Printf("This program is built upon ideas first implemented in DEU by Raphael Quinet, \n")
-	Log.Printf("BSP v5.2 by Colin Reed, Lee Killough and other contributors to BSP (program),\n")
-	Log.Printf("ZDBSP by Marisa Heit, Zennode by Marc Rousseau, Zokumbsp by Kim Roar Foldøy Hauge,\n")
-	Log.Printf("AJ-BSP by Andrew Apted, et al, and is distributed under the terms of \n")
-	Log.Printf(" GNU General Public License v2.\n")
-	Log.Printf("\n")
 	// Initialize with defaults
 	config = &(ProgramConfig{
 		BlockmapXOffset:    0,
@@ -325,6 +317,18 @@ func init() {
 		DepthArtifacts:         true,
 		FilterLevel:            nil,
 	})
+}
+
+// Moved away from init, used to confuse the "go test"!
+func Configure() {
+	Log.Printf("VigilantBSP ver %s\n", VERSION)
+	Log.Printf("Copyright (c)   2022 VigilantDoomer\n")
+	Log.Printf("This program is built upon ideas first implemented in DEU by Raphael Quinet, \n")
+	Log.Printf("BSP v5.2 by Colin Reed, Lee Killough and other contributors to BSP (program),\n")
+	Log.Printf("ZDBSP by Marisa Heit, Zennode by Marc Rousseau, Zokumbsp by Kim Roar Foldøy Hauge,\n")
+	Log.Printf("AJ-BSP by Andrew Apted, et al, and is distributed under the terms of \n")
+	Log.Printf(" GNU General Public License v2.\n")
+	Log.Printf("\n")
 	// Proceed to parse command line
 	if !(config.FromCommandLine()) {
 		Log.Printf("\n")

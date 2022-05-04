@@ -436,6 +436,10 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 
 func main() {
 	timeStart := time.Now()
+
+	// before config can be legitimately accessed, must call Configure()
+	Configure()
+
 	var err error
 	// Initialize wad file name from arguments
 	if config.Profile {
