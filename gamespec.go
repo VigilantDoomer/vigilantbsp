@@ -27,7 +27,7 @@ import (
 // that E1M0x is possible (when it is probably shouldn't be) since I don't
 // want to complicate these regexp's (and E9M97 is perfectly legal, for example)
 var MAP_SEQUEL *regexp.Regexp = regexp.MustCompile(`^MAP[0-9][0-9]$`)
-var MAP_ExMx *regexp.Regexp = regexp.MustCompile(`^E[1-9]M[0-9][0-9]+$`)
+var MAP_ExMx *regexp.Regexp = regexp.MustCompile(`^E[1-9]M[0-9][0-9]?$`)
 
 // This constant group is for internal program usage only
 const (
