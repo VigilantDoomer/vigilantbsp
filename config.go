@@ -20,7 +20,7 @@ import (
 	"os"
 )
 
-const VERSION = "0.70a"
+const VERSION = "0.72a"
 
 /*
 -b Rebuild BLOCKMAP.
@@ -409,6 +409,8 @@ func PrintHelp() {
 	Log.Printf("		0 Mark such sectors as always visible (default)\n")
 	Log.Printf("		1 Mark visible only when self-referencing sector effects are detected\n")
 	Log.Printf("		2 Be pedantic about self-referencing sector visibility\n")
+	Log.Printf("\n")
+	Log.Printf("-m (example -m:map01+map03) Rebuild only specific maps\n")
 	Log.Printf("\n")
 	Log.Printf("-v Add verbosity to text output. Use multiple times for increased verbosity.\n")
 	Log.Printf("\n")

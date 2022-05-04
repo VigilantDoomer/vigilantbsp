@@ -26,10 +26,11 @@ Index
 06. Determinism option
 07. Nodes builder
 08. Reject builder
-09. Debug parameters
-10. Changelog
-11. Operating system and platform availability
-12. Other node builders
+09. Option -m: Rebuild only specific maps
+10. Debug parameters
+11. Changelog
+12. Operating system and platform availability
+13. Other node builders
 
 Section 01: Project goals
 =========================
@@ -153,6 +154,8 @@ is either a suboption of option above it, or a possible value:
 		0 Mark such sectors as always visible (default)
 		1 Mark visible only when self-referencing sector effects are detected
 		2 Be pedantic about self-referencing sector visibility
+		
+-m (example -m:map01+map03) Rebuild only specific maps
 		
 -v Add verbosity to text output. Use multiple times for increased verbosity.
 
@@ -281,10 +284,10 @@ Action (linedef special type) with special meanings:
 		by two last digits of the tag.
 1078    Not yet supported (ZokumBSP implements this, we do not - yet)
 1079    Not yet supported (ZokumBSP implements this, we do not - yet)
-1080    Rotate the rendered wall N degrees, where degrees is taken from tag.
-1081    Set the wall rotation to a hardcoded degree, degree taken from tag.
-1082    Rotate the rendered wall N BAMs, BAMs taken from tag.
-1083    Set the wall rotation to a hardcoded BAM, taken from tag.
+1080    Rotate the rendered wall N degrees, where degrees is taken from tag.**
+1081    Set the wall rotation to a hardcoded degree, degree taken from tag.**
+1082    Rotate the rendered wall N BAMs, BAMs taken from tag.**
+1083    Set the wall rotation to a hardcoded BAM, taken from tag.**
 1084    Do not render seg on the second side of a linedef.
 1085    Do not render seg on the front side of a linedef.
 1086    Do not render segs on any side of a linedef.
@@ -292,9 +295,22 @@ Action (linedef special type) with special meanings:
 Linedef tags with special meanings:
 >=900*	Precious linedef: avoid splitting seg when building nodes
 998   	Do not render this linedef.
-999   	Do not add this linedef to the blockmap. Additionally, apply horizon
-		effect if line is one-sided.
+999   	Do not add this linedef to the blockmap. Additionally, if line is 
+        one-sided, rotate the rendered wall N degrees, where degrees
+        is taken from tag.**
 * excluding 998 and 999
+** Most limit-removing and advanced ports won't display this effect correctly,
+because they recompute angle directly. This includes all recent versions of 
+Crispy-Doom and PrBoom-Plus. The effect can only be relied upon to work in
+vanilla and ports with rendering engine designed to emulate or not much 
+different from vanilla (Chocolate-Doom, CnDoom, Sprinkled Doom, etc.).
+This can be used to produce horizon and infinite ocean effect when angle
+in degrees = 180, see 
+https://www.doomworld.com/forum/topic/94604-horizon-effect-in-vanilla-only/
+(credit: Bzzrak)
+
+Linedef tags >=900 and the rotation part for tag 999 effect originate from BSP
+nodebuilder. 
 
 04:01 Seg manipulation specials
 -------------------------------
@@ -655,7 +671,7 @@ of its correctness.
 Section 06: Determinism option
 ==============================
 
-The parallelism VigilantBSP has makes it possible to produce distinct
+The parallelism VigilantBSP has made it possible to produce distinct
 (but still equally valid) outputs for the same input. When building
 blockmaps out of multiple offsets, there is a possibility of threads
 getting ahead of each other. Thus the order in which blockmaps are
@@ -1001,7 +1017,7 @@ usage decreased, etc.
 The RMB option file is not currently supported, but this support is 
 planned in future versions of VigilantBSP.
 
-09:01 'z' - Insert empty REJECT resource
+08:01 'z' - Insert empty REJECT resource
 ----------------------------------------
 
 This will insert a REJECT table where all the lookup values are zero. This
@@ -1012,7 +1028,7 @@ calculations. However, building a proper reject is what would usually take
 the longest amount of time, so this is very useful for testing the map as
 it is edited/developed.
 
-09:02 'g' - Use graphs to reduce LOS calculations
+08:02 'g' - Use graphs to reduce LOS calculations
 -------------------------------------------------
 
 Use this for a quicker built reject table. The idea is that if a sector A
@@ -1030,7 +1046,7 @@ visibility, in the starting point before it begins actually computing it,
 and so was present even with graphs disabled. See next option for how it
 was tackled.
 
-09:03 's' - If 2-sided lines have same sector on both sides
+08:03 's' - If 2-sided lines have same sector on both sides
 -----------------------------------------------------------
 
 The algorithm as invented by Zennode is built upon collecting
@@ -1108,7 +1124,38 @@ always visible just in case.
 
 Future versions will improve the accuracy of these algos definitely.
 
-Section 09: Debug parameters
+Section 09: Option -m: Rebuild only specific maps
+=================================================
+
+Since version 0.72a, VigilantBSP supports rebuilding only some 
+- rather than all - maps, a feature also found in ZenNode and ZokumBSP
+nodebuilders. When this option is used, only those maps that were 
+specified are rebuilt, all other maps and lumps are copied from input to
+output with no changes.
+
+Examples:
+
+1) vigilantbsp mylvlset.wad -m:e1m1 
+
+rebuilds only E1M1 map in mylvlset.wads
+
+2) vigilantbsp D2lvlset.wad -m:map03+map05+map07 -o testD2.wad
+
+copies contents from D2lvlset.wad to testD2.wad but rebuilds
+maps MAP03, MAP05, MAP07, while others remain intact.
+
+NOTE: building a mapset in deterministic mode and then rebuilding
+only one map, also in deterministic mode, even with the same arguments,
+may not produce the same byte-for-byte results, although lump
+content is identical. This has to do with the order in which lumps
+are written (not the order in which they are listed, but the actual
+byte regions referenced by those lumps), this order being different
+for rebuilt levels from how lumps are listed when you open wad in editor
+such as SLADE3. This issue is minor, it is not going to affect how 
+the wad plays in ANY source port, because the content of each 
+respective lump is still identical in this case. 
+
+Section 10: Debug parameters
 ============================
 
 Some parameters are not shown in the list. They are used for 
@@ -1172,12 +1219,12 @@ trim_path = github.com/vigilantdoomer/vigilantbsp/
 so your entire path to the folder with VigilantBSP sources matching
 your executables will need to be in source_path instead.
 
-Section 10: Changelog
+Section 11: Changelog
 =====================
 
 See file named 'changelog.txt'. 
 
-Section 11: Operating system and platform availability
+Section 12: Operating system and platform availability
 ======================================================
 
 VigilantBSP is intended to be run on both Windows and GNU/Linux
@@ -1188,10 +1235,10 @@ on each one of those systems/platforms for each target.
 
 Other targets are not tested, and DOS support isn't even considered.
 
-Section 12: Other node builders
+Section 13: Other node builders
 ===============================
 
-16:01 Regular node builders
+13:01 Regular node builders
 -------------------------------
 
 * AJBSP *
@@ -1212,7 +1259,7 @@ http://www.mrousseau.org/programs/ZenNode/
 * ZokumBSP *
 https://doom2.net/zokum/zokumbsp
 
-16:02 GL Node builders
+13:02 GL Node builders
 ----------------------
 
 * AJBSP *
