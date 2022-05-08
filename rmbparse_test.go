@@ -156,5 +156,102 @@ func TestComplexRMB(t *testing.T) {
 	if len(ld.globalFrame.Commands) != 4 {
 		t.Fatalf("Wrong number of commands in global frame: expected 4 got %d\n", len(ld.globalFrame.Commands))
 	}
-	// TODO check what was written in what frame
+
+	if ld.globalFrame.Commands[0].Type != RMB_NOMAP {
+		t.Fatalf("Rogue command instead of NOMAP in global frame")
+	}
+
+	if ld.globalFrame.Commands[1].Type != RMB_PREPROCESS ||
+		ld.globalFrame.Commands[1].Data[0] != 1 {
+		t.Fatalf("Parsed PREPROCESS wrong in global frame")
+	}
+
+	if ld.globalFrame.Commands[2].Type != RMB_LENGTH ||
+		ld.globalFrame.Commands[2].Data[0] != 17 {
+		t.Fatalf("Parsed LENGTH wrong in global frame")
+	}
+
+	if ld.globalFrame.Commands[3].Type != RMB_DISTANCE ||
+		ld.globalFrame.Commands[3].Data[0] != 1000 {
+		t.Fatalf("Parsed DISTANCE wrong in global frame")
+	}
+
+	// Ok, the checks below could be more precise (also check the contents
+	// of the list and not just length) but it checks enough already
+
+	var frm *RMBFrame
+	// First make sure there is not a E1M1 frame... ah, wait, I made
+	// LookupRMBFrameForMap return global frame in this case. Stupid me.
+	frm = ld.LookupRMBFrameForMap(RMBFrameId{
+		Type:    RMB_FRAME_EXMY,
+		Episode: 1,
+		Map:     1,
+	})
+	if frm != nil && frm != ld.globalFrame {
+		t.Fatalf("Got frame for non-existent map E1M1")
+	}
+
+	// Check MAP01 frame
+	frm = ld.LookupRMBFrameForMap(RMBFrameId{
+		Type:    RMB_FRAME_MAPXY,
+		Episode: 0,
+		Map:     1,
+	})
+	if frm == nil {
+		t.Fatalf("Failed to produced frame for MAP01\n")
+	}
+	if frm.Parent == nil { // good luck ascertaining it is the same though
+		t.Fatalf("The MAP01 frame doesn't link to global frame.\n")
+	}
+	if len(frm.Commands) != 4 {
+		t.Fatalf("Wrong number of commands in MAP01 frame.\n")
+	}
+
+	if frm.Commands[0].Type != RMB_BLIND || !frm.Commands[0].Invert ||
+		!frm.Commands[0].Band || frm.Commands[0].Data[0] != 2 ||
+		frm.Commands[0].Data[1] != 3 || len(frm.Commands[0].List[0]) != 2 {
+		t.Fatalf("MAP01 frame command #0 is wrong")
+	}
+
+	if frm.Commands[1].Type != RMB_SAFE || !frm.Commands[1].Invert ||
+		!frm.Commands[1].Band || frm.Commands[1].Data[0] != 2 ||
+		frm.Commands[1].Data[1] != 4 || len(frm.Commands[1].List[0]) != 3 {
+		t.Fatalf("MAP01 frame command #1 is wrong")
+	}
+
+	if frm.Commands[2].Type != RMB_GROUP || frm.Commands[2].Data[0] != 10 ||
+		len(frm.Commands[2].List[0]) != 3 {
+		t.Fatalf("MAP01 frame command #2 is wrong")
+	}
+
+	if frm.Commands[3].Type != RMB_BLIND || frm.Commands[3].Data[0] != 0 ||
+		len(frm.Commands[3].List[0]) != 1 || frm.Commands[3].List[0][0] != 10 {
+		t.Fatalf("MAP01 frame command #3 is wrong")
+	}
+
+	// Check MAP95 frame
+	frm = ld.LookupRMBFrameForMap(RMBFrameId{
+		Type:    RMB_FRAME_MAPXY,
+		Episode: 0,
+		Map:     95,
+	})
+	if frm == nil {
+		t.Fatalf("Failed to produced frame for MAP95n")
+	}
+	if frm.Parent == nil { // good luck ascertaining it is the same though
+		t.Fatalf("The MAP95 frame doesn't link to global frame.\n")
+	}
+	if len(frm.Commands) != 2 {
+		t.Fatalf("Wrong number of commands in MAP95 frame.\n")
+	}
+	if frm.Commands[0].Type != RMB_BLIND || !frm.Commands[0].Band ||
+		frm.Commands[0].Data[0] != 2 || frm.Commands[0].Data[1] != 4 ||
+		len(frm.Commands[0].List[0]) != 3 {
+		t.Fatalf("MAP95 frame command #0 is wrong")
+	}
+
+	if frm.Commands[1].Type != RMB_SAFE || frm.Commands[1].Data[0] != 1 ||
+		len(frm.Commands[1].List[0]) != 1 || frm.Commands[1].List[0][0] != 74 {
+		t.Fatalf("MAP95 frame command #1 is wrong")
+	}
 }

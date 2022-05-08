@@ -92,6 +92,9 @@ type LoadedRMB struct {
 	globalFrame *RMBFrame
 }
 
+// Caution, may return a non-nil frame for non-existent map, if global frame
+// exists it will return that. This was done to simplify lump scheduler, it will
+// request frames for maps as it encounters them
 func (l *LoadedRMB) LookupRMBFrameForMap(frameId RMBFrameId) *RMBFrame {
 	if l == nil {
 		return nil
