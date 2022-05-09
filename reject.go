@@ -42,6 +42,16 @@ const VIS_RMB_VISIBLE uint8 = 0x04 // Special - ignores VIS_RMB_HIDDEN
 const VIS_RMB_HIDDEN uint8 = 0x08  // Special - force sector to be hidden
 const VIS_RMB_MASK uint8 = 0x0C    // Special - RMB option present
 
+// Group of consts that decides what happens if self-referencing pedantic
+// mode fails. This is important when RMB contains certain effects that might
+// require 100% robustness in identifying sector position in relation to other
+// sectors
+const (
+	PEDANTIC_FAIL_NOTMATTER = iota // no RMB effects are going to be ruined by this
+	PEDANTIC_FAIL_REPORT           // will be screwed, no encounters yet
+	PEDANTIC_FAIL_REPORTED         // screwed and encountered already
+)
+
 // RejectWork stands for reject work data
 type RejectWork struct {
 	numSectors  int
@@ -63,7 +73,7 @@ type RejectWork struct {
 	lineVisDone      []uint8 // bitarray, replaces lineVisTable
 	sectors          []RejSector
 	slyLinesInSector map[uint16]bool // line with equal sector references on both sides. May indicate self-referencing sector
-	maxDistance      uint32
+	maxDistance      uint64
 	testLines        []*SolidLine
 	polyPoints       []*IntVertex
 	reSectors        []*RejSector
@@ -77,8 +87,13 @@ type RejectWork struct {
 	p1, p2, p3, p4 IntVertex        // memory optimization: used in rejectLOS.go -> initializeWorld, another non-reentrant function
 	seenLines      [65536 / 8]uint8 // replaces checkLine bool array, here we use unsigned bytes to store them compactly
 	// rejectDFS.go junk
-	graphTable    GraphTable
-	linesToIgnore []bool
+	graphTable        GraphTable
+	linesToIgnore     []bool
+	rmbFrame          *RMBFrame
+	RejectSelfRefMode int      // may differ from config's one because of RMB processing needs
+	PedanticFailMode  int      // what to do if failed to be pedantic and reverted to "always visible" hack
+	distanceTable     []uint16 // "distance in sector units" flattened i*j array
+	maxLength         uint16   // initialized in CreateDistanceTable, may be overridden in ApplyDistanceTable
 }
 
 type RejectInput struct {
@@ -90,6 +105,7 @@ type RejectInput struct {
 	bgenerator    chan BgenRequest
 	rejectChan    chan<- []byte
 	linesToIgnore []bool
+	rmbFrame      *RMBFrame
 }
 
 type IntVertex struct {
@@ -158,7 +174,41 @@ func RejectGenerator(input RejectInput) {
 		numSectors:    len(input.sectors),
 		input:         &input,
 		linesToIgnore: input.linesToIgnore,
+		rmbFrame:      input.rmbFrame,
+		// RejectSelfRefMode DEFAULTS to config value, but may be overridden
+		RejectSelfRefMode: config.RejectSelfRefMode, // global: config
+		// another value that may be overriden later
+		PedanticFailMode: PEDANTIC_FAIL_NOTMATTER,
 	}
+
+	// Check if any RMB options make use of "distance in SECTOR COUNT" values
+	// This will require scrutiny in case of existing self-referencing sectors
+	needDistances := input.rmbFrame.NeedDistances()
+	if needDistances {
+		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'")
+		}
+	}
+
+	// Now check if there is DISTANCE option in RMB
+	maxDistOk, maxDist := input.rmbFrame.GetDISTANCEValue()
+	if maxDistOk {
+		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		// TODO routines need to actually recognise this value
+		r.maxDistance = maxDist
+		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+			// Yes, here too, because other options could either get us sectors
+			// that are not self-referencing, or bypass this option by making
+			// them always visible. Can't do this, must obey DISTANCE
+			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because DISTANCE is present in RMB options")
+		}
+	} else {
+		r.maxDistance = 0xFFFFFFFFFFFFFFFF
+	}
+
 	r.prepareReject()
 	if r.setupLines() {
 		input.bcontrol <- BconRequest{
@@ -169,7 +219,12 @@ func RejectGenerator(input RejectInput) {
 		r.createSectorInfo()
 		r.finishLineSetup()
 		r.eliminateTrivialCases()
-		r.maxDistance = 0xFFFFFFFF // TODO RMB support
+
+		if needDistances {
+			// FUCK. ZenNode really allocates a lot of memory for this
+			r.CreateDistanceTable()
+			r.ApplyDistanceLimits()
+		}
 
 		r.testLines = make([]*SolidLine, len(r.solidLines)+1)      // Vigilant: needs + 1 to avoid out-of-bounds write in rejectLOS.go!findInterveningLines
 		r.polyPoints = make([]*IntVertex, 2*(len(r.solidLines)+2)) // this is going to be reused many times to hold both lower and upper polygons (rejectLOS.go!InitializeWorld, etc)
@@ -250,8 +305,11 @@ func RejectGenerator(input RejectInput) {
 		}
 		Log.Printf("Reject builder: not a single two-sided linedef between two distinct sectors was found. You will have an empty, zero-filled REJECT.")
 	}
+
+	// Apply special RMB rules (now that all physical LOS calculations are done)
+	r.rmbFrame.ProcessOptionsRMB(r)
+
 	Log.Printf("Reject took %s\n", time.Since(start))
-	// TODO some RMB effects are to be applied (when implemented) after the pass above
 	input.rejectChan <- r.getResult()
 }
 
@@ -328,11 +386,11 @@ func (r *RejectWork) setupLines() bool {
 	numSolidLines := 0
 	numTransLines := 0
 	var cull *Culler
-	if config.RejectSelfRefMode != REJ_SELFREF_TRIVIAL { // reference to global: config
+	if r.RejectSelfRefMode != REJ_SELFREF_TRIVIAL {
 		cull = new(Culler)
 		cull.SetMode(CREATE_REJECT, r.input.sidedefs)
 		cull.SetAbstractLines(r.input.lines)
-		cull.EnablePerimeterSink(config.RejectSelfRefMode == REJ_SELFREF_PEDANTIC) // reference to global: config
+		cull.EnablePerimeterSink(r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC)
 	}
 	for i := uint16(0); i < numLines; i++ {
 		// Skip dummy lines from fast/remote scroller effect implementation
@@ -355,7 +413,7 @@ func (r *RejectWork) setupLines() bool {
 			fSector := r.input.sidedefs[fSide].Sector
 			bSector := r.input.sidedefs[bSide].Sector
 			if fSector == bSector || culled { // could be (or not be) a border of self-referencing (part of) sector
-				if config.RejectSelfRefMode == REJ_SELFREF_TRIVIAL { // reference to global: config
+				if r.RejectSelfRefMode == REJ_SELFREF_TRIVIAL {
 					// In trivial mode, we mark this straight away. Otherwise,
 					// we *might* mark this later OR (for pedantic mode) create
 					// a transient line by finding which sector surrounds the
@@ -390,7 +448,7 @@ func (r *RejectWork) setupLines() bool {
 		}
 	}
 	cull.Analyze()
-	if config.RejectSelfRefMode == REJ_SELFREF_PEDANTIC { // reference to global: config
+	if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
 		// In pedantic mode, we are generating transient line from all
 		// self-referencing effect lines in perimeter by finding the outer
 		// sector to which one of these lines' sides can be assigned to. This
@@ -441,8 +499,13 @@ func (r *RejectWork) setupLines() bool {
 		_, ok := r.slyLinesInSector[fSector]
 		r.slyLinesInSector[fSector] = true
 		if !ok { // marking sector for the first time
-			if config.RejectSelfRefMode == REJ_SELFREF_PEDANTIC { // reference to global: config
+			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
+				// FIXME and if we had an RMB option depending on length etc.
+				// we have screwed up, must tell the user!!!
 				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will have to resort to a hack to make it always visible.\n", fSector)
+				if r.PedanticFailMode == PEDANTIC_FAIL_REPORT {
+					r.PedanticFailMode = PEDANTIC_FAIL_REPORTED
+				}
 			} else {
 				Log.Verbose(1, "Reject: sector %d is self-referencing.\n",
 					fSector)
@@ -824,10 +887,14 @@ func (r *RejectWork) finishLineSetup() {
 		r.lineVisDone[i] = 0
 	}
 
+	if r.PedanticFailMode == PEDANTIC_FAIL_REPORTED {
+		Log.Error("RMB's accuracy is going to be decreased, because I failed to be pedantic about self-referencing sector effects.\n")
+	}
+
 }
 
 func (r *RejectWork) createSectorInfo() {
-	numSectors := len(r.input.sectors)
+	numSectors := r.numSectors
 
 	r.sectors = make([]RejSector, numSectors)
 	for i := 0; i < numSectors; i++ {
@@ -922,7 +989,7 @@ func (r *RejectWork) markPairVisible(srcLine, tgtLine *TransLine) {
 }
 
 func (r *RejectWork) rejectTableIJ(i, j int) *uint8 {
-	return &(r.rejectTable[i*len(r.input.sectors)+j])
+	return &(r.rejectTable[i*r.numSectors+j])
 }
 
 func (r *RejectWork) eliminateTrivialCases() {
@@ -932,7 +999,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 		// substituted for the real map of which sectors contain such lines)
 		r.slyLinesInSector = make(map[uint16]bool)
 	}
-	for i := 0; i < len(r.input.sectors); i++ {
+	for i := 0; i < r.numSectors; i++ {
 		// each sector can see itself
 		*(r.rejectTableIJ(i, i)) = VIS_VISIBLE
 
@@ -944,7 +1011,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 		if r.sectors[i].numLines == 0 {
 			sly, _ := r.slyLinesInSector[uint16(i)]
 			if !sly {
-				for j := 0; j < len(r.input.sectors); j++ {
+				for j := 0; j < r.numSectors; j++ {
 					r.markVisibility(i, j, VIS_HIDDEN)
 				}
 			} else {
@@ -952,7 +1019,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 				// sector exist, assume this could be self-referencing sector
 				// and keep it visible to ALL
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 1).\n", i)
-				for j := 0; j < len(r.input.sectors); j++ {
+				for j := 0; j < r.numSectors; j++ {
 					r.markVisibility(i, j, VIS_VISIBLE)
 				}
 			}
@@ -964,7 +1031,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 			sly, _ := r.slyLinesInSector[uint16(i)]
 			if sly {
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 2).\n", i)
-				for j := 0; j < len(r.input.sectors); j++ {
+				for j := 0; j < r.numSectors; j++ {
 					r.markVisibility(i, j, VIS_VISIBLE)
 				}
 			}
@@ -1007,7 +1074,11 @@ func (r *RejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {
 	if done || r.dontBother(srcLine, tgtLine) {
 		return false
 	}
-	// TODO if r.linesTooFarApart -- this is rmb logic which is not yet
+
+	if r.linesTooFarApart(srcLine, tgtLine) {
+		r.setLineVisibilityDone(srcLine, tgtLine)
+		return false
+	}
 
 	isVisible := false
 	r.src = *srcLine

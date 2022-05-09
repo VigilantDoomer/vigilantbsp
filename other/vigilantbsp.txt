@@ -206,6 +206,11 @@ configurations. However, most of computations requiring this algorithm
 are optional, or not expected to present a detrimental effect on overall
 results even in case of failure.
 
+Support for RMB options file (*.rej) also places demand to identify
+self-referencing secgtors and their surroundings rather robustly,
+to make sure RMB effects that depend on distance between sectors 
+to be applied correctly.
+
 03:03 Tackling vanilla and port limits
 --------------------------------------
 
@@ -589,7 +594,7 @@ checks when using such blockmap in game.
 This is what ZokumBSP calls "subset compression" but I would rather call
 it "subset elimination" instead, or you could call it lossy compression
 (think of how WAV compresses into MP3 rather than into FLAC - the process
-is not reversible)
+is not reversible and involves loss of precision)
 
 05:05 't' - Number of cores to use when trying multiple offsets
 ---------------------------------------------------------------
@@ -1049,6 +1054,11 @@ was tackled.
 08:03 's' - If 2-sided lines have same sector on both sides
 -----------------------------------------------------------
 
+NOTE this option is ignored when RMB file is used AND contains options
+that require LENGTH (distance in sector count) between any two sectors
+to be computed. The value of s=2 is then forced regardless of 
+user-specified value.
+
 The algorithm as invented by Zennode is built upon collecting
 solid (1-sided) lines and transient lines (2-sided lines with DIFFERENT
 sectors on either side). Lines that don't fit into either definitions
@@ -1122,7 +1132,15 @@ perimeter computation is done, hence more points of possible failure.
 If code can't reach certainty, it will fallback to marking sector
 always visible just in case.
 
-Future versions will improve the accuracy of these algos definitely.
+This last option is also forced when RMB options file is present
+and certain options are to be applied that specify distance in
+sector units or map units. Examples of such options are: LENGTH,
+BAND, BLIND, SAFE, REPORT and DISTANCE. If the fallback (marking
+sector always visible) occurs, it will escape distance analysis 
+though, an error message about reject being possibly (partially) 
+incorrect is printed in this case.
+
+There are plans to improve accuracy in these algos in future versions.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

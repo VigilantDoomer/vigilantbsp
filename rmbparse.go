@@ -24,7 +24,9 @@ import (
 )
 
 // RMB parser is responsible for parsing text that defines RMB options,
-// into internal representation used by VigilantBSP.
+// into internal representation used by VigilantBSP. If you wanted to look
+// at how they are applied instead, look into rejectRMB.go
+
 // I looked into Zennode (by Marc Rousseau) for inspiration and some code to
 // borrow, although my goals go beyond the level of support Zennode 1.2.1
 // provides. I also plan to rewrite parser *eventually* to provide even better
