@@ -37,6 +37,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -61,8 +62,14 @@ type FileControl struct {
 	tmp            bool
 	fin            *os.File
 	fout           *os.File
+	frmb           *os.File
 	inputFileName  string
 	outputFileName string
+	rmbFileName    string
+}
+
+func (fc *FileControl) UsingTmp() bool {
+	return fc.tmp
 }
 
 func (fc *FileControl) OpenInputFile(inputFileName string) (*os.File, error) {
@@ -87,6 +94,26 @@ func (fc *FileControl) OpenOutputFile(outputFileName string) (*os.File, string, 
 	}
 	fc.outputFileName = outputFileName
 	return fc.fout, outputFileName, err
+}
+
+func (fc *FileControl) OpenRMBOptionsFile(rmbFileName string) (*os.File, error) {
+	fc.rmbFileName = rmbFileName
+	var err error
+	fc.frmb, err = os.Open(rmbFileName)
+	if err != nil { // just in case it is not set so
+		fc.frmb = nil
+	}
+	return fc.frmb, err
+}
+
+func (fc *FileControl) CloseRMBOptionsFile() {
+	if fc.frmb == nil {
+		return
+	}
+	err := fc.frmb.Close()
+	if err != nil {
+		Log.Error("Couldn't close RMB file '%s': %s\n", fc.rmbFileName, err.Error())
+	}
 }
 
 func (fc *FileControl) Success() bool {
@@ -160,6 +187,11 @@ func (fc *FileControl) Shutdown() {
 		return
 	}
 
+	var errFrmb error
+	if fc.frmb != nil {
+		errFrmb = fc.frmb.Close()
+	}
+
 	var errFin error
 	if fc.fin != nil {
 		errFin = fc.fin.Close()
@@ -168,6 +200,10 @@ func (fc *FileControl) Shutdown() {
 	var errFout error
 	if fc.fout != nil {
 		errFout = fc.fout.Close()
+	}
+
+	if errFrmb != nil {
+		Log.Error("Couldn't close RMB file '%s': %s\n", fc.rmbFileName, errFrmb.Error())
 	}
 
 	if errFin != nil {
@@ -199,6 +235,7 @@ type ScheduledLump struct {
 	DirIndex    int
 	LevelFormat int
 	Level       []*ScheduledLump
+	RMBOptions  *RMBFrame
 }
 
 type LevelValidity struct {
@@ -434,8 +471,78 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 	return leOut
 }
 
+// Loads RMB if it exists. ALLOWED to panic (and thus bring down the program)
+// if:
+// 1. File exists but couldn't be read, because, for example, permissions
+// 2. Syntax error in RMB file encountered while parsing it
+// If file doesn't exists, no panic occurs, but a message is printed to
+// the output that file simply doesn't exist since this functions is only
+// supposed to be called if user requested that RMB may be used whenever
+// available. This may be useful indicator that there is a typo in RMB file name
+// that user wanted to use alongside the file
+func LoadAssociatedRMB(wadFullFileName string, fileControl *FileControl) *LoadedRMB {
+	fext := filepath.Ext(config.InputFileName)
+	cas := config.InputFileName
+	if len(fext) > 0 {
+		cas = cas[:(len(cas) - len(fext))]
+	}
+	rmbFullName := cas + ".rej"
+	RMBFile, err := fileControl.OpenRMBOptionsFile(rmbFullName)
+	retry := false
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			retry = true
+		}
+	}
+	if retry {
+		// Depending on OS and file system, names can be case-sensitive,
+		// so we try both
+		rmbFullName = cas + ".REJ"
+		RMBFile, err = fileControl.OpenRMBOptionsFile(rmbFullName)
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			Log.Printf("Ignoring RMB option because there is no file in the same directory as the input wad file, which has same name as wad file but an extension of '.rej' or '.REJ'\n")
+		} else {
+			Log.Panic("Found RMB options file '%s' but opening it yielded an error: %s\n", rmbFullName, err.Error())
+		}
+		return nil
+	}
+
+	shortName := filepath.Base(rmbFullName)
+	fileInfo, err := os.Stat(rmbFullName)
+	if err != nil {
+		Log.Panic("Couldn't obtain file size of '%s', aborting: %s\n", rmbFullName, err.Error())
+	}
+	rawSz := fileInfo.Size()
+	sz := int(rawSz)
+	if int64(sz) != rawSz {
+		Log.Panic("RMB file is too large: %d\n", rawSz)
+	}
+
+	buf := make([]byte, sz)
+	rsz, err := RMBFile.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		Log.Panic("Couldn't read RMB options file '%s': %s\n", rmbFullName, err.Error())
+	}
+
+	if rsz != sz {
+		Log.Panic("Incomplete read of RMB options file '%s': number bytes read %d is different from byte size %d\n",
+			rmbFullName, rsz, sz)
+	}
+	fileControl.CloseRMBOptionsFile()
+
+	b, res := LoadRMB(buf, shortName)
+	if !b {
+		Log.Panic("Fatal error: RMB options file contains syntax errors.\n")
+	}
+	return res
+}
+
 func main() {
 	timeStart := time.Now()
+
+	var RMB *LoadedRMB
 
 	// before config can be legitimately accessed, must call Configure()
 	Configure()
@@ -468,6 +575,13 @@ func main() {
 
 	mainFileControl := FileControl{}
 	defer mainFileControl.Shutdown()
+
+	// If RMB needs to be read, it is done first. This allows us to abort
+	// early if RMB options file exists but is malformed, or contains incorrect
+	// syntax.
+	if config.UseRMB {
+		RMB = LoadAssociatedRMB(config.InputFileName, &mainFileControl)
+	}
 
 	// Try open it
 	f, err := mainFileControl.OpenInputFile(config.InputFileName)
@@ -559,6 +673,7 @@ func main() {
 				}
 				validities = append(validities, *validity)
 				validity = &validities[len(validities)-1]
+				newAction.RMBOptions = RMB.LookupRMBFrameForMapMarker(bname)
 			} else {
 				// Just copy
 				Log.Verbose(1, "will not rebuild level %s\n", string(bname))
@@ -759,7 +874,10 @@ func main() {
 	suc := mainFileControl.Success()
 	if suc {
 		trFileName := outFileName
-		if mainFileControl.tmp { // TODO bad, the "tmp" field name is low capital, should not be accessing field directly! Implement getter
+		if mainFileControl.UsingTmp() {
+			// we were using tmp file, which means our real output file is same
+			// as input one. So make sure user sees that we written (overwritten)
+			// the desired file instead of some temp file
 			trFileName = config.InputFileName
 		}
 		Log.Printf("%s successfully written \n ", trFileName)

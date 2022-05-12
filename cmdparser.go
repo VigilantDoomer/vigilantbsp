@@ -179,7 +179,7 @@ func (c *ProgramConfig) FromCommandLine() bool {
 		case 'm':
 			{
 				// -m:mapxx parameter
-				if config.FilterLevel != nil {
+				if c.FilterLevel != nil {
 					Log.Error("You can't specify map list twice.\n")
 					return false
 				}
@@ -198,6 +198,20 @@ func (c *ProgramConfig) FromCommandLine() bool {
 	if outputModifier && !hasOutputFile {
 		Log.Error("Modifier '-o' was present without a file name following it - aborting.\n")
 		return false
+	}
+	if c.Reject == REJECT_ZEROFILLED && c.UseRMB {
+		// This might change in the future, NOPROCESS and the options that can
+		// be used alongside it could theoretically be useful. The problem is,
+		// the decision to process RMB just in case it applies is going to
+		// be counterintuitive and could only be understood with documentation
+		// Maybe a better way would be to implement new RMB command similar to
+		// NOPROCESS that allows to start from zero-filled REJECT
+		Log.Printf("Ignoring 'process RMB file' option because you requested to fill reject lump with zeros\n")
+		c.UseRMB = false
+	}
+	if c.Reject == REJECT_DONTTOUCH && c.UseRMB {
+		Log.Printf("Ignoring 'process RMB file' option because you requested not to rebuild reject lump\n")
+		c.UseRMB = false
 	}
 	return true
 }
@@ -570,6 +584,12 @@ func (c *ProgramConfig) parseRejectParams(p []byte) {
 			{
 				t, rest := isEnabled(p[1:])
 				c.UseGraphsForLOS = t
+				p = rest
+			}
+		case 'm':
+			{
+				t, rest := isEnabled(p[1:])
+				c.UseRMB = t
 				p = rest
 			}
 		case 's':

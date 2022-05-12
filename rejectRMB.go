@@ -66,9 +66,12 @@ func (fr *RMBFrame) GetLENGTHValue() (bool, uint16) {
 		if fr.Commands[i].Type == RMB_LENGTH {
 			chk := fr.Commands[i].Data[0]
 			if chk > 65535 {
-				// FIXME value of 65535 already means that DistanceLimits will
-				// effectively not be applied
-				Log.Error("RMB: LENGTH greater than 65535 is truncated to 65535 (maximum allowed sector count in limit-removing ports)\n")
+				// Value of 65535 already means that DistanceLimits will
+				// effectively not be applied, and I can't go beyond it without
+				// increasing the memory size for distanceTable etc. + very hard
+				// to reach even this number of sectors, much less arrange
+				// them so that you could produce such length at the same time
+				Log.Error("RMB: LENGTH greater than 65535 is truncated to 65535.\n")
 				chk = 65535
 			} else if chk < 0 {
 				Log.Error("RMB: Negative LENGTH truncated to 0\n")
@@ -91,7 +94,7 @@ func (fr *RMBFrame) GetDISTANCEValue() (bool, uint64) {
 		return false, 0
 	}
 	for i := len(fr.Commands) - 1; i >= 0; i-- {
-		if fr.Commands[i].Type == RMB_LENGTH {
+		if fr.Commands[i].Type == RMB_DISTANCE {
 			v := uint64(fr.Commands[i].Data[0])
 			// From Zennode: store the square of the distance (avoid floating
 			// point later on)
@@ -364,40 +367,97 @@ func (fr *RMBFrame) processEXCLUDEs(r *RejectWork) {
 	}
 }
 
-// TODO find a way to reduce its size / use compression, cause this can
-// allocate GBs of memory
+// CreateDistanceTable() evaluates distance (in the number of sectors) between
+// ALL pairs of sectors
+// Rolled out my own implementation (rather than taking Zennode's), should use
+// less memory, be easier to understand and parallelize.
 func (r *RejectWork) CreateDistanceTable() {
 	Log.Verbose(1, "Reject: calculating sector distances for RMB effects (this may allocate a lot of memory)\n")
 
-	length := uint16(0)
-	// This can be very big & overflow on 32-bit system and in general
-	// require more memory than avaiable even on 64-bit systems
+	// Given that it is hard to reach 65536 count of sectors (sectors need
+	// several linedefs to be defined, which are also bound by 65536 limit),
+	// memory consumption, in practice, will be several hundreds of megabytes
+	// at most. Gigabytes are unlikely.
+	// This means we are not expecting an overflow condition to be reached on
+	// 32-bit systems when computing table size
 	r.distanceTable = make([]uint16, r.numSectors*r.numSectors)
 	for i, _ := range r.distanceTable {
 		r.distanceTable[i] = 65535 // maximum possible value for uint16
 	}
 
-	// TODO implement this. Hard to understand algo in Zennode
-	// FUCK There is a second HUGE array there!
-	// Go fuck yourself difficulty
+	length := uint16(0)
+
+	// Problem definition:
+	// All-pairs shortest paths (path lengths) for unweighted undirected
+	// graph (vertexes = sectors, edges = neighborship relation)
+	// Straightforward solution: BFS (breadth first search) per each starting
+	// point.
+	numSectors := r.numSectors
+	queue := CreateRingU16(uint32(numSectors))
+	for i := 0; i < numSectors; i++ {
+		itLength := r.BFS(r.distanceTable[r.numSectors*i:r.numSectors*(i+1)],
+			uint16(i), queue)
+		if length < itLength {
+			length = itLength
+		}
+		// Resetting queue for reuse - probably not needed, since Queue should
+		// be empty always by the end of BFS
+		queue.Reset()
+	}
 
 	// So we set length to the maximum value that was encountered
 	r.maxLength = length
 }
 
+// Fills a row of distanceTable with lengths of paths between source sector
+// (which is the number of row) and all other sectors (columns). Lengths are
+// computed using BFS, hence the name of function
+func (r *RejectWork) BFS(distanceRow []uint16, source uint16,
+	queue *RingU16) uint16 {
+	visited := make([]bool, r.numSectors)
+	visited[source] = true
+	distanceRow[source] = 0
+	length := uint16(0)
+	queue.Enqueue(source)
+	for !queue.Empty() {
+		item := queue.Dequeue()
+		for _, neighbor := range r.sectors[item].neighbors {
+			if neighbor == nil {
+				break
+			}
+			nIndex := uint16(neighbor.index)
+			if !visited[nIndex] {
+				visited[nIndex] = true
+				queue.Enqueue(nIndex)
+				newDist := distanceRow[item] + 1
+				distanceRow[nIndex] = newDist
+				if length < newDist {
+					length = newDist
+				}
+			}
+		}
+	}
+	return length
+}
+
 func (r *RejectWork) ApplyDistanceLimits() {
 	ok, maxLength := r.rmbFrame.GetLENGTHValue()
 	if ok {
-		// Is maximum encountered length lower than this value?
-		// Cause if not, what's the point of applying the specified one
+		// If user-supplied length is less than maximum computed value (and so
+		// presents stronger requirement), then we apply user-supplied length.
+		// Otherwise we will apply maximum computed value to weed out just those
+		// sectors that are unreachable from certain others
 		if maxLength < r.maxLength {
 			r.maxLength = maxLength
 		}
 	}
 
 	if r.maxLength == 65535 { // distanceTable cell can never exceed this value
+		Log.Verbose(2, "Effective maxlength ended up being 65535 and therefore is redundant.\n")
 		return
 	}
+
+	Log.Verbose(2, "Maxlength in effect is %d\n", r.maxLength)
 
 	for i := 0; i < r.numSectors; i++ {
 		for j := i + 1; j < r.numSectors; j++ {
@@ -443,13 +503,14 @@ func (r *RejectWork) pointTooFar(p *IntVertex, line *TransLine) bool {
 	}
 
 	d := (int64(line.DX)*int64(p.Y-p1.Y) - int64(line.DY)*int64(p.X-p1.X)) / int64(line.H)
-	// TODO signed to unsigned cast, need verify there is no overflow
+	if d < 0 {
+		return false // guaranteed d < r.maxDistance, since maxDistance is non-negative
+	}
 	return !(uint64(d) < r.maxDistance)
 }
 
 func (r *RejectWork) mapDistance(p1, p2 *IntVertex) uint64 {
 	dx := int64(p1.X - p2.X)
 	dy := int64(p1.Y - p2.Y)
-	// TODO signed to unsigned cast, need verify there is no overflow
-	return uint64(dx*dx + dy*dy)
+	return uint64(dx*dx) + uint64(dy*dy)
 }

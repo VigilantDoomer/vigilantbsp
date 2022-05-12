@@ -80,6 +80,7 @@ const VERSION = "0.78a"
 		1 Mark visible only when self-referencing sector effects are detected
 		2 Be pedantic about self-referencing sector visibility
 		s+ will temporarily be interpreted as s=1
+	m Process RMB option file (.rej)
 
 -v Add verbosity to text output. Use multiple times for increased verbosity.
 
@@ -206,6 +207,7 @@ type ProgramConfig struct {
 	// are to be copied along, not rebuilt. If list is nil or has zero size,
 	// there is no filter: all levels have to be rebuild.
 	FilterLevel [][]byte
+	UseRMB      bool
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -316,6 +318,7 @@ func init() {
 		MinorCmpUser:           MINOR_CMP_BALANCE,
 		DepthArtifacts:         true,
 		FilterLevel:            nil,
+		UseRMB:                 false,
 	})
 }
 
@@ -409,6 +412,7 @@ func PrintHelp() {
 	Log.Printf("		0 Mark such sectors as always visible (default)\n")
 	Log.Printf("		1 Mark visible only when self-referencing sector effects are detected\n")
 	Log.Printf("		2 Be pedantic about self-referencing sector visibility\n")
+	Log.Printf("	m Process RMB option file (.rej)\n")
 	Log.Printf("\n")
 	Log.Printf("-m (example -m:map01+map03) Rebuild only specific maps\n")
 	Log.Printf("\n")

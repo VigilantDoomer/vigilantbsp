@@ -21,6 +21,10 @@ package main
 // TODO The goroutine which provides the compiled(?) program will also be likely
 // here
 
+import (
+	"strconv"
+)
+
 const ( // RMB option/command types
 	RMB_UNKNOWN = iota
 	RMB_EXMY_MAP
@@ -104,4 +108,40 @@ func (l *LoadedRMB) LookupRMBFrameForMap(frameId RMBFrameId) *RMBFrame {
 		return l.globalFrame
 	}
 	return frame
+}
+
+// Wrapper over LookupRMBFrameForMap, this takes a name of lump that marks
+// the start of level lumps. There should be no bytes beyond the null byte in
+// the input marker name (ByteSliceBeforeTerm subroutine in main program takes
+// care of this)
+func (l *LoadedRMB) LookupRMBFrameForMapMarker(marker []byte) *RMBFrame {
+	if l == nil {
+		return nil
+	}
+	var frameId RMBFrameId
+	if marker[0] == 'E' {
+		val := RMB_MAP_ExMx.FindSubmatch(marker)
+		if val == nil {
+			Log.Panic("Expected a ExMy map, got %s\n", string(marker))
+		}
+		episode, _ := strconv.Atoi(string(val[1]))
+		nmap, _ := strconv.Atoi(string(val[2]))
+
+		frameId = RMBFrameId{
+			Type:    RMB_FRAME_EXMY,
+			Episode: episode,
+			Map:     nmap,
+		}
+	} else if marker[0] == 'M' {
+		if !RMB_MAP_SEQUEL.Match(marker) {
+			Log.Panic("Expected a MAPXY map, got %s\n", string(marker))
+		}
+		nmap, _ := strconv.Atoi(string(marker)[3:])
+		frameId = RMBFrameId{
+			Type:    RMB_FRAME_MAPXY,
+			Episode: 0,
+			Map:     nmap,
+		}
+	}
+	return l.LookupRMBFrameForMap(frameId)
 }

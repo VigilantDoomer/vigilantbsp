@@ -192,11 +192,11 @@ func RejectGenerator(input RejectInput) {
 		}
 	}
 
-	// Now check if there is DISTANCE option in RMB
+	// Now check if there is DISTANCE option in RMB. It specifies distance
+	// in map units, not sectors
 	maxDistOk, maxDist := input.rmbFrame.GetDISTANCEValue()
 	if maxDistOk {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		// TODO routines need to actually recognise this value
 		r.maxDistance = maxDist
 		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
 			// Yes, here too, because other options could either get us sectors
@@ -221,7 +221,7 @@ func RejectGenerator(input RejectInput) {
 		r.eliminateTrivialCases()
 
 		if needDistances {
-			// FUCK. ZenNode really allocates a lot of memory for this
+			// Another source of possible major memory allocation
 			r.CreateDistanceTable()
 			r.ApplyDistanceLimits()
 		}

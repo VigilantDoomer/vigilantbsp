@@ -281,6 +281,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				bcontrol:      bcontrol,
 				bgenerator:    bgenerator,
 				linesToIgnore: linesToIgnore,
+				rmbFrame:      action.RMBOptions,
 			})
 		}
 
