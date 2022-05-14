@@ -461,7 +461,7 @@ func (r *RejectWork) ApplyDistanceLimits() {
 
 	for i := 0; i < r.numSectors; i++ {
 		for j := i + 1; j < r.numSectors; j++ {
-			if *(r.distanceTableIJ(i, j)) > maxLength {
+			if *(r.distanceTableIJ(i, j)) > r.maxLength {
 				// Yes, markVisibility, Anything hacked to be visible in
 				// eliminateTrivialCases is going to stay that way
 				r.markVisibility(i, j, VIS_HIDDEN)
