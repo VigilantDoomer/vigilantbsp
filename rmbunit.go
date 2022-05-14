@@ -18,8 +18,6 @@ package main
 
 // This file defines all structures shared by those parts of the code that
 // need to deal with RMB: reject code and parser code.
-// TODO The goroutine which provides the compiled(?) program will also be likely
-// here
 
 import (
 	"strconv"
