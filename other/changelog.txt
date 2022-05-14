@@ -1,5 +1,8 @@
 Changelog for VigilantBSP
 
+v0.78a (working number)
+- Partial RMB support
+
 v0.72a
 - Fixed bug: some sectors wrongly considered compatible with each other and sector 0 in "advanced visplane reduction" algorithm 
 - Fixed bug: unlike what is written in documentation, specifying positive diagonal penalty didn't force enable it to all levels, now it does

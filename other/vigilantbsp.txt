@@ -384,6 +384,10 @@ chosen lindef is the one that is nearest the linedef with the 1048 type. The
 distance is the absolute distance from the starting vertex. The scroll speed
 is affected only by two last digits of the tag, not by the entire tag value.
 
+TODO Add section about sector tags as well (>=900 for "make subsector out of
+several sectors" for transparent door effect). Originates from BSP, supported
+in AJ-BSP as well.
+
 Section 05: Blockmap build options
 ============================
 
@@ -1054,10 +1058,10 @@ was tackled.
 08:03 's' - If 2-sided lines have same sector on both sides
 -----------------------------------------------------------
 
-NOTE this option is ignored when RMB file is used AND contains options
-that require LENGTH (distance in sector count) between any two sectors
-to be computed. The value of s=2 is then forced regardless of 
-user-specified value.
+NOTE this option may be ignored when RMB file is used, depending
+on options contained in it. See the end of this option description
+for more information when that happens and what does VigilantBSP do
+then.
 
 The algorithm as invented by Zennode is built upon collecting
 solid (1-sided) lines and transient lines (2-sided lines with DIFFERENT
@@ -1141,6 +1145,60 @@ though, an error message about reject being possibly (partially)
 incorrect is printed in this case.
 
 There are plans to improve accuracy in these algos in future versions.
+
+08:04 'm' - Load and apply RMB options file (*.rej)
+---------------------------------------------------
+
+There once existed a program called Reject Map Builder,
+or RMB, that could apply special effects to reject file,
+making monsters not see/attack player when they are/player
+is in specific sector. An options file with extension *.rej
+could have been provided to it, containing commands that
+dictated what effects need to be applied on top of normally
+computed reject, in plain text.
+
+Since RMB program was written for DOS, has stopped updating
+and its source code is unavailable, some nodebuilders 
+(Zennode, etc.) opted to provide support for *.rej options
+file.
+
+This option (-rm) will make VigilantBSP find *.rej file in 
+the same directory as INPUT wad file, with same filename as 
+INPUT file (sans the extension) and extension of *.rej
+(tried first) or *.REJ (tried last). On case-sensitive 
+systems, the case of INPUT wad filename and *.rej file
+to find MUST match, i.e. on GNU/Linux and ext4
+filesystem this:
+
+vigilantbsp -rm someWad.wad
+
+will look for someWad.rej or someWad.REJ but not for
+somewad.rej, SOMEWAD.REJ or someWad.rEj . If both
+someWad.rej and someWad.REJ happen to exist,
+someWad.rej will be loaded.
+
+The support is currently work in progress and as such
+should be considered experimental. Only some options
+are implemented as of yet, notably:
+BAND
+BLIND
+DISTANCE
+EXCLUDE
+INCLUDE
+INVERT
+LENGTH
+SAFE
+
+map markers and comments. All other options are ignored.
+
+TODO I want to support more RMB options before official 
+build.
+
+NOTE options that rely on sector distances in 
+sector count units (example: BAND, BLIND, LENGTH, SAFE)
+or map units (DISTANCE) will force -rs=2 (pedantic
+determination of self-referencing sectors visibility)
+as well.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

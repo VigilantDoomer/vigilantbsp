@@ -303,7 +303,7 @@ func (r *RejectWork) applySafe(sector SectorRMB, i int) {
 		}
 		if sector.Safe&2 == 2 {
 			// Handle inverse SAFE
-			// Also handles second half of inverse BAND BLIND
+			// Also handles second half of inverse BAND SAFE
 			if int(*r.distanceTableIJ(i, j)) < sector.SafeHi {
 				*r.rejectTableIJ(j, i) |= VIS_RMB_HIDDEN
 			}
