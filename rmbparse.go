@@ -97,7 +97,7 @@ var RMB_PARSE_TABLE = []ParseDef{
 	{[]byte("PERFECT"), nil, RMB_PERFECT, ParseGeneric, true},
 	{[]byte("PREPROCESS"), []byte("N"), RMB_PREPROCESS, ParseGeneric, false},
 	{[]byte("PROCESS"), []byte("L"), RMB_PROCESS, ParseGeneric, false},
-	{[]byte("REPORT"), []byte("N"), RMB_REPORT, ParseGeneric, false},
+	{[]byte("REPORT"), []byte("N"), RMB_REPORT, ParseGeneric, true},
 	{[]byte("RIGHT"), []byte("N"), RMB_RIGHT, ParseGeneric, false},
 	{[]byte("SAFE"), []byte("NL"), RMB_SAFE, ParseGeneric, true},
 	{[]byte("TRACE"), []byte("L"), RMB_TRACE, ParseGeneric, false},
