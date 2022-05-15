@@ -219,9 +219,6 @@ func RejectGenerator(input RejectInput) {
 
 	r.prepareReject()
 	if r.setupLines() {
-		// FIXME solid blockmap now needs to include additional solids (!)
-		// produced by LINE effect (RMB). If there are any, can't use the shared
-		// with nodebuilder thingy!
 		r.ScheduleSolidBlockmap()
 		// Blockmap will be needed a little bit later, do other tasks meanwhile
 		r.createSectorInfo()
@@ -305,12 +302,18 @@ func RejectGenerator(input RejectInput) {
 	input.rejectChan <- r.getResult()
 }
 
-// May block
+// This may do one of the following two things:
+// a) Request external generator to create blockmap containing only 1-sided
+// lines
+// b) or, if certain RMB special effects are present, solid-only blockmap
+// is created via other means. This happens when RMB effects dictate some
+// linedefs that are not 1-sided to be treated like they were solid, or
+// otherwise included in "can block view" computations
 func (r *RejectWork) ScheduleSolidBlockmap() {
 	if r.specialSolids == nil {
 		// This should guarantee the specialSolids array is populated with
 		// relevant data - as setupLines ought to have done
-		Log.Panic("setupLines must be called before ScheduleSolidBlockmap()")
+		Log.Panic("Programmer error: setupLines must be called before ScheduleSolidBlockmap()")
 	}
 	if len(r.specialSolids) > 0 {
 		r.createSolidBlockmapNow()
@@ -318,6 +321,8 @@ func (r *RejectWork) ScheduleSolidBlockmap() {
 		// we did all the work ourselves)
 		r.NoNeedSolidBlockmap()
 	} else {
+		// No artificial solids generated, can use 1-sided lines blockmap that
+		// other parts of VigilantBSP can also share
 		r.input.bcontrol <- BconRequest{
 			Sender:  SOLIDBLOCKS_REJECT,
 			Message: BCON_NEED_SOLID_BLOCKMAP,
@@ -327,7 +332,7 @@ func (r *RejectWork) ScheduleSolidBlockmap() {
 
 // May block
 func (r *RejectWork) RetrieveSolidBlockmap() {
-	if len(r.specialSolids) > 0 {
+	if len(r.specialSolids) > 0 { // see ScheduleSolidBlockmap
 		return
 	}
 	bmResponse := make(chan *Blockmap)
@@ -340,7 +345,7 @@ func (r *RejectWork) RetrieveSolidBlockmap() {
 
 // May block
 func (r *RejectWork) DoneWithSolidBlockmap() {
-	if len(r.specialSolids) > 0 {
+	if len(r.specialSolids) > 0 { // see ScheduleSolidBlockmap
 		return
 	}
 	r.input.bcontrol <- BconRequest{
@@ -950,30 +955,11 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 }
 
 // Refactored away from setupLines so that it can be called after
-// createSectorInfo(). Reason: createSectorInfo() allocates map of sectors
-// (for tracking sectors made neighbors already), which, just like lineVisTable,
-// can be big. By placing that call before lineVisTable is allocated, the map
-// can be deallocated before lineVisTable would be allocated, rather than
-// coexisting with it at the same time
+// createSectorInfo(), so that garbage collection can delete the huge map
+// allocated in createSectorInfo() (and no longer used after it returns)
+// to fit the lineVisDone array we'll be creating here
 func (r *RejectWork) finishLineSetup() {
 	numTransLines := len(r.transLines)
-	// From zokumbsp: lineVisSize needs to be computed using 64-bit math
-	// The final size always fits signed 32-bit integer, however.
-	// + After studying zennode's code closely, I realized that the actual
-	// visibility information stored in lineVisTable doesn't matter (not even
-	// for RMB implementation). All that matters is whether it was computed,
-	// or not, which means that in reality what is needed is a bit array where
-	// each bit corresponds to whether a certain pair is visible. This role is
-	// now covered by lineVisDone
-
-	/*
-		lineVisSize := int(uint64(numTransLines-1) * uint64(numTransLines) / 2)
-		r.lineVisTable = make([]uint8, lineVisSize)
-		for i, _ := range r.lineVisTable {
-			r.lineVisTable[i] = 0
-		}
-	*/
-
 	// How is value derived:
 	// 1. We need to store a triangle, rather than whole matrix, and without
 	// the dominant diagonal, of numTransLines*numTransLines matrix
@@ -985,6 +971,10 @@ func (r *RejectWork) finishLineSetup() {
 	// (numTransLines-1)*numTransLines/2 in our case
 	// 4. Each cell is a bit rather than a byte, number of bits is then
 	// (numCells + 7) / 8 where / is integer division
+	//
+	// uint64 is required before the final division to avoid overflow, but the
+	// final result can be represented using type that is greater or equal to
+	// int32
 	lineVisSize := int((uint64(numTransLines-1)*uint64(numTransLines)/2 + 7) / 8)
 	r.lineVisDone = make([]uint8, lineVisSize)
 	for i, _ := range r.lineVisDone {
@@ -1268,36 +1258,6 @@ func (r *RejectWork) setLineVisibilityDone(srcLine, tgtLine *TransLine) {
 
 	r.lineVisDone[offset>>3] = data | bit
 }
-
-/*
-func (r *RejectWork) getLineVisibility(srcLine, tgtLine *TransLine) uint8 {
-	if srcLine == tgtLine {
-		return VIS_VISIBLE
-	}
-
-	offset := getVisTableOffsetPrefab(srcLine, tgtLine, len(r.transLines))
-	data := r.lineVisTable[offset>>2]
-
-	return uint8(0x03 & (data >> ((offset % 4) << 1)))
-}
-
-func (r *RejectWork) setLineVisibility(srcLine, tgtLine *TransLine, vis uint8) {
-
-	if srcLine == tgtLine {
-		return
-	}
-
-	offset := getVisTableOffsetPrefab(srcLine, tgtLine, len(r.transLines))
-	data := r.lineVisTable[offset>>2]
-
-	// golang uses unary ^ (instead of unary ~ common in C-like language syntax
-	// family) to signify bitwise NOT
-	data &= ^(0x03 << ((offset % 4) << 1))
-	data |= vis << ((offset % 4) << 1)
-
-	r.lineVisTable[offset>>2] = data
-}
-*/
 
 func (r *RejectWork) dontBother(srcLine, tgtLine *TransLine) bool {
 

@@ -338,11 +338,6 @@ func ParseGeneric(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 		}
 	}
 
-	if !entry.Impl {
-		context.LogWarning("%s effect acknowledged, but will not be applied because not implemented\n",
-			string(entry.Name))
-	}
-
 	return true
 }
 
