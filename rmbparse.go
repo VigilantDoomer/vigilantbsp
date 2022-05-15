@@ -88,7 +88,7 @@ var RMB_PARSE_TABLE = []ParseDef{
 	{[]byte("INVERT"), nil, RMB_INVERT, ParseINVERT, true},
 	{[]byte("LEFT"), []byte("N"), RMB_LEFT, ParseGeneric, false},
 	{[]byte("LENGTH"), []byte("N"), RMB_LENGTH, ParseGeneric, true},
-	{[]byte("LINE"), []byte("N"), RMB_LINE, ParseGeneric, false},
+	{[]byte("LINE"), []byte("N"), RMB_LINE, ParseGeneric, true}, // TODO I would consider promoting argument to a list as part of extension, though
 	{[]byte("MAP**") /*string unused*/, nil, RMB_MAPXY_MAP, ParseMap, true},
 	{[]byte("NODOOR"), []byte("L"), RMB_NODOOR, ParseGeneric, false},
 	{[]byte("NOMAP"), nil, RMB_NOMAP, ParseGeneric, false},

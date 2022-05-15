@@ -39,6 +39,13 @@ type SectorRMB struct {
 	Blind, BlindLo, BlindHi int
 }
 
+const (
+	LINE_EFFECT_NONE = iota // cause this will get 0, and I need SOLID to be distinct from 0
+	LINE_EFFECT_SOLID
+	LINE_EFFECT_LEFT
+	LINE_EFFECT_RIGHT
+)
+
 // Check if RMB contains command that need table of distances where distances
 // are measured in NUMBER OF SECTORS (think LENGTH rmb option, not DISTANCE)
 // Fully analogues to Zennode's function of the same name in ZenReject.cpp
@@ -591,4 +598,61 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 	// other people) that want to parse the file for their own needs
 	wri.WriteString(fmt.Sprintf("# %s %s\n", PROG_CAPIT_NAME, VERSION))
 	return wri
+}
+
+// Returns whether RMB effect called LINE was applied to line #lineIdx
+// If it is, such lines are treated as if they were solid instead of transient,
+// also it can prevent the sector to be recognised as self-referencing for reject
+// computation purposes, provided all lines suspected to produce said effect by
+// the chosen method are eliminated via LINE
+func (r *RejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
+	if r.lineEffects == nil {
+		return false
+	}
+	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
+}
+
+func (r *RejectWork) RMBLoadLineEffects() {
+	r.lineEffects = make(map[uint16]uint8)
+	did := r.loadLineEffectsForFrame(r.rmbFrame)
+	if !did {
+		r.lineEffects = nil
+	}
+}
+
+func (r *RejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
+	if rmbFrame == nil {
+		return false
+	}
+	ret := r.loadLineEffectsForFrame(rmbFrame.Parent)
+	// If multiple commands specified for the same line, last option will take
+	// effect. RMB may do things differently, I dunno, duplicates aren't
+	// supposed to happen anyway
+	for _, cmd := range rmbFrame.Commands {
+		switch cmd.Type {
+		case RMB_LEFT:
+			{
+				// FIXME can overwrite LINE_EFFECT_SOLID, but the effect itself
+				// is not implemented. Also reported as not implemented by
+				// rmb parser
+				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_LEFT
+				ret = true
+			}
+		case RMB_RIGHT:
+			{
+				// FIXME can overwrite LINE_EFFECT_SOLID, but the effect itself
+				// is not implemented. Also reported as not implemented by
+				// rmb parser
+				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_RIGHT
+				ret = true
+			}
+		case RMB_LINE:
+			{
+				// This should be implemented already
+				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_SOLID
+				ret = true
+			}
+		}
+	}
+	return ret
 }

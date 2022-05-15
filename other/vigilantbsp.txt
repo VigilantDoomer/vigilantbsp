@@ -1187,6 +1187,7 @@ EXCLUDE
 INCLUDE
 INVERT
 LENGTH
+LINE
 REPORT
 SAFE
 
@@ -1208,6 +1209,22 @@ is processed and the list of sector pairs relevant
 for each map is preceeded by a comment line specifying
 which map it is, sector pairs are sorted by sector
 numbers (I am not aware how RMB sorts them), etc.
+
+TODO LINE option was not thoroughly tested, seems to
+work, but more scrutiny is desirable to happen before
+release.
+
+NOTE In VigilantBSP, LINE can additionaly be used to designate
+a 2-sided line having the SAME sector on both sides to not be
+considered creating a self-referencing sector effect. This is
+a VigilantBSP-specific extension that is not part of original
+RMB, and can be used as a workaround when -rs=2 option is
+causing bugs, or when, for whatever reason, it is desired to
+make monsters not see outside and inside the self-referencing
+sector. For all other purposes, LINE effect on 2-sided line
+with same sector on both sides is ignored - you can't make
+part of sector not see some other part of the same sector via
+REJECT lump.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

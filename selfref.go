@@ -457,7 +457,10 @@ func (c *Culler) analyzeForReject() {
 			if handled {
 				continue
 			} else {
-				Log.Verbose(1, "Sector analysis failed for sector #%d. Will assume sector could be self-referencing and mark it as always visible.\n", sector)
+				// RMB effect such as line may still prevent this sector
+				// from being marked as always visible, thus I simplified this
+				// message
+				Log.Verbose(1, "Reject: failed to compute sector perimeter for sector #%d.\n", sector)
 				mustUncull = true
 			}
 		}

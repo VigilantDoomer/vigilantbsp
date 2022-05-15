@@ -96,6 +96,7 @@ type RejectWork struct {
 	maxLength         uint16   // initialized in CreateDistanceTable, may be overridden in ApplyDistanceTable
 	fileControl       *FileControl
 	mapName           string
+	lineEffects       map[uint16]uint8
 }
 
 type RejectInput struct {
@@ -379,6 +380,7 @@ func (r *RejectWork) getResult() []byte {
 
 func (r *RejectWork) setupLines() bool {
 	numLines := r.input.lines.Len()
+	r.RMBLoadLineEffects()
 	// REMARK lineProcessed array - was never used in zennode. Was just created,
 	// then/ deleted, never written to or read from.
 	r.solidLines = make([]SolidLine, numLines)
@@ -410,7 +412,8 @@ func (r *RejectWork) setupLines() bool {
 			continue
 		}
 		culled := cull.AddLine(i)
-		if (uint16(r.input.lines.GetFlags(i)) & LF_TWOSIDED) == LF_TWOSIDED {
+		twoSided := uint16(r.input.lines.GetFlags(i))&LF_TWOSIDED == LF_TWOSIDED
+		if twoSided && !r.HasRMBEffectLINE(i) {
 			fSide := r.input.lines.GetSidedefIndex(i, true)
 			bSide := r.input.lines.GetSidedefIndex(i, false)
 			if fSide == SIDEDEF_NONE || bSide == SIDEDEF_NONE {
@@ -443,6 +446,24 @@ func (r *RejectWork) setupLines() bool {
 			}
 			numTransLines++
 		} else {
+			// This can be either 1-sided line, OR a 2-sided line that has
+			// LINE specified for it as an RMB option
+			if twoSided {
+				fSide := r.input.lines.GetSidedefIndex(i, true)
+				bSide := r.input.lines.GetSidedefIndex(i, false)
+				if fSide != SIDEDEF_NONE || bSide != SIDEDEF_NONE {
+					fSector := r.input.sidedefs[fSide].Sector
+					bSector := r.input.sidedefs[bSide].Sector
+					if fSector == bSector {
+						// Don't create solid lines from inner lines
+						// The user meant to say this line is not used for
+						// self-referencing sector effect. If he lied, that's
+						// his problem, unless it proves later this can
+						// be used to crash VigilantBSP somehow
+						continue
+					}
+				}
+			}
 			r.solidLines[numSolidLines] = SolidLine{
 				index:  i,
 				start:  &vertices[int(i)<<1],
@@ -500,6 +521,9 @@ func (r *RejectWork) setupLines() bool {
 	// be made always visible because of that.
 	for cull.SpewBack() {
 		i := cull.GetLine()
+		if r.HasRMBEffectLINE(i) { // doesn't make sector self-referencing
+			continue
+		}
 		fSide := r.input.lines.GetSidedefIndex(i, true)
 		fSector := r.input.sidedefs[fSide].Sector
 		_, ok := r.slyLinesInSector[fSector]
@@ -558,6 +582,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 	sectorFound := false
 	whichSector := uint16(0)
 	tracedSelf := false
+	lineEffect := false
 	for _, i := range perimeter {
 		// First, we make sure this line is 2-sided and reference same sector
 		// on both sides
@@ -567,6 +592,10 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			continue
 		}
 		if r.input.sidedefs[fSide].Sector != sector || r.input.sidedefs[bSide].Sector != sector {
+			continue
+		}
+		if r.HasRMBEffectLINE(i) {
+			lineEffect = true
 			continue
 		}
 		// Ok, it is/does
@@ -784,9 +813,16 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		return -1
 	}
 	if !sectorFound {
-		r.slyLinesInSector[sector] = true
-		Log.Verbose(1, "Reject: sector %d is self-referencing, but I failed to trace any of its lines to an outside sector. I will have to resort to 'make it visible to all' hack.\n",
-			sector)
+		if lineEffect {
+			// Might appear several times, if sector has several perimeters,
+			// all with this effect
+			Log.Verbose(1, "Reject: sector %d contains lines that have RMB effect LINE applied to them.\n",
+				sector)
+		} else {
+			r.slyLinesInSector[sector] = true
+			Log.Verbose(1, "Reject: sector %d is self-referencing, but I failed to trace any of its lines to an outside sector. I will have to resort to 'make it visible to all' hack.\n",
+				sector)
+		}
 		return -1
 	}
 	// Now iterate through perimeter again and create transient lines where
@@ -800,6 +836,9 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			continue
 		}
 		if r.input.sidedefs[fSide].Sector != sector || r.input.sidedefs[bSide].Sector != sector {
+			continue
+		}
+		if r.HasRMBEffectLINE(i) {
 			continue
 		}
 		// Now must analyze two consecutive lines (current one and next one) in
