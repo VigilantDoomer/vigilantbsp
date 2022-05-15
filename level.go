@@ -53,7 +53,7 @@ type Level struct {
 
 func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	troll *Troll, action *ScheduledLump, rejectStart uint32, f *os.File,
-	wriBus *WriteBusControl) {
+	wriBus *WriteBusControl, fileControl *FileControl) {
 
 	var linedefs []Linedef
 	var vertices []Vertex
@@ -79,6 +79,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	l.VerticesLumpIdx = 0
 	l.LinedefsLumpIdx = 0
 	l.wriBus = wriBus
+	mapName := string(ByteSliceBeforeTerm(le[action.DirIndex].Name[:]))
 	loadedThings := false
 	loadedLinedefsAndVertices := false
 	rejectSkip := config.Reject == REJECT_ZEROFILLED || config.Reject == REJECT_DONTTOUCH
@@ -282,6 +283,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				bgenerator:    bgenerator,
 				linesToIgnore: linesToIgnore,
 				rmbFrame:      action.RMBOptions,
+				fileControl:   fileControl,
+				mapName:       mapName,
 			})
 		}
 

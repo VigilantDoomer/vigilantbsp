@@ -1187,6 +1187,7 @@ EXCLUDE
 INCLUDE
 INVERT
 LENGTH
+REPORT
 SAFE
 
 map markers and comments. All other options are ignored.
@@ -1199,6 +1200,14 @@ sector count units (example: BAND, BLIND, LENGTH, SAFE)
 or map units (DISTANCE) will force -rs=2 (pedantic
 determination of self-referencing sectors visibility)
 as well.
+
+NOTE File produced by report option looks a bit differently,
+specifically: there is additional comment line
+specifying version of VigilantBSP, every map
+is processed and the list of sector pairs relevant
+for each map is preceeded by a comment line specifying
+which map it is, sector pairs are sorted by sector
+numbers (I am not aware how RMB sorts them), etc.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

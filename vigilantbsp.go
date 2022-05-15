@@ -63,9 +63,11 @@ type FileControl struct {
 	fin            *os.File
 	fout           *os.File
 	frmb           *os.File
+	freport        *os.File
 	inputFileName  string
 	outputFileName string
 	rmbFileName    string
+	reportFileName string
 }
 
 func (fc *FileControl) UsingTmp() bool {
@@ -116,13 +118,48 @@ func (fc *FileControl) CloseRMBOptionsFile() {
 	}
 }
 
+func (fc *FileControl) OpenReportFile() (*os.File, error) {
+	var err error
+	fc.freport, err = os.OpenFile(fc.reportFileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC,
+		fs.ModeExclusive|fs.ModePerm)
+	if err != nil {
+		fc.freport = nil
+		return nil, err
+	}
+	return fc.freport, err
+}
+
+func (fc *FileControl) CloseReportFile(suc bool) bool {
+	if fc.freport == nil {
+		return true
+	}
+	if suc {
+		fc.freport.Write([]byte("# Report written successfully - no entries lost\n"))
+	} else {
+		fc.freport.Write([]byte("# Program aborted, report might be missing entries\n"))
+	}
+	err := fc.freport.Close()
+	if err != nil {
+		Log.Error("Couldn't close report file '%s': %s\n", fc.reportFileName, err.Error())
+	} else {
+		if suc {
+			Log.Printf("Written report file %s\n", fc.reportFileName)
+		} else {
+			Log.Printf("Written incomplete report file %s\n", fc.reportFileName)
+		}
+	}
+	fc.freport = nil
+	return err == nil
+}
+
 func (fc *FileControl) Success() bool {
 	if fc.fin == nil || fc.fout == nil {
 		Log.Panic("Sanity check failed: descriptor invalid.\n")
 	}
 	errFin := fc.fin.Close()
 	errFout := fc.fout.Close()
-	hasError := errFin != nil || errFout != nil
+	sucReport := fc.CloseReportFile(true)
+	hasError := errFin != nil || errFout != nil || !sucReport
 	if hasError {
 		if errFin != nil {
 			Log.Error("Closing input file (after wad was almost ready) returned error: %s.\n",
@@ -213,6 +250,8 @@ func (fc *FileControl) Shutdown() {
 	if errFout != nil {
 		Log.Error("Couldn't close output file '%s': %s\n", fc.outputFileName, errFout.Error())
 	}
+
+	fc.CloseReportFile(false)
 
 	if fc.tmp { // Aborting unsuccessful operation when a temp file has been created
 		if errFout != nil {
@@ -487,6 +526,8 @@ func LoadAssociatedRMB(wadFullFileName string, fileControl *FileControl) *Loaded
 		cas = cas[:(len(cas) - len(fext))]
 	}
 	rmbFullName := cas + ".rej"
+	reportFullName := cas + ".rpt"
+
 	RMBFile, err := fileControl.OpenRMBOptionsFile(rmbFullName)
 	retry := false
 	if err != nil {
@@ -508,6 +549,10 @@ func LoadAssociatedRMB(wadFullFileName string, fileControl *FileControl) *Loaded
 		}
 		return nil
 	}
+
+	// if RMB options file exists, be ready to create reportFileName just in
+	// case
+	fileControl.reportFileName = reportFullName
 
 	shortName := filepath.Base(rmbFullName)
 	fileInfo, err := os.Stat(rmbFullName)
@@ -864,7 +909,7 @@ func main() {
 			// action.Level is an array of lumps belonging to the level. This
 			// is where all stuff goes
 			lvl.DoLevel(le, idx, rejectsize, troll, action, rejectStart,
-				f, wriBus)
+				f, wriBus, &mainFileControl)
 		}
 		action = action.Next
 	}

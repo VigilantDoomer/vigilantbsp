@@ -18,6 +18,11 @@
 // rejectRMB.go
 package main
 
+import (
+	"fmt"
+	"io"
+)
+
 // This file applies RMB effects to reject and so hosts code that is used
 // only by rejectXXX.go
 // Parser is in rmbparse.go, and shared declarations are in rmbunit.go
@@ -110,13 +115,17 @@ func (fr *RMBFrame) ProcessOptionsRMB(r *RejectWork) {
 		return
 	}
 	fr.processDistanceUsingOptions(r, nil)
-	r.distanceTable = nil // allow GC to delete distanceTable now or soon
 
 	// INCLUDE is the 2nd highest priority option
 	fr.processINCLUDEs(r)
 
 	// EXCLUDE is the highest priority option
 	fr.processEXCLUDEs(r)
+
+	// REPORT, though, is executed last. It doesn't apply any effects to the
+	// map, so it doesn't disturb the priority promise
+	r.generateReport()
+	r.distanceTable = nil // allow GC to delete distanceTable now or soon
 }
 
 // Applies (BAND) BLIND and SAFE effects, both normal and inverted. Respects
@@ -513,4 +522,73 @@ func (r *RejectWork) mapDistance(p1, p2 *IntVertex) uint64 {
 	dx := int64(p1.X - p2.X)
 	dy := int64(p1.Y - p2.Y)
 	return uint64(dx*dx) + uint64(dy*dy)
+}
+
+func (r *RejectWork) generateReport() bool {
+	return r.generateReportForFrame(r.rmbFrame)
+}
+
+func (r *RejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
+	if rmbFrame == nil {
+		return false
+	}
+	ret := false
+	for _, cmd := range rmbFrame.Commands {
+		// Unlike what RMB does, all REPORT commands in relevant frame are
+		// processed, not just the last one. However, REPORT commands in parent
+		// frame will be ignored if they exist in local frame
+		if cmd.Type == RMB_REPORT {
+			ret = true
+			if int(uint16(cmd.Data[0])) != cmd.Data[0] {
+				Log.Error("Distance specified for REPORT command is out of range (must be 0 <= %d <= 65535), will be ignored\n",
+					cmd.Data[0])
+				continue
+			}
+			writ := r.reportGetWriter()
+			r.reportDoForDistance(writ, uint16(cmd.Data[0]))
+		}
+	}
+	if !ret {
+		// Only process parent frame if no REPORT commands were in map local
+		// frame
+		ret = r.generateReportForFrame(rmbFrame.Parent)
+	}
+	return ret
+}
+
+func (r *RejectWork) reportDoForDistance(w io.Writer, distance uint16) {
+	w.Write([]byte(fmt.Sprintf("# %s All sectors with LOS distance>%d are reported\n",
+		r.mapName, distance)))
+	for i := 0; i < r.numSectors; i++ {
+		for j := i + 1; j < r.numSectors; j++ {
+			// According to manual, only _mutually_ visible sectors that
+			// exceed the specified length are to be reported
+			if *(r.distanceTableIJ(i, j)) > distance &&
+				!isHidden(*(r.rejectTableIJ(i, j))) &&
+				!isHidden(*(r.rejectTableIJ(j, i))) {
+				w.Write([]byte(fmt.Sprintf("%d,%d\n",
+					i, j)))
+			}
+		}
+	}
+}
+
+// (re)creates *.rpt file if it was not created/open yet, putting
+// "# VigilantBSP <version>" as a first line; if already open, then returns
+// an open instance to append to
+func (r *RejectWork) reportGetWriter() io.Writer {
+	if r.fileControl.freport != nil {
+		return r.fileControl.freport
+	}
+	wri, err := r.fileControl.OpenReportFile()
+	if err != nil {
+		Log.Panic("Couldn't create file %s: %s", r.fileControl.reportFileName,
+			err.Error())
+	}
+	// Add a comment line specifying the version of VigilantBSP used to
+	// produce the file. This is so that I might change format in the future,
+	// the line might act as identificator for other tools (say, written by
+	// other people) that want to parse the file for their own needs
+	wri.WriteString(fmt.Sprintf("# %s %s\n", PROG_CAPIT_NAME, VERSION))
+	return wri
 }

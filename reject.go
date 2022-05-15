@@ -94,6 +94,8 @@ type RejectWork struct {
 	PedanticFailMode  int      // what to do if failed to be pedantic and reverted to "always visible" hack
 	distanceTable     []uint16 // "distance in sector units" flattened i*j array
 	maxLength         uint16   // initialized in CreateDistanceTable, may be overridden in ApplyDistanceTable
+	fileControl       *FileControl
+	mapName           string
 }
 
 type RejectInput struct {
@@ -106,6 +108,8 @@ type RejectInput struct {
 	rejectChan    chan<- []byte
 	linesToIgnore []bool
 	rmbFrame      *RMBFrame
+	fileControl   *FileControl
+	mapName       string
 }
 
 type IntVertex struct {
@@ -179,6 +183,8 @@ func RejectGenerator(input RejectInput) {
 		RejectSelfRefMode: config.RejectSelfRefMode, // global: config
 		// another value that may be overriden later
 		PedanticFailMode: PEDANTIC_FAIL_NOTMATTER,
+		fileControl:      input.fileControl,
+		mapName:          input.mapName,
 	}
 
 	// Check if any RMB options make use of "distance in SECTOR COUNT" values
