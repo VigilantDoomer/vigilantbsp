@@ -298,8 +298,9 @@ func RejectGenerator(input RejectInput) {
 	// Apply special RMB rules (now that all physical LOS calculations are done)
 	r.rmbFrame.ProcessOptionsRMB(r)
 
+	data := r.getResult()
 	Log.Printf("Reject took %s\n", time.Since(start))
-	input.rejectChan <- r.getResult()
+	input.rejectChan <- data
 }
 
 // This may do one of the following two things:
@@ -362,8 +363,7 @@ func (r *RejectWork) NoNeedSolidBlockmap() {
 }
 
 // TODO In the future, blockmap creation may happen in its own thread, so that
-// we can compute distanceTable in parallel, but for simplicity, this will
-// suffice
+// we can compute distanceTable in parallel
 func (r *RejectWork) createSolidBlockmapNow() {
 	lines := r.input.lines.GetSolidVersion()
 	bmi := BlockmapInput{
@@ -1189,36 +1189,6 @@ func (r *RejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {
 	r.setLineVisibilityDone(srcLine, tgtLine)
 	return isVisible
 }
-
-/*
-func (r *RejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {
-	vis := r.getLineVisibility(srcLine, tgtLine)
-	if vis != VIS_UNKNOWN || r.dontBother(srcLine, tgtLine) {
-		return false
-	}
-	// TODO if r.linesTooFarApart -- this is rmb logic which is not yet
-
-	isVisible := false
-	r.src = *srcLine
-	r.tgt = *tgtLine
-	bisect := false
-	if adjustLinePair(&(r.src), &(r.tgt), &bisect) {
-		if bisect {
-			isVisible = r.divideRegion(&(r.src), &(r.tgt))
-		} else {
-			isVisible = r.checkLOS(&(r.src), &(r.tgt))
-		}
-	}
-
-	if isVisible {
-		vis = VIS_VISIBLE
-	} else {
-		vis = VIS_HIDDEN
-	}
-	r.setLineVisibility(srcLine, tgtLine, vis)
-	return isVisible
-}
-*/
 
 func getVisTableOffsetPrefab(srcLine, tgtLine *TransLine, numTransLines int) uint64 {
 	var row uint64
