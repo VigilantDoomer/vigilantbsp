@@ -29,7 +29,6 @@ import (
 // C++ to Go. Afterwards, a row of optimization and debugging followed, as
 // things that are good in C++ may have bad performance in Go + implementing
 // support for self-referencing sectors is not exactly walk in the park.
-// TODO RMB effects are not AT ALL implemented yet.
 // NOTE The output is unlikely to be identical to zennode/zokumbsp's output (not
 // to say those two even differ between themselves). It has to do with the fact
 // that reject computation depends on blockmap computation, and the algorithm
@@ -58,19 +57,10 @@ type RejectWork struct {
 	rejectTable []byte
 	input       *RejectInput
 	// the bulk of working data begins
-	solidLines   []SolidLine
-	transLines   []TransLine
-	indexToSolid []*SolidLine
-	// lineVisTable was replaced. Reason: computations wrote both VIS_VISIBLE
-	// and VIS_HIDDEN to lineVisTable cells, but what was read is whether cell
-	// value is equal to VIS_UNKNOWN (the initial one) or was modified to one of
-	// those two.
-	// This ternary system was replaced with a binary one in lineVisDone. True
-	// means line pair visibility was already computed, false means it is
-	// VIS_UNKNOWN. That's all that's needed, even when RMB effects will be
-	// implemented.
-	//lineVisTable     []uint8
-	lineVisDone      []uint8 // bitarray, replaces lineVisTable
+	solidLines       []SolidLine
+	transLines       []TransLine
+	indexToSolid     []*SolidLine
+	lineVisDone      []uint8 // bitarray, replaces Zennode's lineVisTable that held redundant information
 	sectors          []RejSector
 	slyLinesInSector map[uint16]bool // line with equal sector references on both sides. May indicate self-referencing sector
 	maxDistance      uint64
@@ -87,8 +77,10 @@ type RejectWork struct {
 	p1, p2, p3, p4 IntVertex        // memory optimization: used in rejectLOS.go -> initializeWorld, another non-reentrant function
 	seenLines      [65536 / 8]uint8 // replaces checkLine bool array, here we use unsigned bytes to store them compactly
 	// rejectDFS.go junk
-	graphTable        GraphTable
-	linesToIgnore     []bool
+	graphTable GraphTable
+	// misc
+	linesToIgnore []bool // fast Doom scrollers dummy lines, etc.
+	// rejectRMB.go junk
 	rmbFrame          *RMBFrame
 	RejectSelfRefMode int      // may differ from config's one because of RMB processing needs
 	PedanticFailMode  int      // what to do if failed to be pedantic and reverted to "always visible" hack
