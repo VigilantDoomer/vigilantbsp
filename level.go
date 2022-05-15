@@ -60,7 +60,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	var hexenThings []HexenThing
 	var hexenLinedefs []HexenLinedef
 	var absLines AbstractLines
-	var solidLines AbstractLines
+	var solidLines SolidLines
 	l.newLines = nil
 	var linesToIgnore []bool
 	var sidedefs []Sidedef

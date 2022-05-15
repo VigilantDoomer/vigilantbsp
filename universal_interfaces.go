@@ -44,10 +44,24 @@ type AbstractLines interface {
 	// render it contextually irrelevant for building a particular kind of blockmap
 	BlockmapSkipThis(idx uint16) bool
 	// Returns interface that represents the same lines, but fit to construct
+	// _internal purpose_ blockmap that includes all solid lines. For use in
+	// reject builder
+	GetSolidVersion() SolidLines
+	// Returns interface that represents the same lines, but fit to construct
 	// _internal purpose_ blockmap that includes all (not just solid) lines. For
 	// use in reject builder, when trying to rewire self-referencing effect
 	// lines to indicate the true sectors
 	GetAuxVersion() AbstractLines
+}
+
+// SolidLines subclasses AbstractLines inteface. Classes implementing it are
+// also expected to have non-trivial behavior in BlockmapSkipThis method,
+// and they also need to implement method TreatAsSolid
+type SolidLines interface {
+	AbstractLines
+	// Registers that this line (as indexed by lidx argument) must have
+	// BlockmapSkipThis == false returned for it
+	TreatAsSolid(lidx uint16)
 }
 
 // WriteableLines subclasses AbstractLines interface, AND adds methods that DO
@@ -105,8 +119,9 @@ type DoomLinedefs struct {
 // for internal purposes
 // BlockmapSkipThis(idx) == true for lines with two-sided flag set
 type DoomSolidLinedefs struct {
-	linedefs []Linedef
-	vertices []Vertex
+	linedefs     []Linedef
+	vertices     []Vertex
+	treatAsSolid map[uint16]bool
 }
 
 // This is used to build blockmap that contain all of lines, for internal
@@ -135,8 +150,9 @@ type HexenLinedefs struct {
 
 // Hexen analogue of DoomSolidLinedefs
 type HexenSolidLinedefs struct {
-	linedefs []HexenLinedef
-	vertices []Vertex
+	linedefs     []HexenLinedef
+	vertices     []Vertex
+	treatAsSolid map[uint16]bool
 }
 
 // Hexen analogue of DoomAuxLinedefs
@@ -335,6 +351,13 @@ func (o *DoomLinedefs) AddVertex(X, Y int) int {
 
 func (o *DoomLinedefs) GetAuxVersion() AbstractLines {
 	return &DoomAuxLinedefs{
+		linedefs: o.linedefs,
+		vertices: o.vertices,
+	}
+}
+
+func (o *DoomLinedefs) GetSolidVersion() SolidLines {
+	return &DoomSolidLinedefs{
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
@@ -716,6 +739,13 @@ func (o *HexenLinedefs) GetAuxVersion() AbstractLines {
 	}
 }
 
+func (o *HexenLinedefs) GetSolidVersion() SolidLines {
+	return &HexenSolidLinedefs{
+		linedefs: o.linedefs,
+		vertices: o.vertices,
+	}
+}
+
 func (o *DoomSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
 	line := o.linedefs[idx]
 	x1 := int(o.vertices[line.StartVertex].XPos)
@@ -731,7 +761,8 @@ func (o *DoomSolidLinedefs) Len() uint16 {
 
 func (o *DoomSolidLinedefs) BlockmapSkipThis(idx uint16) bool {
 	line := o.linedefs[idx]
-	if (line.Flags & LF_TWOSIDED) == LF_TWOSIDED {
+	if (line.Flags&LF_TWOSIDED) == LF_TWOSIDED && (o.treatAsSolid == nil ||
+		!o.treatAsSolid[idx]) {
 		return true
 	}
 	return false
@@ -756,6 +787,17 @@ func (o *DoomSolidLinedefs) GetAuxVersion() AbstractLines {
 	}
 }
 
+func (o *DoomSolidLinedefs) GetSolidVersion() SolidLines {
+	return o
+}
+
+func (o *DoomSolidLinedefs) TreatAsSolid(lidx uint16) {
+	if o.treatAsSolid == nil {
+		o.treatAsSolid = make(map[uint16]bool)
+	}
+	o.treatAsSolid[lidx] = true
+}
+
 func (o *HexenSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
 	line := o.linedefs[idx]
 	x1 := int(o.vertices[line.StartVertex].XPos)
@@ -771,7 +813,8 @@ func (o *HexenSolidLinedefs) Len() uint16 {
 
 func (o *HexenSolidLinedefs) BlockmapSkipThis(idx uint16) bool {
 	line := o.linedefs[idx]
-	if (line.Flags & LF_TWOSIDED) == LF_TWOSIDED {
+	if (line.Flags&LF_TWOSIDED) == LF_TWOSIDED && (o.treatAsSolid == nil ||
+		!o.treatAsSolid[idx]) {
 		return true
 	}
 	return false
@@ -794,6 +837,17 @@ func (o *HexenSolidLinedefs) GetAuxVersion() AbstractLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *HexenSolidLinedefs) GetSolidVersion() SolidLines {
+	return o
+}
+
+func (o *HexenSolidLinedefs) TreatAsSolid(lidx uint16) {
+	if o.treatAsSolid == nil {
+		o.treatAsSolid = make(map[uint16]bool)
+	}
+	o.treatAsSolid[lidx] = true
 }
 
 func (o *DoomAuxLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
@@ -829,6 +883,13 @@ func (o *DoomAuxLinedefs) GetAuxVersion() AbstractLines {
 	return o
 }
 
+func (o *DoomAuxLinedefs) GetSolidVersion() SolidLines {
+	return &DoomSolidLinedefs{
+		linedefs: o.linedefs,
+		vertices: o.vertices,
+	}
+}
+
 func (o *HexenAuxLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
 	line := o.linedefs[idx]
 	x1 := int(o.vertices[line.StartVertex].XPos)
@@ -860,4 +921,11 @@ func (o *HexenAuxLinedefs) GetFlags(idx uint16) uint32 {
 
 func (o *HexenAuxLinedefs) GetAuxVersion() AbstractLines {
 	return o
+}
+
+func (o *HexenAuxLinedefs) GetSolidVersion() SolidLines {
+	return &HexenSolidLinedefs{
+		linedefs: o.linedefs,
+		vertices: o.vertices,
+	}
 }

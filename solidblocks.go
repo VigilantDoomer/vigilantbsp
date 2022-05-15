@@ -41,7 +41,7 @@ const (
 )
 
 type SolidBlocks_Input struct {
-	lines         AbstractLines
+	lines         SolidLines
 	bounds        LevelBounds
 	control       <-chan BconRequest
 	genworker     chan BgenRequest

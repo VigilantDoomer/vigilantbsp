@@ -97,6 +97,7 @@ type RejectWork struct {
 	fileControl       *FileControl
 	mapName           string
 	lineEffects       map[uint16]uint8
+	specialSolids     []uint16 // all linedefs that need to be treated as solid even though they aren't
 }
 
 type RejectInput struct {
@@ -218,10 +219,10 @@ func RejectGenerator(input RejectInput) {
 
 	r.prepareReject()
 	if r.setupLines() {
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_REJECT,
-			Message: BCON_NEED_SOLID_BLOCKMAP,
-		}
+		// FIXME solid blockmap now needs to include additional solids (!)
+		// produced by LINE effect (RMB). If there are any, can't use the shared
+		// with nodebuilder thingy!
+		r.ScheduleSolidBlockmap()
 		// Blockmap will be needed a little bit later, do other tasks meanwhile
 		r.createSectorInfo()
 		r.finishLineSetup()
@@ -256,12 +257,7 @@ func RejectGenerator(input RejectInput) {
 			SetupLineMap(r.lineMap, r.reSectors, len(r.sectors))
 			// Get blockmap, it will be used in call tree initiated by testLinePair
 			// method
-			bmResponse := make(chan *Blockmap)
-			input.bgenerator <- BgenRequest{
-				Action:  BGEN_RETRIEVE_BLOCKMAP,
-				ReplyTo: bmResponse,
-			}
-			r.blockmap = <-bmResponse
+			r.RetrieveSolidBlockmap()
 			r.prepareBlockmapForLOS() // arrangements for hard porn in rejectLOS.go
 
 			for i := 0; i < r.numSectors; i++ {
@@ -279,12 +275,7 @@ func RejectGenerator(input RejectInput) {
 
 			// Get blockmap, it will be used in call tree initiated by testLinePair
 			// method
-			bmResponse := make(chan *Blockmap)
-			input.bgenerator <- BgenRequest{
-				Action:  BGEN_RETRIEVE_BLOCKMAP,
-				ReplyTo: bmResponse,
-			}
-			r.blockmap = <-bmResponse
+			r.RetrieveSolidBlockmap()
 			r.prepareBlockmapForLOS() // arrangements for hard porn in rejectLOS.go
 
 			// Check all lines against each other
@@ -300,16 +291,10 @@ func RejectGenerator(input RejectInput) {
 			// --- Bruteforce code ends here
 		}
 
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_REJECT,
-			Message: BCON_DONE_WITH_SOLID_BLOCKMAP,
-		}
+		r.DoneWithSolidBlockmap()
 		//
 	} else {
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_REJECT,
-			Message: BCON_NONEED_SOLID_BLOCKMAP,
-		}
+		r.NoNeedSolidBlockmap()
 		Log.Printf("Reject builder: not a single two-sided linedef between two distinct sectors was found. You will have an empty, zero-filled REJECT.")
 	}
 
@@ -318,6 +303,78 @@ func RejectGenerator(input RejectInput) {
 
 	Log.Printf("Reject took %s\n", time.Since(start))
 	input.rejectChan <- r.getResult()
+}
+
+// May block
+func (r *RejectWork) ScheduleSolidBlockmap() {
+	if r.specialSolids == nil {
+		// This should guarantee the specialSolids array is populated with
+		// relevant data - as setupLines ought to have done
+		Log.Panic("setupLines must be called before ScheduleSolidBlockmap()")
+	}
+	if len(r.specialSolids) > 0 {
+		r.createSolidBlockmapNow()
+		// tell the control goroutine we don't need its work ( because
+		// we did all the work ourselves)
+		r.NoNeedSolidBlockmap()
+	} else {
+		r.input.bcontrol <- BconRequest{
+			Sender:  SOLIDBLOCKS_REJECT,
+			Message: BCON_NEED_SOLID_BLOCKMAP,
+		}
+	}
+}
+
+// May block
+func (r *RejectWork) RetrieveSolidBlockmap() {
+	if len(r.specialSolids) > 0 {
+		return
+	}
+	bmResponse := make(chan *Blockmap)
+	r.input.bgenerator <- BgenRequest{
+		Action:  BGEN_RETRIEVE_BLOCKMAP,
+		ReplyTo: bmResponse,
+	}
+	r.blockmap = <-bmResponse
+}
+
+// May block
+func (r *RejectWork) DoneWithSolidBlockmap() {
+	if len(r.specialSolids) > 0 {
+		return
+	}
+	r.input.bcontrol <- BconRequest{
+		Sender:  SOLIDBLOCKS_REJECT,
+		Message: BCON_DONE_WITH_SOLID_BLOCKMAP,
+	}
+}
+
+func (r *RejectWork) NoNeedSolidBlockmap() {
+	r.input.bcontrol <- BconRequest{
+		Sender:  SOLIDBLOCKS_REJECT,
+		Message: BCON_NONEED_SOLID_BLOCKMAP,
+	}
+}
+
+// TODO In the future, blockmap creation may happen in its own thread, so that
+// we can compute distanceTable in parallel, but for simplicity, this will
+// suffice
+func (r *RejectWork) createSolidBlockmapNow() {
+	lines := r.input.lines.GetSolidVersion()
+	bmi := BlockmapInput{
+		bounds:          r.input.bounds,
+		XOffset:         0,
+		YOffset:         0,
+		useZeroHeader:   false,
+		internalPurpose: true,
+		gcShield:        nil,
+		linesToIgnore:   r.input.linesToIgnore,
+	}
+	for _, lidx := range r.specialSolids {
+		lines.TreatAsSolid(lidx)
+	}
+	bmi.lines = lines
+	r.blockmap = CreateBlockmap(bmi)
 }
 
 func isHidden(vis uint8) bool {
@@ -381,6 +438,7 @@ func (r *RejectWork) getResult() []byte {
 func (r *RejectWork) setupLines() bool {
 	numLines := r.input.lines.Len()
 	r.RMBLoadLineEffects()
+	r.specialSolids = make([]uint16, 0)
 	// REMARK lineProcessed array - was never used in zennode. Was just created,
 	// then/ deleted, never written to or read from.
 	r.solidLines = make([]SolidLine, numLines)
@@ -463,6 +521,7 @@ func (r *RejectWork) setupLines() bool {
 						continue
 					}
 				}
+				r.specialSolids = append(r.specialSolids, i)
 			}
 			r.solidLines[numSolidLines] = SolidLine{
 				index:  i,
