@@ -261,3 +261,96 @@ func printV1V2(v1, v2 *NodeVertex) string {
 	}
 	return strV1 + strV2
 }
+
+// Common error in version up to and including v0.72 seems to be dropping first
+// interval
+// Currenty this test fails. It seems that diffgeometry.go needs quite a quality
+// rewrite to deal with errors. Coalesce/fluger needs probably to go, the
+// thing is how to construct intervals from the set directly
+func TestCoalesce1(t *testing.T) {
+	// [,LEFT(-768,-3497),RIGHT(-768,-3497),LEFT(64,-3648),LEFT(64,-3648),RIGHT(2105,-4019),LEFT(2406,-4074),RIGHT(2704,-4128),LEFT(2849,-4154),RIGHT(2880,-4160),LEFT(3328,-4241),RIGHT(3808,-4329)]
+	// More dropouts! -1 -1 ; [(2105;-4019)-(2406;-4074)]; [(2704;-4128)-(2849;-4154)]; [(2880;-4160)-(3328;-4241)] [RIGHT(-640,-3520)-RIGHT(64,-3648)]
+	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	pts = append(pts, OrientedVertex{
+		v: &NodeVertex{
+			X: -768,
+			Y: -3497,
+		},
+		left: true,
+	},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: -768,
+				Y: -3497,
+			},
+			left: false,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 64,
+				Y: -3648,
+			},
+			left: true,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 64,
+				Y: -3648,
+			},
+			left: true,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 2105,
+				Y: -4019,
+			},
+			left: false,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 2406,
+				Y: -4704,
+			},
+			left: true,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 2704,
+				Y: -4128,
+			},
+			left: false,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 2849,
+				Y: -4154,
+			},
+			left: true,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 2880,
+				Y: -4160,
+			},
+			left: false,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 3328,
+				Y: -4241,
+			},
+			left: true,
+		},
+		OrientedVertex{
+			v: &NodeVertex{
+				X: 3808,
+				Y: -4329,
+			},
+			left: false,
+		})
+	pts.Coalesce()
+	fmt.Println(pts.toString())
+	if pts[0].left != false || pts[0].v.X != -768 || pts[0].v.Y != -3497 {
+		t.Errorf("Wrong #0 point\n")
+	}
+}
