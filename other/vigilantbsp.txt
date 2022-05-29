@@ -1058,11 +1058,6 @@ was tackled.
 08:03 's' - If 2-sided lines have same sector on both sides
 -----------------------------------------------------------
 
-NOTE this option may be ignored when RMB file is used, depending
-on options contained in it. See the end of this option description
-for more information when that happens and what does VigilantBSP do
-then.
-
 The algorithm as invented by Zennode is built upon collecting
 solid (1-sided) lines and transient lines (2-sided lines with DIFFERENT
 sectors on either side). Lines that don't fit into either definitions
@@ -1136,18 +1131,13 @@ perimeter computation is done, hence more points of possible failure.
 If code can't reach certainty, it will fallback to marking sector
 always visible just in case.
 
-This last option is also forced when RMB options file is present
-and certain options are to be applied that specify distance in
-sector units or map units. Examples of such options are: LENGTH,
-BAND, BLIND, SAFE, REPORT and DISTANCE. If the fallback (marking
-sector always visible) occurs, it will escape distance analysis 
-though, an error message about reject being possibly (partially) 
-incorrect is printed in this case.
-
 There are plans to improve accuracy in these algos in future versions.
 
 08:04 'm' - Load and apply RMB options file (*.rej)
 ---------------------------------------------------
+
+Note: partial RMB support was first introduced in v0.74a
+of VigilantBSP.
 
 There once existed a program called Reject Map Builder,
 or RMB, that could apply special effects to reject file,
@@ -1187,14 +1177,12 @@ EXCLUDE
 INCLUDE
 INVERT
 LENGTH
-LINE
 REPORT
 SAFE
 
-map markers and comments. All other options are ignored.
-
-TODO I want to support more RMB options before official 
-build.
+map markers and comments. All other options are ignored
+as of yet. Future versions of VigilantBSP intend to 
+support more options.
 
 NOTE options that rely on sector distances in 
 sector count units (example: BAND, BLIND, LENGTH, SAFE)
@@ -1209,22 +1197,6 @@ is processed and the list of sector pairs relevant
 for each map is preceeded by a comment line specifying
 which map it is, sector pairs are sorted by sector
 numbers (I am not aware how RMB sorts them), etc.
-
-TODO LINE option was not thoroughly tested, seems to
-work, but more scrutiny is desirable to happen before
-release.
-
-NOTE In VigilantBSP, LINE can additionaly be used to designate
-a 2-sided line having the SAME sector on both sides to not be
-considered creating a self-referencing sector effect. This is
-a VigilantBSP-specific extension that is not part of original
-RMB, and can be used as a workaround when -rs=2 option is
-causing bugs, or when, for whatever reason, it is desired to
-make monsters not see outside and inside the self-referencing
-sector. For all other purposes, LINE effect on 2-sided line
-with same sector on both sides is ignored - you can't make
-part of sector not see some other part of the same sector via
-REJECT lump.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

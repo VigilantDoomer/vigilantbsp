@@ -605,11 +605,16 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 // also it can prevent the sector to be recognised as self-referencing for reject
 // computation purposes, provided all lines suspected to produce said effect by
 // the chosen method are eliminated via LINE
+// NOTE functionality DISABLED for v0.74 release because I am having doubts
+// about whether LINE should have this quirk for self-referencing sectors.
 func (r *RejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
-	if r.lineEffects == nil {
+	// Temporarily ignoring LINE, has effect of not implementing it
+	return false
+	// The below code is how it was supposed to work
+	/*if r.lineEffects == nil {
 		return false
 	}
-	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
+	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID*/
 }
 
 func (r *RejectWork) RMBLoadLineEffects() {

@@ -1,6 +1,6 @@
 Changelog for VigilantBSP
 
-v0.78a (working number)
+v0.74a (working number)
 - Partial RMB support
 
 v0.72a
