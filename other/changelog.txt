@@ -2,7 +2,7 @@ Changelog for VigilantBSP
 
 v0.74a (working number)
 - Partial RMB support
-- Downgrade Go requirements from 1.17 version to 1.15 (but not tested it works on 1.15)
+- (Relevant to programmers) Can now build VigilantBSP on Go 1.15+ (was 1.17+). This is so you can build it on current Debian stable (bullseye) using Debian repository's version of Go
 
 v0.72a
 - Fixed bug: some sectors wrongly considered compatible with each other and sector 0 in "advanced visplane reduction" algorithm 
