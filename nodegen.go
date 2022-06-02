@@ -89,6 +89,7 @@ type NodesResult struct {
 	deepSubsectors []DeepSubSector
 	deepSegs       []DeepSeg
 	deepNodes      []DeepNode
+	rawNodes       []byte // for Zdoom extended/compressed nodes - all data sans the signature
 }
 
 type NodesTotals struct {

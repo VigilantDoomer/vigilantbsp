@@ -58,9 +58,11 @@ type ParseContext struct {
 	command     []byte // converted to upper case
 	getParseDef func(tblIdx int) *ParseDef
 	wordScanner *bufio.Scanner
-	// more dumb hacks to workaround Go compiler detecting definition "loops"
-	recurseIntoParseRMBLine func(context *ParseContext, line []byte, fromInvert bool) bool
-	rmbIndexByType          func(tpe int) int
+}
+
+// Workaround to prevent Go compiler claiming there is definition "loop"
+type ParseContextRecursion interface {
+	parseRMBLine(line []byte, fromInvert bool) bool
 }
 
 // How many errors RMB parser will output before bailing out. Note that if
@@ -108,16 +110,6 @@ var RMB_INVERTABLE = []int{RMB_BAND, RMB_BLIND, RMB_SAFE}
 
 func GetParseDef(tblIdx int) *ParseDef {
 	return &(RMB_PARSE_TABLE[tblIdx])
-}
-
-func rmbIndexByType(tpe int) int {
-	for i, entry := range RMB_PARSE_TABLE {
-		if entry.Type == tpe {
-			return i
-		}
-	}
-	panic("rmbIndexbyType: Unknown type")
-	return 0
 }
 
 func rmbParseNumeric(context *ParseContext, overallIndex int) (int, bool) {
@@ -278,8 +270,6 @@ func ParseBAND(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 	ok := false
 	if legit {
 		cmd.Band = true
-		// was copying Zennode, but my code is only confused by it
-		//tblIdx := context.rmbIndexByType(cmd.Type)
 		ok = ParseGeneric(context, tblIdx, cmd)
 	} else {
 		context.LogError("unknown BAND option (supports only BLIND and SAFE, that must follow BAND)\n")
@@ -400,7 +390,10 @@ func ParseMap(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 func ParseINVERT(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 	// here context.command is entire line after INVERT, and yes we recurse
 	// into parseRMBLine (scary)
-	if context.recurseIntoParseRMBLine(context, context.command, true) {
+	// the cast to ParseContextRecursion is to avoid "loop initialization"
+	// compiler error. What am I really doing is calling parseRMBLine method on
+	// context
+	if ParseContextRecursion(context).parseRMBLine(context.command, true) {
 		// Hack (bad): need to extract last cmd so that invert flag is applied
 		// to it
 		l := len(context.activeFrame.Commands)
@@ -517,14 +510,12 @@ func LoadRMB(src []byte, fname string) (bool, *LoadedRMB) {
 
 	globalFrame := &(allFrames[0])
 	context := ParseContext{
-		activeFrame:             globalFrame,
-		idToFrame:               make(map[RMBFrameId]*RMBFrame),
-		globalFrame:             globalFrame,
-		allFrames:               allFrames,
-		fname:                   fname,
-		getParseDef:             GetParseDef,
-		recurseIntoParseRMBLine: parseRMBLineTrampoline,
-		rmbIndexByType:          rmbIndexByType,
+		activeFrame: globalFrame,
+		idToFrame:   make(map[RMBFrameId]*RMBFrame),
+		globalFrame: globalFrame,
+		allFrames:   allFrames,
+		fname:       fname,
+		getParseDef: GetParseDef,
 	}
 	for sc.Scan() {
 		liNum++ // lines start at 1
@@ -606,14 +597,6 @@ func (c *ParseContext) LogWarning(msg string, a ...interface{}) {
 	nA = append(nA, c.liNum)
 	nA = append(nA, a...)
 	Log.Verbose(1, "%s:%d: WARN "+msg, nA...)
-}
-
-// I am angry and on the verge to smash things with a hammer. Go compiler
-// complaining about definition "loops" is really annoying. Does this mean
-// that Go is unsuitable to writing parsers? What a ...
-func parseRMBLineTrampoline(context *ParseContext, line []byte,
-	fromInvert bool) bool {
-	return context.parseRMBLine(line, fromInvert)
 }
 
 // Returns true if was successful

@@ -45,6 +45,15 @@ const BLOCK_BITS = uint16(7) // replaces division by BLOCK_WIDTH with right shif
 // per zdoom.org wiki)
 var DEEPNODES_SIG = [8]byte{0x78, 0x4E, 0x64, 0x34, 0x00, 0x00, 0x00, 0x00}
 
+// Starting signature "XNOD" of NODES for Zdoom extended non-GL nodes format.
+// Unlike Deep NODES, this signature, together with some bytes following it, may
+// accidentally occur in a valid vanilla nodes format nodes data
+var ZNODES_PLAIN_SIG = [4]byte{0x58, 0x4E, 0x4F, 0x44}
+
+// Starting signature "ZNOD" of NODES for Zdoom extended COMPRESSED non-GL
+// nodes format
+var ZNODES_COMPRESSED_SIG = [4]byte{0x5A, 0x4E, 0x4F, 0x44}
+
 const IWAD_MAGIC_SIG = uint32(0x44415749) // ASCII - 'IWAD'
 const PWAD_MAGIC_SIG = uint32(0x44415750) // ASCII - 'PWAD'
 
@@ -306,7 +315,8 @@ type Node struct {
 	LChild int16    // ->     else 0-14 bits are subsector number
 }
 
-// DeePBSP "standard V4" node format
+// DeePBSP "standard V4" node format. Also used by Zdoom extended non-GL nodes,
+// as it is the same
 type DeepNode struct {
 	X      int16
 	Y      int16
@@ -354,6 +364,33 @@ type BlockMapHeader struct {
 	XBlocks uint16 // vanilla treats this as signed int16
 	YBlocks uint16 // vanilla treats this as signed int16
 }
+
+type ZdoomNode_VertexHeader struct {
+	ReusedOriginalVertices uint32 // number of vertices reused from VERTEXES
+	NumExtendedVertices    uint32 // how many vertices follow this
+}
+
+type ZdoomNode_Vertex struct {
+	X int32 // fixed-point 16.16 signed int
+	Y int32 // fixed-point 16.16 signed int
+}
+
+// Zdoom subsector information - nothing to define here. Just a count of
+// subsectors, and each subsector defines only number of segs in current sector
+
+// Zdoom seg information - number of segs, followed by repetition of the below
+// struct. The struct is castrated - it does not include angle and offset
+// information, which means some special effects (like horizon) can not be
+// supported. This make extended nodes practically inferior to deep nodes,
+// despite the extra precision of vertices
+type ZdoomNode_Seg struct {
+	StartVertex uint32
+	EndVertex   uint32
+	Linedef     uint16
+	Flip        int16
+}
+
+// ZdoomNode_node is not defined - it is same as DeepNode
 
 // NOTE also no type definitions for blocks and blocklists, they are offsets
 // and (each blocklist is) array of linedef indexes correspondingly

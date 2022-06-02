@@ -2,6 +2,7 @@ Changelog for VigilantBSP
 
 v0.74a (working number)
 - Partial RMB support
+- Downgrade Go requirements from 1.17 version to 1.16 (but not tested it works on 1.16)
 
 v0.72a
 - Fixed bug: some sectors wrongly considered compatible with each other and sector 0 in "advanced visplane reduction" algorithm 
