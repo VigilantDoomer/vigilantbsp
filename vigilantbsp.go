@@ -40,7 +40,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -92,7 +91,7 @@ func (fc *FileControl) OpenOutputFile(outputFileName string) (*os.File, string, 
 		}
 	} else {
 		fc.fout, err = os.OpenFile(outputFileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC,
-			fs.ModeExclusive|fs.ModePerm)
+			os.ModeExclusive|os.ModePerm)
 	}
 	fc.outputFileName = outputFileName
 	return fc.fout, outputFileName, err
@@ -121,7 +120,7 @@ func (fc *FileControl) CloseRMBOptionsFile() {
 func (fc *FileControl) OpenReportFile() (*os.File, error) {
 	var err error
 	fc.freport, err = os.OpenFile(fc.reportFileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC,
-		fs.ModeExclusive|fs.ModePerm)
+		os.ModeExclusive|os.ModePerm)
 	if err != nil {
 		fc.freport = nil
 		return nil, err
@@ -190,7 +189,7 @@ func (fc *FileControl) tempFileReplacesInput() bool {
 		return false
 	}
 	fout, errFout := os.OpenFile(fc.inputFileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC,
-		fs.ModeExclusive|fs.ModePerm)
+		os.ModeExclusive|os.ModePerm)
 	if errFout != nil {
 		success = false
 		Log.Error("Couldn't reopen the input file to overwrite it: %s.\n",
@@ -944,7 +943,7 @@ func DebugSaveNodes(nodes []Node) {
 	if config.NodesDebugFile == "" {
 		return
 	}
-	fout, ferr := os.OpenFile(config.NodesDebugFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fs.ModeExclusive|fs.ModePerm)
+	fout, ferr := os.OpenFile(config.NodesDebugFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.ModeExclusive|os.ModePerm)
 	if ferr != nil {
 		Log.Printf("An error has occured while trying to create/modify %s: %s\n", config.NodesDebugFile, ferr)
 		os.Exit(1)
@@ -994,7 +993,7 @@ func DebugSaveNodes(nodes []Node) {
 // might be not exactly useful for SEG minimization (or minimization of anything
 // for that matter) after these convex partitions need to be redone the BSP way.
 func DebugSaveDumpedSegs(where string) {
-	fout, ferr := os.OpenFile(where, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fs.ModeExclusive|fs.ModePerm)
+	fout, ferr := os.OpenFile(where, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.ModeExclusive|os.ModePerm)
 	if ferr != nil {
 		Log.Printf("An error has occured while trying to create/modify %s: %s\n", where, ferr)
 		os.Exit(1)
@@ -1005,7 +1004,7 @@ func DebugSaveDumpedSegs(where string) {
 }
 
 func DumpMemoryProfile(where string) {
-	fout, ferr := os.OpenFile(where, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fs.ModeExclusive|fs.ModePerm)
+	fout, ferr := os.OpenFile(where, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.ModeExclusive|os.ModePerm)
 	if ferr != nil {
 		Log.Printf("An error has occured while trying to create/modify %s: %s\n", where, ferr)
 		os.Exit(1)
