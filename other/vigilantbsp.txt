@@ -57,15 +57,20 @@ ZokumBSP) are also getting implemented.
 In future, support for GL nodes / UDMF format MAY be considered
 as well. 
 
-Also, support for RMB effects is planned soon.
+Partial support for RMB effects is already implemented since
+version 0.74a. Eventually, most RMB effects are going to be
+supported.
 
 Section 02: Basic usage
 =======================
 
 VigilantBSP is a console, rather than GUI, program. If you want
-to run it manually, rather than from map editor such as 
-GzdoomBuilder, you need to run it from a terminal (GNU/Linux) or 
-the command shell (cmd.exe in Win32). 
+to run it manually (and in some cases you really have to!), rather
+than from map editor such as GzdoomBuilder, you need to run it 
+from a terminal (GNU/Linux) or the command shell (cmd.exe in Win32). 
+
+NOTE: Applying RMB effects will likely require you to run VigilantBSP
+manually indeed.
 
 The command-line looks like the following:
 vigilantbsp {-options} filename.wad {-o output.wad}
@@ -145,7 +150,7 @@ is either a suboption of option above it, or a possible value:
 	d= Penalty factor for _diagonal_ lines
 		34 - default for Hexen format levels, for others 0 (disabled)
 		Explicitly specifying non-zero value will enable it for all levels,
-		while explicitly specifying 0 will disable it even for Hexen levels
+		while explicitly specifying 0 will disable it even for Hexen levels		
 
 -r Rebuild REJECT resource.
 	z Insert zero-filled REJECT resource
@@ -154,6 +159,7 @@ is either a suboption of option above it, or a possible value:
 		0 Mark such sectors as always visible (default)
 		1 Mark visible only when self-referencing sector effects are detected
 		2 Be pedantic about self-referencing sector visibility
+	m Process RMB option file (.rej)
 		
 -m (example -m:map01+map03) Rebuild only specific maps
 		
@@ -304,15 +310,23 @@ Linedef tags with special meanings:
         one-sided, rotate the rendered wall N degrees, where degrees
         is taken from tag.**
 * excluding 998 and 999
-** Most limit-removing and advanced ports won't display this effect correctly,
-because they recompute angle directly. This includes all recent versions of 
-Crispy-Doom and PrBoom-Plus. The effect can only be relied upon to work in
-vanilla and ports with rendering engine designed to emulate or not much 
-different from vanilla (Chocolate-Doom, CnDoom, Sprinkled Doom, etc.).
-This can be used to produce horizon and infinite ocean effect when angle
+** This can be used to produce horizon and infinite ocean effect when angle
 in degrees = 180, see 
 https://www.doomworld.com/forum/topic/94604-horizon-effect-in-vanilla-only/
-(credit: Bzzrak)
+(credit: Bzzrak). However, historically, most limit-removing and advanced
+ports wouldn't display this effect correctly, if they chose to override angle
+with a more precise computation required for wall wiggle fix (TODO add link)
+UNCONDITIONALLY. Preventing wall wiggle does NOT have to break this effect, 
+but historically used implementations did, and most versions of such popular 
+ports as  Crispy-Doom and PrBoom-Plus WERE affected by this. This is beginning
+to change as developers are now made aware of this effect, and so explicitly
+reenable its support even while wall wiggle fix is implemented. Newest versions
+of Crispy-Doom will render this effect correctly and still fix wall wiggle,
+whereas newest version of Sprinkled Doom will support this effect without 
+implementing wall wiggle fix as the latter not compatible with the goals of that
+project. Ports such as Chocolate Doom and CnDoom (as well as outdated versions 
+of Sprinkled Doom when it was more of limit-raising rather than limit-removing port) 
+always supported this effect.
 
 Linedef tags >=900 and the rotation part for tag 999 effect originate from BSP
 nodebuilder. 
@@ -1137,7 +1151,9 @@ There are plans to improve accuracy in these algos in future versions.
 ---------------------------------------------------
 
 Note: partial RMB support was first introduced in v0.74a
-of VigilantBSP.
+of VigilantBSP. The manual for all RMB options can be
+found in rmb-manual.html file, however, only select few
+are actually supported.
 
 There once existed a program called Reject Map Builder,
 or RMB, that could apply special effects to reject file,
@@ -1150,7 +1166,7 @@ computed reject, in plain text.
 Since RMB program was written for DOS, has stopped updating
 and its source code is unavailable, some nodebuilders 
 (Zennode, etc.) opted to provide support for *.rej options
-file.
+file. 
 
 This option (-rm) will make VigilantBSP find *.rej file in 
 the same directory as INPUT wad file, with same filename as 
@@ -1166,6 +1182,19 @@ will look for someWad.rej or someWad.REJ but not for
 somewad.rej, SOMEWAD.REJ or someWad.rEj . If both
 someWad.rej and someWad.REJ happen to exist,
 someWad.rej will be loaded.
+
+BEWARE Users that want to apply RMB effects through
+VigilantBSP will likely have to run VigilantBSP manually
+instead of from their wad editor of choice. The reason is
+that when nodebuilder is invoked automatically by editing
+program (such as GzDoomBuilder of Slade) and not by user,
+it is likely given a temporary copy of a specific map being 
+edited WITHOUT rmb file being copied along or even the rest
+of the wad data, which will cause *.rej to be "ignored" as
+if it didn't exist. That is, assumptions made by wad editing
+programs may not expect nodebuilder to do certain things
+like accessing similarly named files, making use of RMB
+rather inconvenient. 
 
 The support is currently work in progress and as such
 should be considered experimental. Only some options

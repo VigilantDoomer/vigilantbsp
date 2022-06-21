@@ -165,7 +165,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			if copyLump {
 				tmpBuf := make([]byte, le[idx].Size, le[idx].Size)
 				f.ReadAt(tmpBuf, int64(le[idx].FilePos))
-				wriBus.WriteSliceLump(tmpBuf, idx, "")
+				wriBus.SendRawLump(tmpBuf, idx, "")
 			}
 		}
 		// Using linedefs and vertices when avaiable, generate both BLOCKMAP
@@ -305,26 +305,38 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			if !applyDiagonalPenalty {
 				diagonalPenalty = 0
 			}
-			go NodesGenerator(&NodesInput{
-				lines:           l.newLines,
-				solidLines:      solidLines,
-				sectors:         sectors,
-				sidedefs:        sidedefs,
-				bcontrol:        bcontrol,
-				bgenerator:      bgenerator,
-				nodesChan:       l.NodesChan,
-				pickNodeUser:    config.PickNodeUser,   // global config
-				pickNode:        config.PickNode,       // global config
-				createNodeSS:    config.CreateNodeSS,   // global config
-				pickNodeFactor:  config.PickNodeFactor, // global config
-				diagonalPenalty: diagonalPenalty,
-				minorIsBetter:   config.MinorCmpFunc, // global config
-				linesToIgnore:   linesToIgnore,
+			nodeType := config.NodeType // global config
+			nodesInput := &NodesInput{
+				lines:      l.newLines,
+				solidLines: solidLines,
+				sectors:    sectors,
+				sidedefs:   sidedefs,
+				bcontrol:   bcontrol,
+				bgenerator: bgenerator,
+				nodesChan:  l.NodesChan, // through this we'll get results
 
-				multipart: config.MinorCmpUser == MINOR_CMP_DEPTH, // global config
+				pickNodeUser:      config.PickNodeUser,   // global config
+				pickNodeFactor:    config.PickNodeFactor, // global config
+				diagonalPenalty:   diagonalPenalty,
+				minorIsBetterUser: config.MinorCmpUser, // global config
+				linesToIgnore:     linesToIgnore,
+				nodeType:          nodeType,
 
 				depthArtifacts: config.DepthArtifacts, // global config
-			})
+			}
+			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA {
+
+				go NodesGenerator(nodesInput)
+
+			} else if nodeType == NODETYPE_ZDOOM_COMPRESSED ||
+				nodeType == NODETYPE_ZDOOM_EXTENDED {
+
+				go ZNodesGenerator(nodesInput)
+
+			} else {
+				Log.Panic("Node format not implemented (internal number: %d)\n",
+					nodeType)
+			}
 		}
 	}
 
@@ -374,7 +386,7 @@ func (l *Level) WaitForAndWriteData() {
 			// don't forget to write reject too
 			// Log.Printf("Waiting for REJECT...\n")
 			rejectData := <-l.RejectChan
-			l.wriBus.WriteSliceLump(rejectData, l.RejectLumpIdx, "REJECT")
+			l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT")
 		}
 
 		// Wait for blockmap builder to complete its work, then write results
@@ -382,7 +394,7 @@ func (l *Level) WaitForAndWriteData() {
 			// Log.Printf("Waiting for BLOCKMAP...\n")
 			bmdata := <-l.BlockmapLumpChannel
 			//close(l.BlockmapLumpChannel)
-			l.wriBus.WriteSliceLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP")
+			l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP")
 		}
 	} else {
 		// Parallel wait
@@ -429,12 +441,12 @@ func (l *Level) WaitForAndWriteData() {
 				case BRANCH_REJECT:
 					{
 						rejectData := (recv.Interface()).([]byte)
-						l.wriBus.WriteSliceLump(rejectData, l.RejectLumpIdx, "REJECT")
+						l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT")
 					}
 				case BRANCH_BLOCKMAP:
 					{
 						bmdata := (recv.Interface()).([]byte)
-						l.wriBus.WriteSliceLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP")
+						l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP")
 					}
 				default:
 					{
@@ -455,25 +467,30 @@ func (l *Level) WaitForAndWriteData() {
 }
 
 func (l *Level) WriteNodes(nodesResult NodesResult) {
-	l.wriBus.ConvertAndWriteGenericLump(l.newLines.GetLinedefs(),
+	l.wriBus.SendGenericLump(l.newLines.GetLinedefs(),
 		l.LinedefsLumpIdx, "LINEDEFS") // only vertices renumbering might have happened, nothing else... yet
-	l.wriBus.ConvertAndWriteGenericLump(l.newLines.GetVertices(),
+	l.wriBus.SendGenericLump(l.newLines.GetVertices(),
 		l.VerticesLumpIdx, "VERTEXES")
 	if nodesResult.deepNodes != nil {
 		// write deep nodes
-		l.wriBus.ConvertAndWriteGenericLump(nodesResult.deepSegs,
+		l.wriBus.SendGenericLump(nodesResult.deepSegs,
 			l.SegsLumpIdx, "SEGS")
-		l.wriBus.ConvertAndWriteGenericLump(nodesResult.deepSubsectors,
+		l.wriBus.SendGenericLump(nodesResult.deepSubsectors,
 			l.SSectorsLumpIdx, "SSECTORS")
-		l.wriBus.ConvertAndWriteDeepNodes(nodesResult.deepNodes,
+		l.wriBus.SendDeepNodesLump(nodesResult.deepNodes,
 			l.NodesLumpIdx, "NODES")
+	} else if nodesResult.rawNodes != nil {
+		// write Zdoom extended or compressed nodes
+		l.wriBus.SendRawLump(nil, l.SegsLumpIdx, "SEGS")
+		l.wriBus.SendRawLump(nil, l.SSectorsLumpIdx, "SSECTORS")
+		l.wriBus.SendRawLump(nodesResult.rawNodes, l.NodesLumpIdx, "NODES")
 	} else {
 		// write standard nodes
-		l.wriBus.ConvertAndWriteGenericLump(nodesResult.segs,
+		l.wriBus.SendGenericLump(nodesResult.segs,
 			l.SegsLumpIdx, "SEGS")
-		l.wriBus.ConvertAndWriteGenericLump(nodesResult.subsectors,
+		l.wriBus.SendGenericLump(nodesResult.subsectors,
 			l.SSectorsLumpIdx, "SSECTORS")
-		l.wriBus.ConvertAndWriteGenericLump(nodesResult.nodes,
+		l.wriBus.SendGenericLump(nodesResult.nodes,
 			l.NodesLumpIdx, "NODES")
 	}
 }

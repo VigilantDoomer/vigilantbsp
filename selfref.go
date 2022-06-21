@@ -693,7 +693,7 @@ func (o *Culler) getPerimeter(graph CullerGraph) (bool, []uint16) {
 	d := startY
 	a := c - 1.
 	b := d
-	var e, f int
+	var e, f Number
 	numVertices := 1
 	var angleDif float64
 	lastAngle := .5 * CIRCLE_RADIANS
@@ -721,8 +721,8 @@ func (o *Culler) getPerimeter(graph CullerGraph) (bool, []uint16) {
 				}
 				if angleDif < bestAngleDif {
 					bestAngleDif = angleDif
-					e = graph.vertices[line.endVertex].X
-					f = graph.vertices[line.endVertex].Y
+					e = Number(graph.vertices[line.endVertex].X)
+					f = Number(graph.vertices[line.endVertex].Y)
 					vertId = line.endVertex
 					lineIdx = i
 				}
@@ -742,8 +742,8 @@ func (o *Culler) getPerimeter(graph CullerGraph) (bool, []uint16) {
 				}
 				if angleDif < bestAngleDif {
 					bestAngleDif = angleDif
-					e = graph.vertices[line.startVertex].X
-					f = graph.vertices[line.startVertex].Y
+					e = Number(graph.vertices[line.startVertex].X)
+					f = Number(graph.vertices[line.startVertex].Y)
 					vertId = line.startVertex
 					lineIdx = i
 				}
@@ -763,10 +763,10 @@ func (o *Culler) getPerimeter(graph CullerGraph) (bool, []uint16) {
 			return false, nil
 		}
 		// Search ends when we made full circle around the polygon
-		if numVertices > 1 && c == graph.vertices[pVertices[0]].X &&
-			d == graph.vertices[pVertices[0]].Y &&
-			e == graph.vertices[pVertices[1]].X &&
-			f == graph.vertices[pVertices[1]].Y {
+		if numVertices > 1 && c == Number(graph.vertices[pVertices[0]].X) &&
+			d == Number(graph.vertices[pVertices[0]].Y) &&
+			e == Number(graph.vertices[pVertices[1]].X) &&
+			f == Number(graph.vertices[pVertices[1]].Y) {
 			numVertices--
 			break
 		}
@@ -817,8 +817,8 @@ func (c *Culler) convertLinesToGraph(lines []uint16) CullerGraph {
 			iBegin = len(g.vertices)
 			verticeMap[vBegin] = iBegin
 			g.vertices = append(g.vertices, NodeVertex{
-				X:   X1,
-				Y:   Y1,
+				X:   Number(X1),
+				Y:   Number(Y1),
 				idx: uint32(iBegin), // will be used as graphId; we start with disjoint sets
 			})
 			verticesUse = append(verticesUse, 0)
@@ -828,8 +828,8 @@ func (c *Culler) convertLinesToGraph(lines []uint16) CullerGraph {
 			iEnd = len(g.vertices)
 			verticeMap[vEnd] = iEnd
 			g.vertices = append(g.vertices, NodeVertex{
-				X:   X2,
-				Y:   Y2,
+				X:   Number(X2),
+				Y:   Number(Y2),
 				idx: uint32(iEnd), // will be used as graphId; we start with disjoint sets
 			})
 			verticesUse = append(verticesUse, 0)

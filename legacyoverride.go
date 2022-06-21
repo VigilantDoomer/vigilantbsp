@@ -1,3 +1,6 @@
+// +build go1.16
+
+// NOTE build annotation above MUST be followed by space line
 // Copyright (C) 2022, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
@@ -14,21 +17,16 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
-
-// superblocks_test.go
 package main
 
+// This file compiles only on go 1.16 or newer.
+
 import (
-	"testing"
+	"os"
 )
 
-func TestSuperblocksConsts(t *testing.T) {
-	marginLen := float64(IFFY_LEN * 1.5)
-	if marginLen != float64(MARGIN_LEN) {
-		t.Errorf("Const MARGIN_LEN must be equal to IFFY_LEN * 1.5n \n")
-	}
-	distMultiply := float64(1 << DIST_SHIFT)
-	if 1.0/distMultiply != DIST_EPSILON {
-		t.Errorf("Const DIST_SHIFT out of sync with DIST_EPSILON\n")
-	}
+func init() {
+	// Make legacyport.go CreateTemp point to function already provided in
+	// Go system library
+	CreateTemp = os.CreateTemp
 }

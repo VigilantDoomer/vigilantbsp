@@ -27,12 +27,16 @@ import (
 
 // VigilantBSP: os.CreateTemp was introduced in v1.16. So I had to rip code
 // from Go library to replace it.
-// TODO the replacement is not 100% accurate to the original, and I wish to
-// use os.CreateTemp when available (v1.16+) and only using this implementation
-// when it is not - find out how to do that, maybe build constraints (but not
-// sure)
 
+// Not thread-safe!
 var tempfileRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+// This functional variable will be overridden on Go v1.16 and above in an init
+// section of a conditionally compiled unit legacyoverride.go
+// Warning: this function must NOT be called from any goroutine other than the
+// main one. That is because the source of randomness used inside the fallback
+// version (for targets Go 1.15 and below) of the function is not thread-safe.
+var CreateTemp func(dir, pattern string) (*os.File, error) = Fallback_CreateTemp
 
 var errPatternHasSeparator = errors.New("pattern contains path separator")
 
@@ -44,7 +48,7 @@ var errPatternHasSeparator = errors.New("pattern contains path separator")
 // Multiple programs or goroutines calling CreateTemp simultaneously will not choose the same file.
 // The caller can use the file's Name method to find the pathname of the file.
 // It is the caller's responsibility to remove the file when it is no longer needed.
-func CreateTemp(dir, pattern string) (*os.File, error) { // copyright Go authors
+func Fallback_CreateTemp(dir, pattern string) (*os.File, error) { // copyright Go authors
 	if dir == "" {
 		dir = os.TempDir()
 	}

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 )
 
 type MyLogger struct {
@@ -30,6 +31,8 @@ type MyLogger struct {
 	// same thing written over and over again
 	slots []string
 	segs  bytes.Buffer
+	// Mutex is used to order writes to stdin and stderr, as well as Sync call
+	mu sync.Mutex
 }
 
 func CreateLogger() *MyLogger {
@@ -46,6 +49,8 @@ var errlog = log.New(os.Stderr, "", 0)
 
 // Your generic printf to let user see things
 func (log *MyLogger) Printf(s string, a ...interface{}) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
 	syslog.Printf(s, a...)
 	return
 }
@@ -53,6 +58,8 @@ func (log *MyLogger) Printf(s string, a ...interface{}) {
 // As generic as printf, but writes to stderr instead of stdout
 // Does NOT interrupt execution of the program
 func (log *MyLogger) Error(s string, a ...interface{}) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
 	errlog.Printf(s, a...)
 	return
 }
@@ -62,6 +69,8 @@ func (log *MyLogger) Error(s string, a ...interface{}) {
 // time reading it
 func (log *MyLogger) Verbose(verbosityLevel int, s string, a ...interface{}) {
 	if verbosityLevel <= config.VerbosityLevel {
+		log.mu.Lock()
+		defer log.mu.Unlock()
 		syslog.Printf(s, a...)
 		return
 	}
@@ -70,6 +79,8 @@ func (log *MyLogger) Verbose(verbosityLevel int, s string, a ...interface{}) {
 // Panicking is not a good thing, but at least we can now use formatted printing
 // for it
 func (log *MyLogger) Panic(s string, a ...interface{}) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
 	panic(fmt.Sprintf(s, a...))
 }
 
@@ -77,6 +88,8 @@ func (log *MyLogger) Panic(s string, a ...interface{}) {
 // Used when need to debug something in nodes builder but it's worthless to
 // repeat if it concerns the same thing
 func (log *MyLogger) Push(slotNumber int, s string, a ...interface{}) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
 	for slotNumber >= len(log.slots) {
 		log.slots = append(log.slots, "")
 	}
@@ -87,6 +100,8 @@ func (log *MyLogger) Push(slotNumber int, s string, a ...interface{}) {
 // written to begin with. If you don't call it, you might as well never write
 // anything to slots (it's usually not the stuff to go into release, mind it)
 func (log *MyLogger) Flush() {
+	log.mu.Lock()
+	defer log.mu.Unlock()
 	for _, slot := range log.slots {
 		syslog.Printf(slot)
 	}
@@ -117,4 +132,10 @@ func (log *MyLogger) DumpSegs(ts *NodeSeg) {
 
 func (log *MyLogger) GetDumpedSegs() string {
 	return log.segs.String()
+}
+
+// Sync is used to wait until all messages are written to the output
+func (log *MyLogger) Sync() {
+	log.mu.Lock()
+	log.mu.Unlock()
 }

@@ -267,7 +267,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 				// !!! 32-bit version of BSP v5.2 had overflow here on big
 				// lines at a formidable distance. Must use 64-bit math here!
 				// l*a may be too big for int32! -- VigilantDoomer
-				d := int((int64(l) * int64(a)) / (int64(a) - int64(b)))
+				d := Number((WideNumber(l) * WideNumber(a)) / (WideNumber(a) - WideNumber(b)))
 				if d >= 2 {
 					// If the linedef associated with this seg has a sector tag >= 900,
 					// treat it as precious; i.e. don't split it unless all other options
@@ -336,7 +336,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 	return false
 }
 
-func checkPorn1(l, d, cpdx, ppdx, cpdy, ppdy, b int) bool {
+func checkPorn1(l, d, cpdx, ppdx, cpdy, ppdy, b Number) bool {
 	if (l - d) < 2 {
 		return cpdx*ppdx+cpdy*ppdy < 0
 	} else {
@@ -411,7 +411,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		previousPart = part // used for check above
 		cost := 0
 		tot := 0
-		slen := 0 // length of partition that is incidental with segs
+		slen := Number(0) // length of partition that is incidental with segs
 		diff := cnt
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
@@ -524,7 +524,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // If returns true, the partition &part must be skipped, because it produced
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
-	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *int) bool {
+	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -562,7 +562,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 				// !!! 32-bit version of BSP v5.2 had overflow here on big
 				// lines at a formidable distance. Must use 64-bit math here!
 				// l*a may be too big for int32! -- VigilantDoomer
-				d := int((int64(l) * int64(a)) / (int64(a) - int64(b)))
+				d := Number((WideNumber(l) * WideNumber(a)) / (WideNumber(a) - WideNumber(b)))
 				if d >= 2 {
 					// If the linedef associated with this seg has a sector tag >= 900,
 					// treat it as precious; i.e. don't split it unless all other options
@@ -700,7 +700,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			Unmerged:      0,
 		}
 		tot := 0
-		slen := 0 // length of partition that is incidental with segs
+		slen := Number(0) // length of partition that is incidental with segs
 		diff := cnt
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
@@ -938,7 +938,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // If returns true, the partition &part must be skipped, because it produced
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
-	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *int,
+	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number,
 	hasLeft *bool, minors *MinorCosts) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
@@ -978,7 +978,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 				// !!! 32-bit version of BSP v5.2 had overflow here on big
 				// lines at a formidable distance. Must use 64-bit math here!
 				// l*a may be too big for int32! -- VigilantDoomer
-				d := int((int64(l) * int64(a)) / (int64(a) - int64(b)))
+				d := Number((WideNumber(l) * WideNumber(a)) / (WideNumber(a) - WideNumber(b)))
 				if d >= 2 {
 					// If the linedef associated with this seg has a sector tag >= 900,
 					// treat it as precious; i.e. don't split it unless all other options
@@ -1133,12 +1133,12 @@ func VigilantGuard_IsBadPartition(part, ts *NodeSeg, cnt int) bool {
 // void space NOT excluded, and the computation is itself not accurate, it's
 // a hacky optimization to avoid taking square root (Lee Killough did it this
 // way)
-func GetPartitionLength_LegacyWay(part *NodeSeg, bbox *NodeBounds) int {
-	var l int          // length of partition line
+func GetPartitionLength_LegacyWay(part *NodeSeg, bbox *NodeBounds) Number {
+	var l Number       // length of partition line
 	if part.pdx == 0 { // vertical line
-		l = bbox.Ymax - bbox.Ymin
+		l = Number(bbox.Ymax - bbox.Ymin)
 	} else if part.pdy == 0 { // horizontal line
-		l = bbox.Xmax - bbox.Xmin
+		l = Number(bbox.Xmax - bbox.Xmin)
 	} else { // diagonal line
 		t1 := (float64(part.psx) - float64(bbox.Xmax)) / float64(part.pdx)
 		t2 := (float64(part.psx) - float64(bbox.Xmin)) / float64(part.pdx)
@@ -1156,19 +1156,19 @@ func GetPartitionLength_LegacyWay(part *NodeSeg, bbox *NodeBounds) int {
 		if t2 < t4 {
 			t2 = t4
 		}
-		l = int((t1 - t2) * float64(part.len))
+		l = Number((t1 - t2) * float64(part.len))
 	}
 	return l
 }
 
 // Returns full partition line length within the bounds, not excluding void
 // space, but using floating point math for accuracy
-func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) int {
-	var l int          // length of partition line
+func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) Number {
+	var l Number       // length of partition line
 	if part.pdx == 0 { // vertical line
-		l = bbox.Ymax - bbox.Ymin
+		l = Number(bbox.Ymax - bbox.Ymin)
 	} else if part.pdy == 0 { // horizontal line
-		l = bbox.Xmax - bbox.Xmin
+		l = Number(bbox.Xmax - bbox.Xmin)
 	} else { // diagonal line
 		var c IntersectionContext
 		partSegCoords := part.toVertexPairC()
@@ -1186,14 +1186,14 @@ func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) int {
 		}
 		fullXDiff := float64(contextStart.v.X) - float64(contextEnd.v.X)
 		fullYDiff := float64(contextEnd.v.Y) - float64(contextStart.v.Y)
-		l = int(math.Round(math.Sqrt(fullXDiff*fullXDiff + fullYDiff*fullYDiff)))
+		l = Number(math.Round(math.Sqrt(fullXDiff*fullXDiff + fullYDiff*fullYDiff)))
 	}
 	return l
 }
 
 // Return partition line length within the bounds AND without any parts that
 // go through void space. (Not exactly an easy thing to do)
-func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBounds) int {
+func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBounds) Number {
 	// An idea suggested by Lee Killough, but one that he didn't implement:
 	// discard segments of the partition line that go through void space when
 	// computing the ratio of its incidence with segs.
@@ -1269,7 +1269,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 	}
 
 	// At least it is possible to get here
-	L := 0
+	L := Number(0)
 	for i := hitStart; i <= hitStop; i++ {
 		thisStart := nonVoid[i].StartVertex
 		thisEnd := nonVoid[i].EndVertex
@@ -1293,7 +1293,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		} else { // only part of current interval goes in
 			dx := float64(thisEnd.X - thisStart.X)
 			dy := float64(thisEnd.Y - thisStart.Y)
-			L = L + int(math.Sqrt(dx*dx+dy*dy))
+			L = L + Number(math.Sqrt(dx*dx+dy*dy))
 		}
 	}
 	return L
@@ -1305,8 +1305,8 @@ func subPickNode_fast(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock, cnt int) *NodeSeg {
 	var previousPart *NodeSeg // keep track of previous partition - test only one seg per partner pair
 	var bestH, bestV *NodeSeg
-	oldDistH := -1
-	oldDistV := -1
+	oldDistH := Number(-1)
+	oldDistV := Number(-1)
 
 	midX := (bbox.Xmax + bbox.Xmin) >> 1
 	midY := (bbox.Ymax + bbox.Ymin) >> 1
@@ -1326,9 +1326,9 @@ func subPickNode_fast(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		if part.pdy == 0 {
 			if bestH == nil {
 				bestH = part
-				oldDistH = Abs(part.psy - midY)
+				oldDistH = (part.psy - Number(midY)).Abs()
 			} else {
-				newDistH := Abs(part.psy - midY)
+				newDistH := (part.psy - Number(midY)).Abs()
 				if newDistH < oldDistH {
 					bestH = part
 					oldDistH = newDistH
@@ -1337,9 +1337,9 @@ func subPickNode_fast(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		} else if part.pdx == 0 {
 			if bestV == nil {
 				bestV = part
-				oldDistV = Abs(part.psx - midX)
+				oldDistV = (part.psx - Number(midX)).Abs()
 			} else {
-				newDistV := Abs(part.psx - midX)
+				newDistV := (part.psx - Number(midX)).Abs()
 				if newDistV < oldDistV {
 					bestV = part
 					oldDistV = newDistV
@@ -1448,7 +1448,7 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 				// !!! 32-bit version of BSP v5.2 had overflow here on big
 				// lines at a formidable distance. Must use 64-bit math here!
 				// l*a may be too big for int32! -- VigilantDoomer
-				d := int((int64(l) * int64(a)) / (int64(a) - int64(b)))
+				d := Number((WideNumber(l) * WideNumber(a)) / (WideNumber(a) - WideNumber(b)))
 				if d >= 2 {
 					// If the linedef associated with this seg has a sector tag >= 900,
 					// treat it as precious; i.e. don't split it unless all other options

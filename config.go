@@ -139,20 +139,12 @@ const (
 	MINOR_CMP_DEPTH
 )
 
-// PickNodeFunc is a signature of all PickNode* function variants (see
-// picknode.go)
-// Yes, I consciously use a function reference stored in structs in lieu of
-// interface - interfaces are "fat", function references should work faster
-type PickNodeFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeSeg
-
-// Some node partitioning algos implement separate CreateNode function for the
-// the case of partitioning non-convex node with only one sector. Thus this
-// CreateNodeSSFunc exists.
-// SS stands for "single sector". In case you worried.
-type CreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeInProcess
-
-// Which secondary metric to use
-type MinorIsBetterFunc func(current, prev MinorCosts) bool
+const (
+	NODETYPE_VANILLA = iota
+	NODETYPE_DEEP
+	NODETYPE_ZDOOM_EXTENDED
+	NODETYPE_ZDOOM_COMPRESSED
+)
 
 type ProgramConfig struct {
 	InputFileName          string
@@ -176,12 +168,9 @@ type ProgramConfig struct {
 	// Function references can not be compared in Go (even for equality).
 	// Thus PickNodeUser is an actual config option user might modify,
 	// but PickNode and CreateNodeSS aren't
-	PickNodeUser int              // <- This is the actual config option
-	PickNode     PickNodeFunc     // don't assign directly! Derived from PickNodeUser
-	CreateNodeSS CreateNodeSSFunc // don't assign directly! Derived from PickNodeUser
+	PickNodeUser int // <- This is the actual config option
 	// Secondary metric for picking a partition
-	MinorCmpUser int               // <- This is the actual config option
-	MinorCmpFunc MinorIsBetterFunc // don't assign directly! Derived from MinorCmpUser and PickNodeUser
+	MinorCmpUser int // <- This is the actual config option
 	//
 	BlockmapSearchAbortion int    // when trying multiple offsets, finish the search for a good blockmap as soon as it fits the limit
 	UseGraphsForLOS        bool   // use graphs for LOS calculations (build reject faster)
@@ -191,7 +180,7 @@ type ProgramConfig struct {
 	CullInvisibleSegs      int    // do not create segs for linedefs that will be invisible anyway
 	PenalizeSectorSplits   bool   // Another options which may or may not help with visplanes. Vigilant visplane algorithm only
 	RejectSelfRefMode      int    // what measures are taken for self-referencing sector support in reject
-	DeepNodes              bool   // use deep format for nodes. Prboom-Plus v2.5.1.5 supports these fine.
+	NodeType               int    // there are various BSP tree formats beside vanilla (Deep, Zdoom extended or compressed nodes). Prboom-Plus v2.5.1.5 supports these fine, except for compressed - try PrBoom-plus v2.6.2 for those
 	PersistThroughInsanity bool   // when computing partition node length in PickNode_visplaneVigilant, ignore "sanity check failed" if it occurs and construct non-void intervals anyway
 	// Rebuilding options allow to disable rebuilding some parts of level.
 	// For reject, the "disable rebuilding" is specified through Reject field
@@ -214,68 +203,6 @@ type ProgramConfig struct {
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
 
 var config *ProgramConfig // global variable that will be accessed from other threads too
-
-func PickNodeFuncFromOption(userOption int) PickNodeFunc {
-	switch userOption {
-	case PICKNODE_TRADITIONAL:
-		{
-			return PickNode_traditional
-		}
-	case PICKNODE_VISPLANE:
-		{
-			return PickNode_visplaneKillough
-		}
-	case PICKNODE_VISPLANE_ADV:
-		{
-			return PickNode_visplaneVigilant
-		}
-	case PICKNODE_MAELSTROM:
-		{
-			return PickNode_maelstrom
-		}
-	default:
-		{
-			panic("Invalid argument")
-		}
-	}
-}
-
-func CreateNodeSSFromOption(userOption int) CreateNodeSSFunc {
-	if userOption == PICKNODE_VISPLANE_ADV {
-		return CreateNodeForSingleSector
-	}
-	return CreateNode
-}
-
-func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
-	switch userOption {
-	case MINOR_CMP_NOOP:
-		{
-			return minorIsBetter_Dummy
-		}
-	case MINOR_CMP_SEGS:
-		{
-			return minorIsBetter_Segs
-		}
-	case MINOR_CMP_SECTORS:
-		{
-			return minorIsBetter_Sectors
-		}
-	case MINOR_CMP_BALANCE:
-		{
-			return minorIsBetter_Balanced
-		}
-	case MINOR_CMP_DEPTH:
-		{
-			// the decisive minor comparison is done elsewhere
-			return minorIsBetter_Always
-		}
-	default:
-		{
-			panic("Invalid argument")
-		}
-	}
-}
 
 func init() {
 	// Initialize with defaults
@@ -309,7 +236,7 @@ func init() {
 		CullInvisibleSegs:      CULL_SEGS_DONT,
 		PenalizeSectorSplits:   true,
 		RejectSelfRefMode:      REJ_SELFREF_TRIVIAL,
-		DeepNodes:              false,
+		NodeType:               NODETYPE_VANILLA,
 		PersistThroughInsanity: true,
 		RebuildNodes:           true,
 		RebuildBlockmap:        true,
@@ -345,10 +272,6 @@ func Configure() {
 		PrintHelp()
 		os.Exit(0)
 	}
-	// Set derivative options in config
-	config.PickNode = PickNodeFuncFromOption(config.PickNodeUser)
-	config.CreateNodeSS = CreateNodeSSFromOption(config.PickNodeUser)
-	config.MinorCmpFunc = MinorCmpFuncFromOption(config.MinorCmpUser)
 }
 
 func PrintHelp() {

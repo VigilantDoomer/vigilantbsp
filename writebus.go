@@ -26,6 +26,7 @@ const (
 	WRI_TYPE_BYTES = iota
 	WRI_TYPE_INTERFACE
 	WRI_TYPE_DEEPNODES
+	WRI_TYPE_SYNC
 )
 
 type WriteBusRequest struct {
@@ -47,6 +48,7 @@ type WriteBusControl struct {
 	bus      *WriteBus
 	ch       chan<- WriteBusRequest
 	finisher <-chan bool
+	sync     <-chan bool
 }
 
 func StartWriteBus(fout *os.File, le []LumpEntry, curPos uint32) *WriteBusControl {
@@ -57,15 +59,18 @@ func StartWriteBus(fout *os.File, le []LumpEntry, curPos uint32) *WriteBusContro
 	}
 	ch := make(chan WriteBusRequest)
 	finisher := make(chan bool)
-	go bus.WriteBusLoop(ch, finisher)
+	sync := make(chan bool)
+	go bus.WriteBusLoop(ch, finisher, sync)
 	return &WriteBusControl{
 		bus:      bus,
 		ch:       ch,
 		finisher: finisher,
+		sync:     sync,
 	}
 }
 
-func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool) {
+func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool,
+	chSync chan<- bool) {
 	for req := range ch {
 		switch req.tpeIndex {
 		case WRI_TYPE_BYTES:
@@ -83,6 +88,11 @@ func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool)
 				ConvertAndWriteDeepNodes(req.deepData, &(b.curPos), b.fout,
 					b.le, req.lumpIdx, req.lumpName)
 			}
+		case WRI_TYPE_SYNC:
+			{
+				Log.Sync()
+				chSync <- true
+			}
 		default:
 			{
 				Log.Error("Unknown request at WriteBusLoop (%d)\n", req.tpeIndex)
@@ -92,10 +102,12 @@ func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool)
 	chFinish <- true
 }
 
-// TODO refactor method names to be different from function names in lumpwrite.go
-// Cause confused myself already
+// Asynchronous calls that instruct bus to write lump data, stored in varied
+// forms before writing
 
-func (c *WriteBusControl) WriteSliceLump(data []byte, lumpIdx int, s string) {
+// Sends lump to bus to write
+// Lump data is stored in byte form, no conversion needed
+func (c *WriteBusControl) SendRawLump(data []byte, lumpIdx int, s string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_BYTES,
 		bData:    data,
@@ -105,7 +117,10 @@ func (c *WriteBusControl) WriteSliceLump(data []byte, lumpIdx int, s string) {
 	c.ch <- envl
 }
 
-func (c *WriteBusControl) ConvertAndWriteGenericLump(data interface{},
+// Sends lump to bus to write
+// Lump data is represented as a structure or an array(slice) of something
+// different than bytes - conversion to respective byte order must be applied
+func (c *WriteBusControl) SendGenericLump(data interface{},
 	lumpIdx int, s string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_INTERFACE,
@@ -116,7 +131,10 @@ func (c *WriteBusControl) ConvertAndWriteGenericLump(data interface{},
 	c.ch <- envl
 }
 
-func (c *WriteBusControl) ConvertAndWriteDeepNodes(data []DeepNode, lumpIdx int,
+// Sends lump to bus to write
+// A DeepNodes signature needs to be prepended to data, and data needs to be
+// converted to a proper byte order
+func (c *WriteBusControl) SendDeepNodesLump(data []DeepNode, lumpIdx int,
 	s string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_DEEPNODES,
@@ -130,4 +148,14 @@ func (c *WriteBusControl) ConvertAndWriteDeepNodes(data []DeepNode, lumpIdx int,
 func (c *WriteBusControl) Shutdown() {
 	close(c.ch)
 	<-c.finisher
+}
+
+// This service call is needed to prevent actions pertaining to the previous
+// level being logged to output after processing of new level is announced
+func (c *WriteBusControl) Sync() {
+	envl := WriteBusRequest{
+		tpeIndex: WRI_TYPE_SYNC,
+	}
+	c.ch <- envl
+	<-c.sync
 }

@@ -896,7 +896,7 @@ func main() {
 		if le[idx].Size != 0 {
 			tmpBuf := make([]byte, le[idx].Size, le[idx].Size)
 			f.ReadAt(tmpBuf, int64(le[idx].FilePos))
-			wriBus.WriteSliceLump(tmpBuf, idx, "")
+			wriBus.SendRawLump(tmpBuf, idx, "")
 		} else if (idx == 0) && ZeroOffsetFirstLump {
 			// first lump has zero size, if we set zero offset we can steal some bytes
 			// for our zero byte pool for empty zero-filled reject lumps. Do it.
@@ -909,6 +909,7 @@ func main() {
 			// is where all stuff goes
 			lvl.DoLevel(le, idx, rejectsize, troll, action, rejectStart,
 				f, wriBus, &mainFileControl)
+			wriBus.Sync() // make sure all that is to be logged is there before new level is processed
 		}
 		action = action.Next
 	}

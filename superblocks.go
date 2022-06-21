@@ -107,13 +107,13 @@ func (s *Superblock) AddSegToSuper(seg *NodeSeg) {
 		if block.x2-block.x1 >= block.y2-block.y1 {
 			// block is wider than it is high, or square
 
-			p1 = seg.StartVertex.X >= xMid
-			p2 = seg.EndVertex.X >= xMid
+			p1 = seg.StartVertex.X >= Number(xMid)
+			p2 = seg.EndVertex.X >= Number(xMid)
 		} else {
 			// block is higher than it is wide
 
-			p1 = seg.StartVertex.Y >= yMid
-			p2 = seg.EndVertex.Y >= yMid
+			p1 = seg.StartVertex.Y >= Number(yMid)
+			p2 = seg.EndVertex.Y >= Number(yMid)
 		}
 
 		if p1 && p2 {
@@ -270,6 +270,7 @@ func Int64AbsAndSign(x int64) (int64, bool) {
 }
 
 // Returns -1 for left, +1 for right, or 0 for intersect.
+// Replaced with different implementation for Zdoom nodes
 func PointOnLineSide(part *NodeSeg, x, y int) int {
 	perp := UtilPerpDist(part, x, y)
 	ab, sgn := Int64AbsAndSign(perp)
@@ -294,12 +295,12 @@ func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
 
 	// handle simple cases (vertical & horizontal lines)
 	if part.pdx == 0 {
-		if x1 > part.psx {
+		if Number(x1) > part.psx {
 			p1 = +1
 		} else {
 			p1 = -1
 		}
-		if x2 > part.psx {
+		if Number(x2) > part.psx {
 			p2 = +1
 		} else {
 			p2 = -1
@@ -309,12 +310,12 @@ func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
 			p2 = -p2
 		}
 	} else if part.pdy == 0 {
-		if y1 < part.psy {
+		if Number(y1) < part.psy {
 			p1 = +1
 		} else {
 			p1 = -1
 		}
-		if y2 < part.psy {
+		if Number(y2) < part.psy {
 			p2 = +1
 		} else {
 			p2 = -1

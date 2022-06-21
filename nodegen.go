@@ -18,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"strconv"
 	"time"
@@ -63,23 +64,40 @@ const SSECTOR_DEEP_MASK = 0x80000000
 
 // Passed to the nodes builder goroutine
 type NodesInput struct {
-	lines           WriteableLines
-	solidLines      AbstractLines // when a solid-only blockmap is needed to detect void space for more accurate node pick quality weighting
-	sectors         []Sector
-	sidedefs        []Sidedef
-	bcontrol        chan BconRequest
-	bgenerator      chan BgenRequest
-	nodesChan       chan<- NodesResult
-	pickNodeUser    int
-	pickNode        PickNodeFunc
-	createNodeSS    CreateNodeSSFunc // SS stands for "single sector". In case you worried.
-	diagonalPenalty int
-	pickNodeFactor  int
-	minorIsBetter   MinorIsBetterFunc
-	linesToIgnore   []bool // dummy linedefs such as for scrolling
-	multipart       bool   // whether multiple partition with same primary costs are considered (for depth evaluation)
-	depthArtifacts  bool
+	lines             WriteableLines
+	solidLines        AbstractLines // when a solid-only blockmap is needed to detect void space for more accurate node pick quality weighting
+	sectors           []Sector
+	sidedefs          []Sidedef
+	bcontrol          chan BconRequest
+	bgenerator        chan BgenRequest
+	nodesChan         chan<- NodesResult
+	pickNodeUser      int
+	diagonalPenalty   int
+	pickNodeFactor    int
+	minorIsBetterUser int
+	linesToIgnore     []bool // dummy linedefs such as for scrolling
+	depthArtifacts    bool
+	nodeType          int
 }
+
+type Number int
+
+type WideNumber int64
+
+// PickNodeFunc is a signature of all PickNode* function variants (see
+// picknode.go)
+// Yes, I consciously use a function reference stored in structs in lieu of
+// interface - interfaces are "fat", function references should work faster
+type PickNodeFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeSeg
+
+// Some node partitioning algos implement separate CreateNode function for the
+// the case of partitioning non-convex node with only one sector. Thus this
+// CreateNodeSSFunc exists.
+// SS stands for "single sector". In case you worried.
+type CreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeInProcess
+
+// Which secondary metric to use
+type MinorIsBetterFunc func(current, prev MinorCosts) bool
 
 // Returned from nodes builder goroutine through a channel
 type NodesResult struct {
@@ -112,18 +130,18 @@ type NodesWork struct {
 	nodeDx          int
 	nodeDy          int
 	totals          *NodesTotals
-	intVertices     []NodeVertex
+	vertices        []NodeVertex
 	nodes           []Node
 	nreverse        uint32
 	segAliasObj     *SegAliasHolder
 	pickNode        PickNodeFunc
-	createNodeSS    CreateNodeSSFunc
-	sectorHits      []uint8       // used by PickNode_Visplane* variants, keeps track of sectors on both sides
-	incidental      []VertexPairC // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
+	createNodeSS    CreateNodeSSFunc // SS stands for "single sector". In case you worried.
+	sectorHits      []uint8          // used by PickNode_Visplane* variants, keeps track of sectors on both sides
+	incidental      []VertexPairC    // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
 	solidMap        *Blockmap
 	nonVoidCache    map[int]NonVoidPerAlias
 	blockity        *BlockityLines
-	deepNodes       []DeepNode
+	deepNodes       []DeepNode // also used for Zdoom (extended/compressed) nodes while in production
 	deepSubsectors  []DeepSubSector
 	deepSegs        []DeepSeg
 	SsectorMask     uint32
@@ -132,13 +150,19 @@ type NodesWork struct {
 	pickNodeFactor  int
 	pickNodeUser    int
 	minorIsBetter   MinorIsBetterFunc
-	multipart       bool
+	multipart       bool // whether multiple partition with same primary costs are considered (for depth evaluation)
 	depthArtifacts  bool
+	nodeType        int
+	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
+	zdoomVertexHeader *ZdoomNode_VertexHeader
+	zdoomVertices     []ZdoomNode_Vertex
+	zdoomSubsectors   []uint32
+	zdoomSegs         []ZdoomNode_Seg
 }
 
 type NodeVertex struct {
-	X   int
-	Y   int
+	X   Number
+	Y   Number
 	idx uint32
 }
 
@@ -158,9 +182,9 @@ type NodeSeg struct {
 	Offset             uint16 // distance along linedef to start of seg
 	next               *NodeSeg
 	partner            *NodeSeg
-	psx, psy, pex, pey int // start, end coordinates
-	pdx, pdy, perp     int // used in intersection calculations
-	len                int
+	psx, psy, pex, pey Number // start, end coordinates
+	pdx, pdy, perp     Number // used in intersection calculations
+	len                Number
 	sector             uint16
 	secEquiv           uint16 // only initialized if sectorEquivalencies are computed
 	alias              int
@@ -182,9 +206,9 @@ type NodeInProcess struct {
 
 // DoLinesIntersect and ComputeIntersection use this
 type IntersectionContext struct {
-	psx, psy, pex, pey int // start, end of partition coordinates
-	pdx, pdy           int // used in intersection calculations
-	lex, lsx, ley, lsy int // - same for checking line
+	psx, psy, pex, pey Number // start, end of partition coordinates
+	pdx, pdy           Number // used in intersection calculations
+	lex, lsx, ley, lsy Number // - same for checking line
 }
 
 const ( // BAMAction "enum"
@@ -217,7 +241,8 @@ func NodesGenerator(input *NodesInput) {
 	input.lines.DetectPolyobjects()
 
 	allSegs, intVertices := createSegs(input.lines, input.sidedefs,
-		input.linesToIgnore)
+		input.linesToIgnore, input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
+			input.nodeType == NODETYPE_ZDOOM_COMPRESSED)
 	if len(allSegs) == 0 {
 		Log.Error("Failed to create any SEGs (BAD). Quitting (%s)\n.", time.Since(start))
 		// First respond to solid blocks control goroutine that we won't serve
@@ -232,7 +257,8 @@ func NodesGenerator(input *NodesInput) {
 	}
 
 	ssectorMask := uint32(SSECTOR_NORMAL_MASK)
-	if config.DeepNodes {
+	// Deep, Zdoom extended and Zdoom compressed use the same convention
+	if input.nodeType != NODETYPE_VANILLA {
 		ssectorMask = SSECTOR_DEEP_MASK
 	}
 
@@ -289,10 +315,10 @@ func NodesGenerator(input *NodesInput) {
 			maxSegCountInSubsector: 0,
 			segSplits:              0,
 		},
-		intVertices:     intVertices,
+		vertices:        intVertices,
 		segAliasObj:     new(SegAliasHolder),
-		pickNode:        input.pickNode,
-		createNodeSS:    input.createNodeSS,
+		pickNode:        PickNodeFuncFromOption(input.pickNodeUser),
+		createNodeSS:    CreateNodeSSFromOption(input.pickNodeUser),
 		sectorHits:      make([]byte, whichLen),
 		incidental:      make([]VertexPairC, 0),
 		solidMap:        solidMap,
@@ -302,9 +328,16 @@ func NodesGenerator(input *NodesInput) {
 		diagonalPenalty: input.diagonalPenalty,
 		pickNodeFactor:  input.pickNodeFactor,
 		pickNodeUser:    input.pickNodeUser,
-		minorIsBetter:   input.minorIsBetter,
-		multipart:       input.multipart,
+		minorIsBetter:   MinorCmpFuncFromOption(input.minorIsBetterUser),
+		multipart:       input.minorIsBetterUser == MINOR_CMP_DEPTH,
 		depthArtifacts:  input.depthArtifacts,
+		nodeType:        input.nodeType,
+	}
+	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
+		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
+		workData.zdoomVertexHeader = &ZdoomNode_VertexHeader{
+			ReusedOriginalVertices: uint32(input.lines.Len()),
+		}
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
@@ -340,10 +373,11 @@ func NodesGenerator(input *NodesInput) {
 		hRight = HeightOfNodes(rootNode.nextR) + 1
 	}
 	Log.Printf("Height of left and right subtrees = (%d,%d)\n", hLeft, hRight)
-	if config.DeepNodes { // reference to global: config
-		workData.reverseDeepNodes(rootNode)
-	} else {
+	if input.nodeType == NODETYPE_VANILLA {
 		workData.reverseNodes(rootNode)
+	} else {
+		// Same node structure for Deep, Extended and Compressed non-GL nodes
+		workData.reverseDeepNodes(rootNode)
 	}
 	Log.Printf("Max seg count in subsector: %d\n", workData.totals.maxSegCountInSubsector)
 
@@ -360,18 +394,120 @@ func NodesGenerator(input *NodesInput) {
 	// TODO for vanilla limits (when in not deep nodes mode of course) - try to
 	// move segs so that FirstSeg is <= 32767
 
-	Log.Printf("Nodes took %s\n", time.Since(start))
-	if config.DeepNodes {
+	if input.nodeType == NODETYPE_DEEP {
 		input.nodesChan <- NodesResult{
 			deepNodes:      workData.deepNodes,
 			deepSegs:       workData.deepSegs,
 			deepSubsectors: workData.deepSubsectors,
 		}
-	} else {
+	} else if input.nodeType == NODETYPE_VANILLA {
 		input.nodesChan <- NodesResult{
 			nodes:      workData.nodes,
 			segs:       workData.segs,
 			subsectors: workData.subsectors,
+		}
+	} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
+		if workData.deepNodes == nil {
+			// Was emptied for whatever reason (number of subsectors too
+			// large even for this format?! see check somewhere above)
+			input.nodesChan <- NodesResult{}
+		} else {
+			// Ok, so we need to write whole bytestream. And we will allocate
+			// it all in memory for now, for simplicity
+			input.nodesChan <- NodesResult{
+				rawNodes: workData.getZdoomNodesBytes(),
+			}
+		}
+	}
+	Log.Printf("Nodes took %s\n", time.Since(start))
+}
+
+func RoundToPrecision(n float64) Number {
+	if n < 0 {
+		return Number(-1 * int(.5-n))
+	} else {
+		return Number(int(.5 + n))
+	}
+}
+
+func (n Number) Abs() Number {
+	if n < Number(0) {
+		return -n
+	} else if n > Number(0) {
+		return n
+	} else {
+		return 0
+	}
+}
+
+func (n Number) Ceil() int {
+	return int(n)
+}
+
+// On Number, this truncates x. The value of n is ignored (is used only
+// to determine type of truncation). See also zdefs.go!ZNumber.Trunc
+func (n Number) Trunc(x float64) float64 {
+	return float64(int64(x))
+}
+
+func PickNodeFuncFromOption(userOption int) PickNodeFunc {
+	switch userOption {
+	case PICKNODE_TRADITIONAL:
+		{
+			return PickNode_traditional
+		}
+	case PICKNODE_VISPLANE:
+		{
+			return PickNode_visplaneKillough
+		}
+	case PICKNODE_VISPLANE_ADV:
+		{
+			return PickNode_visplaneVigilant
+		}
+	case PICKNODE_MAELSTROM:
+		{
+			return PickNode_maelstrom
+		}
+	default:
+		{
+			panic("Invalid argument")
+		}
+	}
+}
+
+func CreateNodeSSFromOption(userOption int) CreateNodeSSFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return CreateNodeForSingleSector
+	}
+	return CreateNode
+}
+
+func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
+	switch userOption {
+	case MINOR_CMP_NOOP:
+		{
+			return minorIsBetter_Dummy
+		}
+	case MINOR_CMP_SEGS:
+		{
+			return minorIsBetter_Segs
+		}
+	case MINOR_CMP_SECTORS:
+		{
+			return minorIsBetter_Sectors
+		}
+	case MINOR_CMP_BALANCE:
+		{
+			return minorIsBetter_Balanced
+		}
+	case MINOR_CMP_DEPTH:
+		{
+			// the decisive minor comparison is done elsewhere
+			return minorIsBetter_Always
+		}
+	default:
+		{
+			panic("Invalid argument")
 		}
 	}
 }
@@ -386,8 +522,9 @@ func (w *NodesWork) emptyNodesLumps() {
 }
 
 func (w *NodesWork) tooManySegs() bool {
-	// Currently only normal nodes are checked, not deep nodes
-	if w.segs == nil { // assume no overflow is possible if deep ones are used instead
+	// Currently only normal nodes are checked, not deep nodes or extended nodes
+	// (w.segs expected to be nil for both of those)
+	if w.segs == nil { // assume no overflow is possible for advanced node formats
 		return false
 	}
 	l := len(w.subsectors)
@@ -413,7 +550,7 @@ func (w *NodesWork) tooManySegs() bool {
 // either (handled by culler)
 // 5. Fast/remote scroller effect dummy lines (linesToIgnore[i] == true)
 func createSegs(lines WriteableLines, sidedefs []Sidedef,
-	linesToIgnore []bool) ([]*NodeSeg, []NodeVertex) {
+	linesToIgnore []bool, extNode bool) ([]*NodeSeg, []NodeVertex) {
 	res := make([]*NodeSeg, 0, 65536)
 	var rootCs, lastCs *NodeSeg
 	// This is responsible for handling for which lines we don't create segs,
@@ -465,7 +602,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 			firstSdef := lines.GetSidedefIndex(i, true)
 			secondSdef := lines.GetSidedefIndex(i, false)
 			addSegsPerLine(myVertices, i, lines, vidx1, vidx2, firstSdef, secondSdef,
-				&rootCs, &lastCs, sidedefs, &res)
+				&rootCs, &lastCs, sidedefs, &res, extNode)
 		}
 
 	}
@@ -493,7 +630,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 		}
 		// We need to add segs for this line after all.
 		addSegsPerLine(myVertices, line, lines, vidx1, vidx2, firstSdef, secondSdef,
-			&rootCs, &lastCs, sidedefs, &res)
+			&rootCs, &lastCs, sidedefs, &res, extNode)
 	}
 
 	return res, myVertices
@@ -501,7 +638,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 
 func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vidx1, vidx2 int,
 	firstSdef, secondSdef uint16, rootCs **NodeSeg, lastCs **NodeSeg, sidedefs []Sidedef,
-	res *[]*NodeSeg) {
+	res *[]*NodeSeg, extNode bool) {
 	var lcs, rcs *NodeSeg
 	horizon := lines.IsHorizonEffect(i)
 	action := lines.GetAction(i)
@@ -547,6 +684,13 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 	} else if uint16(lines.GetFlags(i))&LF_TWOSIDED != 0 {
 		Log.Printf("Warning: linedef %d is marked as 2-sided but doesn't have back sidedef\n", i)
 	}
+	if extNode && (horizon || bamEffect.Action != BAM_NOSPECIAL) {
+		// Internally, angle is still computed with all the effects. But with
+		// or without the effect, angle is not stored in Zdoom nodes format
+		// because that format does not provide any field for it
+		Log.Printf("Warning: linedef %d has BAM or horizon effect specified, but it cannot be supported in Zdoom nodes format and so will be ignored.\n",
+			i)
+	}
 	if lcs != nil && rcs != nil {
 		// Partner segs as used here are optimization technique to speed up
 		// PickNode_XXX subroutines, and have nothing to do with GL meaning of
@@ -562,8 +706,8 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 
 func storeNodeVertex(vs []NodeVertex, x, y int, idx uint32) {
 	vs[idx] = NodeVertex{
-		X:   x,
-		Y:   y,
+		X:   Number(x),
+		Y:   Number(y),
 		idx: idx,
 	}
 }
@@ -592,7 +736,7 @@ func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	s.perp = s.pdx*s.psy - s.psx*s.pdy
 	s.Linedef = i
 	flen := math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
-	s.len = int(flen)
+	s.len = Number(flen)
 	s.Offset = 0
 	if bamEffect.Action == BAM_REPLACE { // zokumbsp actions 1081, 1083
 		// Completely replaces value, computation not needed
@@ -612,7 +756,7 @@ func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	return s
 }
 
-func computeAngle(dx, dy int) int {
+func computeAngle(dx, dy Number) int {
 	w := math.Atan2(float64(dy), float64(dx)) * float64(65536.0/(math.Pi*2))
 
 	if w < 0 {
@@ -637,30 +781,30 @@ func FindLimits(ts *NodeSeg) *NodeBounds {
 		fv := ts.StartVertex
 		tv := ts.EndVertex
 
-		if fv.X < r.Xmin {
-			r.Xmin = fv.X
+		if fv.X < Number(r.Xmin) {
+			r.Xmin = int(fv.X)
 		}
-		if fv.X > r.Xmax {
-			r.Xmax = fv.X
+		if fv.X > Number(r.Xmax) {
+			r.Xmax = fv.X.Ceil()
 		}
-		if fv.Y < r.Ymin {
-			r.Ymin = fv.Y
+		if fv.Y < Number(r.Ymin) {
+			r.Ymin = int(fv.Y)
 		}
-		if fv.Y > r.Ymax {
-			r.Ymax = fv.Y
+		if fv.Y > Number(r.Ymax) {
+			r.Ymax = fv.Y.Ceil()
 		}
 
-		if tv.X < r.Xmin {
-			r.Xmin = tv.X
+		if tv.X < Number(r.Xmin) {
+			r.Xmin = int(tv.X)
 		}
-		if tv.X > r.Xmax {
-			r.Xmax = tv.X
+		if tv.X > Number(r.Xmax) {
+			r.Xmax = tv.X.Ceil()
 		}
-		if tv.Y < r.Ymin {
-			r.Ymin = tv.Y
+		if tv.Y < Number(r.Ymin) {
+			r.Ymin = int(tv.Y)
 		}
-		if tv.Y > r.Ymax {
-			r.Ymax = tv.Y
+		if tv.Y > Number(r.Ymax) {
+			r.Ymax = tv.Y.Ceil()
 		}
 
 		if ts.next == nil {
@@ -679,13 +823,17 @@ func splitDist(lines AbstractLines, seg *NodeSeg) int {
 	if seg.Flip == 0 {
 		// from start vertex of linedef
 		x1, y1, _, _ := lines.GetAllXY(seg.Linedef)
-		dx = float64(x1 - seg.StartVertex.X)
-		dy = float64(y1 - seg.StartVertex.Y)
+		fx1 := Number(x1)
+		fy1 := Number(y1)
+		dx = float64(fx1 - seg.StartVertex.X)
+		dy = float64(fy1 - seg.StartVertex.Y)
 	} else { // seg.Flip == 1
 		// from end vertex of linedef
 		_, _, x2, y2 := lines.GetAllXY(seg.Linedef)
-		dx = float64(x2 - seg.StartVertex.X)
-		dy = float64(y2 - seg.StartVertex.Y)
+		fx2 := Number(x2)
+		fy2 := Number(y2)
+		dx = float64(fx2 - seg.StartVertex.X)
+		dy = float64(fy2 - seg.StartVertex.Y)
 	}
 
 	if dx == 0 && dy == 0 {
@@ -699,7 +847,7 @@ func splitDist(lines AbstractLines, seg *NodeSeg) int {
 // computeIntersection calculates the point of intersection of two lines.
 // ps?->pe? & ls?->le?
 // returns xcoord int, ycoord int
-func (c *IntersectionContext) computeIntersection() (int, int) {
+func (c *IntersectionContext) computeIntersection() (Number, Number) {
 	dx := c.pex - c.psx
 	dy := c.pey - c.psy
 	dx2 := c.lex - c.lsx
@@ -713,11 +861,13 @@ func (c *IntersectionContext) computeIntersection() (int, int) {
 		// TODO stderr
 		Log.Printf("Trouble in computeIntersection dx2,dy2\n")
 	}
-	// Cast porn is courtesy of bsp v5.2 - this is what is written there looks
-	// when translated from C to Go
+	// Truncation was introduced because this is how BSP v5.2 computed this
+	// On regular/Deep nodes, I keep it, but it is not performed for extended
+	// nodes. Testing should be performed to see if there is reason to keep it
+	// for regular version
 	// UPD: made conversion more resistant to numerical overflow. This might
 	// have performance impact, especially on 32-bit computers.
-	l2 := float64(int64(math.Sqrt(float64(dx2)*float64(dx2) + float64(dy2)*float64(dy2))))
+	l2 := dx2.Trunc(math.Sqrt(float64(dx2)*float64(dx2) + float64(dy2)*float64(dy2)))
 
 	a := float64(dx)        // no normalization of a,b necessary,
 	b := float64(dy)        // since division by d in formula for w
@@ -729,18 +879,7 @@ func (c *IntersectionContext) computeIntersection() (int, int) {
 
 		a = float64(c.lsx) + (a2 * w)
 		b = float64(c.lsy) + (b2 * w)
-		var outx, outy int
-		if a < 0 {
-			outx = -1 * int(.5-a)
-		} else {
-			outx = int(.5 + a)
-		}
-		if b < 0 {
-			outy = -1 * int(.5-b)
-		} else {
-			outy = int(.5 + b)
-		}
-		return outx, outy
+		return RoundToPrecision(a), RoundToPrecision(b)
 	} else {
 		// outx = c.lsx, outy = c.lsy
 		return c.lsx, c.lsy
@@ -779,8 +918,8 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 		if dx2 == 0 && dy2 == 0 {
 			a = 0
 		} else {
-			l := int64(dx2)*int64(dx2) + int64(dy2)*int64(dy2)
-			if l < 4 {
+			l := WideNumber(dx2)*WideNumber(dx2) + WideNumber(dy2)*WideNumber(dy2)
+			if l < WideNumber(4) {
 				// If either ends of the split
 				// are smaller than 2 pixs then
 				// assume this starts on part line
@@ -792,8 +931,8 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 		if dx3 == 0 && dy3 == 0 {
 			b = 0
 		} else {
-			l := int64(dx3)*int64(dx3) + int64(dy3)*int64(dy3)
-			if l < 4 { // same as start of line
+			l := WideNumber(dx3)*WideNumber(dx3) + WideNumber(dy3)*WideNumber(dy3)
+			if l < WideNumber(4) { // same as start of line
 				b = 0
 			}
 		}
@@ -898,6 +1037,9 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 	return CONVEX_SUBSECTOR
 }
 
+// Adds a subsector. This version handles only deep and vanilla nodes format.
+// For prototype of Zdoom counterpart, see zdefs.go!ZCreateSSector_Proto, it is
+// that function from which ZExt_CreateSSector is generated, not this one
 func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 	// TODO since vanilla can't use deep nodes, at least make segs relocation
 	// for its seg limit (max seg index = 32767)
@@ -910,11 +1052,11 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 	// => w.segs[]
 	var subsectorIdx uint32
 	var oldNumSegs uint32
-	if config.DeepNodes { // reference to global: config
+	if w.nodeType == NODETYPE_DEEP {
 		subsectorIdx = uint32(len(w.deepSubsectors))
 		w.deepSubsectors = append(w.deepSubsectors, DeepSubSector{})
 		oldNumSegs = uint32(len(w.deepSegs))
-	} else {
+	} else { // vanilla
 		subsectorIdx = uint32(len(w.subsectors))
 		w.subsectors = append(w.subsectors, SubSector{})
 		oldNumSegs = uint32(len(w.segs))
@@ -922,7 +1064,7 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 
 	w.totals.numSSectors++
 	var currentCount uint32
-	if config.DeepNodes {
+	if w.nodeType == NODETYPE_DEEP {
 		w.deepSubsectors[subsectorIdx].FirstSeg = oldNumSegs
 		for ; tmps != nil; tmps = tmps.next {
 			w.deepSegs = append(w.deepSegs, DeepSeg{
@@ -935,7 +1077,7 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 			})
 		}
 		currentCount = uint32(len(w.deepSegs)) - oldNumSegs
-	} else {
+	} else { // vanilla
 		w.subsectors[subsectorIdx].FirstSeg = uint16(oldNumSegs) // MIGHT overflow - try changing layout if that happens
 		for ; tmps != nil; tmps = tmps.next {
 			w.segs = append(w.segs, Seg{
@@ -953,7 +1095,7 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 		w.totals.maxSegCountInSubsector = currentCount
 	}
 	w.totals.numSegs += currentCount
-	if config.DeepNodes {
+	if w.nodeType == NODETYPE_DEEP {
 		w.deepSubsectors[subsectorIdx].SegCount = uint16(currentCount)
 	} else {
 		w.subsectors[subsectorIdx].SegCount = uint16(currentCount)
@@ -963,17 +1105,17 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 
 // Adds a new vertex at specified position (or might found an existing one and
 // return it).
-func (w *NodesWork) AddVertex(x, y int) *NodeVertex {
-	idx := len(w.intVertices)
-	if w.lines.AddVertex(x, y) != idx {
+func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
+	idx := len(w.vertices)
+	if w.lines.AddVertex(int(x), int(y)) != idx {
 		panic("Inconsistent state in NodesWork.AddVertex")
 	}
-	w.intVertices = append(w.intVertices, NodeVertex{
+	w.vertices = append(w.vertices, NodeVertex{
 		X:   x,
 		Y:   y,
 		idx: uint32(idx),
 	})
-	return &(w.intVertices[idx])
+	return &(w.vertices[idx])
 }
 
 // Split a list of segs (ts) into two using the method described at bottom of
@@ -991,10 +1133,10 @@ func (w *NodesWork) DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg, bbox *No
 		panic("Couldn't pick nodeline!")
 	}
 
-	w.nodeX = best.StartVertex.X
-	w.nodeY = best.StartVertex.Y
-	w.nodeDx = best.EndVertex.X - w.nodeX
-	w.nodeDy = best.EndVertex.Y - w.nodeY
+	w.nodeX = int(best.StartVertex.X)
+	w.nodeY = int(best.StartVertex.Y)
+	w.nodeDx = best.EndVertex.X.Ceil() - w.nodeX
+	w.nodeDy = best.EndVertex.Y.Ceil() - w.nodeY
 
 	// Partition line coords
 	c := &IntersectionContext{
@@ -1324,8 +1466,8 @@ func (w *NodesWork) recomputeSegs(originSeg, newSeg *NodeSeg) {
 	// originSeg is the one that existed before split on this iteration,
 	// newSeg is the one that was created because of the split on this iteration
 	originNewLen := int(newSeg.Offset) - int(originSeg.Offset)
-	originSeg.len = originNewLen
-	newSeg.len = newSeg.len - originNewLen
+	originSeg.len = Number(originNewLen)
+	newSeg.len = newSeg.len - Number(originNewLen)
 
 	oldAngle := originSeg.Angle
 	w.recomputeOneSeg(originSeg)
@@ -1541,7 +1683,7 @@ func (ni *NodesInput) computeSectorEquivalence() ([]uint16, int) {
 				uniq++
 			}
 		} else {
-			// This was branch was absent up to and including to v0.69a,
+			// This branch was absent up to and including to v0.69a,
 			// which was an error (all non-mergeable sectors where "merged"
 			// into sector 0)
 			equiv[i] = uint16(uniq)
@@ -1589,6 +1731,44 @@ func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *Superblock {
 		ret.AddSegToSuper(seg)
 	}
 	return ret
+}
+
+func (w *NodesWork) getZdoomNodesBytes() []byte {
+	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
+		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	w.zdoomVertices = make([]ZdoomNode_Vertex,
+		w.zdoomVertexHeader.NumExtendedVertices)
+	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
+		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
+		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
+	}
+	var writ *ZStream
+	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
+		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
+	} else {
+		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
+	}
+	// NOTE always LittleEndian per Zdoom specs
+	binary.Write(writ, binary.LittleEndian, &w.zdoomVertexHeader)
+	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
+	binary.Write(writ, binary.LittleEndian, w.deepNodes)
+	ret, err := writ.FinalizeAndGetBytes()
+	if err != nil {
+		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
+	}
+	return ret
+}
+
+const FIXED16DOT16_MULTIPLIER = 65536.0
+
+// Redundant declaration on Number, but will be relevant on ZNumber
+func (n Number) ToFixed16Dot16() int32 {
+	return int32(float64(n) * FIXED16DOT16_MULTIPLIER)
 }
 
 /*---------------------------------------------------------------------------*

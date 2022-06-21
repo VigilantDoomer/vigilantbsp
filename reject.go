@@ -290,6 +290,15 @@ func RejectGenerator(input RejectInput) {
 	// Apply special RMB rules (now that all physical LOS calculations are done)
 	r.rmbFrame.ProcessOptionsRMB(r)
 
+	// Printf debugging (bruh)
+	/*
+		for i := 0; i < r.numSectors; i++ {
+			for j := i + 1; j < r.numSectors; j++ {
+				Log.Printf("Sector %d <-> %d : %t\n", i, j, !isHidden(*r.rejectTableIJ(i, j)))
+			}
+		}
+	*/
+
 	data := r.getResult()
 	Log.Printf("Reject took %s\n", time.Since(start))
 	input.rejectChan <- data
@@ -658,12 +667,12 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		X1, Y1, X2, Y2 := r.input.lines.GetAllXY(i)
 		srLine := NodeSeg{
 			StartVertex: &NodeVertex{
-				X: X1,
-				Y: Y1,
+				X: Number(X1),
+				Y: Number(Y1),
 			},
 			EndVertex: &NodeVertex{
-				X: X2,
-				Y: Y2,
+				X: Number(X2),
+				Y: Number(Y2),
 			},
 			Angle:   0, // unused
 			Linedef: i,
@@ -675,12 +684,12 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			len:     0,
 			partner: nil,
 		}
-		srLine.psx = X1
-		srLine.psy = Y1
-		srLine.pex = X2
-		srLine.pey = Y2
-		srLine.pdx = X2 - X1
-		srLine.pdy = Y2 - Y1
+		srLine.psx = Number(X1)
+		srLine.psy = Number(Y1)
+		srLine.pex = Number(X2)
+		srLine.pey = Number(Y2)
+		srLine.pdx = Number(X2 - X1)
+		srLine.pdy = Number(Y2 - Y1)
 		partSegCoords := srLine.toVertexPairC()
 		var c IntersectionContext
 		c.psx = partSegCoords.StartVertex.X
@@ -702,10 +711,14 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		if !ok {
 			trace = CollinearOrientedVertices(make([]OrientedVertex, 1))
 			trace[0] = *ov1
-			it.SetContext(ov1.v.X, ov1.v.Y, ov2.v.X, ov2.v.Y)
+			it.SetContext(int(ov1.v.X), int(ov1.v.Y), int(ov2.v.X), int(ov2.v.Y))
 			for it.NextLine() {
 				aline := it.GetLine()
-				c.lsx, c.lsy, c.lex, c.ley = r.input.lines.GetAllXY(aline)
+				lsx, lsy, lex, ley := r.input.lines.GetAllXY(aline)
+				c.lsx = Number(lsx)
+				c.lsy = Number(lsy)
+				c.lex = Number(lex)
+				c.ley = Number(ley)
 				if c.lsx == c.lex && c.lsy == c.ley { // skip zero-length lines
 					continue
 				}
@@ -767,8 +780,8 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		// segment to evaluate which side this point is from line segment
 		// intersecting the trace
 		nv3 := &NodeVertex{
-			X: X1,
-			Y: Y1,
+			X: Number(X1),
+			Y: Number(Y1),
 		}
 		lineThatWasTraced := i
 		for i := leftStart; i >= 0; i++ {
@@ -795,12 +808,12 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			// Ok, we are hitting a good line it seems
 			TX1, TY1, TX2, TY2 := r.input.lines.GetAllXY(aline)
 			nv1 := &NodeVertex{
-				X: TX1,
-				Y: TY1,
+				X: Number(TX1),
+				Y: Number(TY1),
 			}
 			nv2 := &NodeVertex{
-				X: TX2,
-				Y: TY2,
+				X: Number(TX2),
+				Y: Number(TY2),
 			}
 			// FIXME there may still be an error here somewhere. Not to say that
 			// apparently changes in selfref.go are warranted. Something to
@@ -1053,6 +1066,9 @@ func (r *RejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighbo
 }
 
 func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
+	if i == 16 && j == 70 && visibility == VIS_HIDDEN {
+		Log.Panic("What???!\n")
+	}
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
@@ -1335,7 +1351,7 @@ func (r *RejectWork) checkLOS(src, tgt *TransLine) bool {
 			more := false
 			for i := myWorld.solidSet.loIndex; i <= myWorld.solidSet.hiIndex; i++ {
 				line := myWorld.solidSet.lines[i]
-				if (line.start == common) || (line.end == common) {
+				if (*line.start == *common) || (*line.end == *common) {
 					more = true
 				}
 			}

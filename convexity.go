@@ -104,10 +104,10 @@ func (w *NodesWork) DivideSegsForSingleSector(ts *NodeSeg, rs **NodeSeg,
 		panic("Couldn't pick nodeline!")
 	}
 
-	w.nodeX = best.StartVertex.X
-	w.nodeY = best.StartVertex.Y
-	w.nodeDx = best.EndVertex.X - w.nodeX
-	w.nodeDy = best.EndVertex.Y - w.nodeY
+	w.nodeX = int(best.StartVertex.X)
+	w.nodeY = int(best.StartVertex.Y)
+	w.nodeDx = int(best.EndVertex.X) - w.nodeX
+	w.nodeDy = int(best.EndVertex.Y) - w.nodeY
 
 	// Partition line coords
 	c := &IntersectionContext{

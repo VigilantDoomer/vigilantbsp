@@ -513,9 +513,17 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 		case 'c':
 			{
 				if bytes.Equal(p[1:3], []byte("=v")) {
-					c.DeepNodes = false
+					c.NodeType = NODETYPE_VANILLA
 				} else if bytes.Equal(p[1:3], []byte("=d")) {
-					c.DeepNodes = true
+					c.NodeType = NODETYPE_DEEP
+				} else if bytes.Equal(p[1:3], []byte("=x")) {
+					//c.NodeType = NODETYPE_ZDOOM_EXTENDED
+					// Not yet supported! Cause not implemented yet
+					Log.Error("Unknown value for NODES format.\n")
+				} else if bytes.Equal(p[1:3], []byte("=z")) {
+					//c.NodeType = NODETYPE_ZDOOM_COMPRESSED
+					// Not yet supported! Cause not implemented yet
+					Log.Error("Unknown value for NODES format.\n")
 				} else {
 					Log.Error("Unknown value for NODES format.\n")
 				}

@@ -381,7 +381,7 @@ type ZdoomNode_Vertex struct {
 // Zdoom seg information - number of segs, followed by repetition of the below
 // struct. The struct is castrated - it does not include angle and offset
 // information, which means some special effects (like horizon) can not be
-// supported. This make extended nodes practically inferior to deep nodes,
+// supported. This makes extended nodes practically inferior to deep nodes,
 // despite the extra precision of vertices
 type ZdoomNode_Seg struct {
 	StartVertex uint32

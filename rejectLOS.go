@@ -551,13 +551,15 @@ func TrimLines(src, tgt *TransLine, set *LineSet) int {
 				continue
 			}
 			y := 1
-			if (line.start == src.start) || (line.start == src.end) {
+			// Achtung! Must compare structure values not pointers!
+			// (May be find a way to intern them?)
+			if (*line.start == *src.start) || (*line.start == *src.end) {
 				y = src.DX*(line.end.Y-src.start.Y) - src.DY*(line.end.X-src.start.X)
-			} else if (line.end == src.start) || (line.end == src.end) {
+			} else if (*line.end == *src.start) || (*line.end == *src.end) {
 				y = src.DX*(line.start.Y-src.start.Y) - src.DY*(line.start.X-src.start.X)
-			} else if (line.start == tgt.start) || (line.start == tgt.end) {
+			} else if (*line.start == *tgt.start) || (*line.start == *tgt.end) {
 				y = tgt.DX*(line.end.Y-tgt.start.Y) - tgt.DY*(line.end.X-tgt.start.X)
-			} else if (line.end == tgt.start) || (line.end == tgt.end) {
+			} else if (*line.end == *tgt.start) || (*line.end == *tgt.end) {
 				y = tgt.DX*(line.start.Y-tgt.start.Y) - tgt.DY*(line.start.X-tgt.start.X)
 			}
 			if y <= 0 {
@@ -877,7 +879,6 @@ func AdjustEndPoints(left, right *TransLine, upper, lower *PolyLine) bool {
 }
 
 func FindPolyLines(world *WorldInfo) bool {
-
 	upperPoly := &world.upperPoly
 	lowerPoly := &world.lowerPoly
 

@@ -1,8 +1,12 @@
 Changelog for VigilantBSP
 
-v0.74a (working number)
-- Partial RMB support
+v0.74a
+- New feature: partial RMB support!
+- Fixed severe bug in reject builder that sometimes prevented monsters from sighting the player
+- Stricter ordering of log output - output pertaining to the previous map is displayed strictly before one pertaining to next map
 - (Relevant to programmers) Can now build VigilantBSP on Go 1.15+ (was 1.17+). This is so you can build it on current Debian stable (bullseye) using Debian repository's version of Go
+- (Relevant to programmers) Refactored code for my future plans to implement Zdoom non-GL extended / compressed nodes generation support
+- Documentation: rewrited note about linedef specials that affect angle with more up-to-date knowledge on ports support and interaction with wall wiggle fix. Still could be improved, though.
 
 v0.72a
 - Fixed bug: some sectors wrongly considered compatible with each other and sector 0 in "advanced visplane reduction" algorithm 

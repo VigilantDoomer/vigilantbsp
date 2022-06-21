@@ -98,10 +98,14 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	// Note: the coords start at bounding box edges - we need to follow the line
 	// through entire map to know for sure when it is in the void and when it
 	// is not
-	iter.SetContext(partStart.v.X, partStart.v.Y, partEnd.v.X, partEnd.v.Y)
+	iter.SetContext(int(partStart.v.X), int(partStart.v.Y), int(partEnd.v.X), int(partEnd.v.Y))
 	for iter.NextLine() {
 		aline := iter.GetLine()
-		c.lsx, c.lsy, c.lex, c.ley = w.lines.GetAllXY(aline)
+		lsx, lsy, lex, ley := w.lines.GetAllXY(aline)
+		c.lsx = Number(lsx)
+		c.lsy = Number(lsy)
+		c.lex = Number(lex)
+		c.ley = Number(ley)
 		if c.lsx == c.lex && c.lsy == c.ley { // skip zero-length lines
 			continue
 		}
@@ -207,7 +211,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		nonVoid = append(nonVoid, VertexPairC{
 			StartVertex: pts[i-1].v,
 			EndVertex:   pts[i].v,
-			len:         int(math.Sqrt(dx*dx + dy*dy)),
+			len:         Number(math.Sqrt(dx*dx + dy*dy)),
 		})
 	}
 
@@ -232,16 +236,16 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 	if part.pdx == 0 { // vertical line
 		// Y coords: starts at the top, ends at the bottom of blockmap box
 		// X coord is taken from partition line
-		partStart.v.Y = blYMax
+		partStart.v.Y = Number(blYMax)
 		partStart.v.X = partSegCoords.StartVertex.X
-		partEnd.v.Y = blYMin
+		partEnd.v.Y = Number(blYMin)
 		partEnd.v.X = partStart.v.X // should be == part.psx
 	} else if part.pdy == 0 { // horizontal line
 		// X coords: starts at the left, ends at the right of blockmap box
 		// Y coord is taken from partition line
-		partStart.v.X = blXMin
+		partStart.v.X = Number(blXMin)
 		partStart.v.Y = partSegCoords.StartVertex.Y
-		partEnd.v.X = blXMax
+		partEnd.v.X = Number(blXMax)
 		partEnd.v.Y = partStart.v.Y // should be == part.psy
 	} else { // diagonal line (the worst)
 		// Ok, I suck at this geometry thingy, but have to do it nonetheless
@@ -252,10 +256,10 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 			case 0:
 				{
 					// Left vertical blockmap boundary
-					c.lsx = blXMin
-					c.lsy = blYMax
+					c.lsx = Number(blXMin)
+					c.lsy = Number(blYMax)
 					c.lex = c.lsx
-					c.ley = blYMin
+					c.ley = Number(blYMin)
 					v := c.getIntersectionPoint_InfiniteLines()
 					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
 						blYMin) {
@@ -268,10 +272,10 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 			case 1:
 				{
 					// Right vertical blockmap boundary
-					c.lsx = blXMax
-					c.lsy = blYMax
+					c.lsx = Number(blXMax)
+					c.lsy = Number(blYMax)
 					c.lex = c.lsx
-					c.ley = blYMin
+					c.ley = Number(blYMin)
 					v := c.getIntersectionPoint_InfiniteLines()
 					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
 						blYMin) {
@@ -284,9 +288,9 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 			case 2:
 				{
 					// Top horizontal blockmap boundary
-					c.lsx = blXMin
-					c.lsy = blYMax
-					c.lex = blXMax
+					c.lsx = Number(blXMin)
+					c.lsy = Number(blYMax)
+					c.lex = Number(blXMax)
 					c.ley = c.lsy
 					v := c.getIntersectionPoint_InfiniteLines()
 					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
@@ -300,9 +304,9 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 			case 3:
 				{
 					// Bottom horizontal blockmap boundary
-					c.lsx = blXMin
-					c.lsy = blYMin
-					c.lex = blXMax
+					c.lsx = Number(blXMin)
+					c.lsy = Number(blYMin)
+					c.lex = Number(blXMax)
 					c.ley = c.lsy
 					v := c.getIntersectionPoint_InfiniteLines()
 					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
@@ -374,14 +378,15 @@ func (c *IntersectionContext) getIntersectionPoint_InfiniteLines() *NodeVertex {
 	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
 	id := 1 / d
 	return &NodeVertex{
-		X: int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id)),
-		Y: int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id)),
+		X: Number(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
+		Y: Number(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
 	}
 }
 
 // This checks whether a vertex is within the box
 func tskCheckBounds(v *NodeVertex, blXMax, blYMax, blXMin, blYMin int) bool {
-	return v.X <= blXMax && v.X >= blXMin && v.Y <= blYMax && v.Y >= blYMin
+	return v.X <= Number(blXMax) && v.X >= Number(blXMin) &&
+		v.Y <= Number(blYMax) && v.Y >= Number(blYMin)
 }
 
 // This finds the intersection between a partition line and a line segment,
@@ -412,8 +417,8 @@ func (c *IntersectionContext) getIntersectionOrIndicence() (*NodeVertex, *NodeVe
 	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
 	id := 1 / d
 	v := &NodeVertex{
-		X: int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id)),
-		Y: int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id)),
+		X: Number(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
+		Y: Number(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
 	}
 
 	// See if intersection lies within the line segment of the other
@@ -422,18 +427,18 @@ func (c *IntersectionContext) getIntersectionOrIndicence() (*NodeVertex, *NodeVe
 	if v != nil {
 		var blXmax, blXmin, blYmax, blYmin int
 		if c.lsx < c.lex {
-			blXmax = c.lex
-			blXmin = c.lsx
+			blXmax = int(c.lex)
+			blXmin = int(c.lsx)
 		} else {
-			blXmax = c.lsx
-			blXmin = c.lex
+			blXmax = int(c.lsx)
+			blXmin = int(c.lex)
 		}
 		if c.lsy < c.ley {
-			blYmax = c.ley
-			blYmin = c.lsy
+			blYmax = int(c.ley)
+			blYmin = int(c.lsy)
 		} else {
-			blYmax = c.lsy
-			blYmin = c.ley
+			blYmax = int(c.lsy)
+			blYmin = int(c.ley)
 		}
 		if tskCheckBounds(v, blXmax, blYmax, blXmin, blYmin) {
 			return v, nil
@@ -448,7 +453,7 @@ func (c *IntersectionContext) getIntersectionOrIndicence() (*NodeVertex, *NodeVe
 type VertexPairC struct {
 	StartVertex *NodeVertex
 	EndVertex   *NodeVertex
-	len         int
+	len         Number
 }
 
 func (s *NodeSeg) toVertexPairC() VertexPairC {
@@ -529,12 +534,12 @@ func (x CollinearVertexPairCByCoord) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 // Return value only valid if sorted beforehand
 // I am not sure if it is better to remove overlaps or just count a new length
 // without all the overlaps - I will figure out the way to optimize later xD
-func (x CollinearVertexPairCByCoord) GetOverlapsLength() int {
+func (x CollinearVertexPairCByCoord) GetOverlapsLength() Number {
 	// With the ordering set to VertexPairCOrdering and lines known to be colinear,
 	// the two lines overlap if and only if: current line start vertex is
 	// between previous line start vertex (inclusive) and end vertex (not inclusive).
 	// That's all
-	overlapLength := 0
+	overlapLength := Number(0)
 	for i := 1; i < len(x); i++ {
 		prevStart := x[i-1].StartVertex
 		prevEnd := x[i-1].EndVertex
@@ -544,7 +549,7 @@ func (x CollinearVertexPairCByCoord) GetOverlapsLength() int {
 			// Calculate dx and dy of overlap
 			dx := prevEnd.X - curStart.X
 			dy := prevEnd.Y - curStart.Y
-			overlapLength += int(math.Sqrt(float64(dx*dx) + float64(dy*dy)))
+			overlapLength += Number(math.Sqrt(float64(dx*dx) + float64(dy*dy)))
 		}
 	}
 	return overlapLength
@@ -712,8 +717,8 @@ func (ov1 *OrientedVertex) valuesEqualWithEpsilon(ov2 *OrientedVertex) bool {
 	if ov1.v == nil || ov2.v == nil {
 		return false
 	}
-	XequalWithEpsilon := Abs(ov1.v.X-ov2.v.X) <= 1
-	YequalWithEpsilon := Abs(ov1.v.Y-ov2.v.Y) <= 1
+	XequalWithEpsilon := Abs(int(ov1.v.X-ov2.v.X)) <= 1
+	YequalWithEpsilon := Abs(int(ov1.v.Y-ov2.v.Y)) <= 1
 	return XequalWithEpsilon && YequalWithEpsilon
 }
 
