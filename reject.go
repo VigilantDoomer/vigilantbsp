@@ -1066,9 +1066,6 @@ func (r *RejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighbo
 }
 
 func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
-	if i == 16 && j == 70 && visibility == VIS_HIDDEN {
-		Log.Panic("What???!\n")
-	}
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
