@@ -323,6 +323,9 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				nodeType:          nodeType,
 
 				depthArtifacts: config.DepthArtifacts, // global config
+
+				multiTreeMode:   config.MultiTreeMode,   // global config
+				specialRootMode: config.SpecialRootMode, // global config
 			}
 			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA {
 

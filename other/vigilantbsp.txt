@@ -138,6 +138,13 @@ is either a suboption of option above it, or a possible value:
 	p= Priority for partition selection.
 		0 Split minimization
 		1 Depth reduction
+	m= Multi-tree mode (experimental, SLOW).
+		0 Don't use, build single tree (default)
+		1 Try every one-sided linedef as a possible root node
+		2 Try every two-sided linedef as a possible root node
+		3 Try every linedef as a possible root node
+	t= Number of threads to use for multi-tree
+		(defaults to number of cores available)
 	i= Cull (don't create segs from) invisible linedefs.
 		0 Don't cull (default)
 		1 Cull, use faulty check to preserve self-referencing sectors.
@@ -821,7 +828,7 @@ algorithm, but it achieves graceful running times even on very large and
 complex levels.
 
 07:02 'p' - Priority for partition selection
--------------------------------------------------------
+--------------------------------------------
 Note: this option was introduced in v0.69a of VigilantBSP, under the
 name "Use secondary score for partition selection". It has been since
 effectively overwritten, old options are no longer valid. It may be
@@ -874,7 +881,154 @@ I have tried to use Zennode's approach to reduce depth, but, being
 applied after visplane-sensitive algorithm, it didn't produce 
 results distinct from what is currently implemented. 
 
-07:03 'i' - Cull (don't create segs from) invisible linedefs
+07:03 'm' -  Multi-tree mode (experimental, SLOW)
+-------------------------------------------------
+Note: this option was introduced in VigilantBSP v0.74a
+
+This feature is implemented per suggestion of user with nickname
+Jerko, who asked on doomer boards if I could implement it. To
+make it active as well as get practical results from it, 
+you want to set it to non-zero value, and set partition selection 
+to 1 (Killough's visplane reduction) or 2 (advanced visplane
+reduction). This option is recommended to use on vanilla maps
+only and only with the above partition selection algorithms.
+
+What it will do then, is to create multiple trees and pick "best",
+which "best" would _hopefully_ mean less visplanes / VPOs. Unlike
+ZokumBSP's multi-tree algorithm, which running time scales 
+exponentially with complexity of the level, the algorithm Jerko
+suggested results in running time scaling linearly with the number
+of linedefs, as only root node is bruteforced among all possible
+variants (the pool of variants depends on option value). This
+makes it less effective than ZokumBSP's one but more practical
+to run.
+
+Since this creates several trees, it will take significant time
+to run and for this reason should not be used when invoked from
+editor (SLADE3, GzDoomBuilder, etc.)
+
+Eventually, version analogous to ZokumBSP one is going to be 
+implemented too, but the timeline for its implementation is
+currently unknown.
+
+m=0 - Don't use, build single tree (default)
+
+You can disable multi-tree mode explicitly if you want, although
+it defaults to disabled anyway.
+
+m=1 - Try every one-sided linedef as a possible root partition
+
+VigilantBSP will create as many trees as there are one-sided
+linedefs, trying each one-sided linedef for root node partition,
+and then pick the best tree. If possible, VigilantBSP will try
+to speed up process by using multiple threads, see also -nt option
+to control exactly how many threads VigilantBSP will use, as each
+threads adds to memory consumption.
+
+Using linedefs specials that tell not to render seg on one side
+of two-sided linedef will cause that linedef to be considered as
+part of this search. Linedefs that are not rendered at all will
+be skipped over.
+
+m=2 - Try every two-sided linedef as a possible root partition
+
+Similar to m=1, but TWO-sided linedefs instead of one-sided.
+
+Using linedefs specials that tell not to render seg on one side
+of two-sided linedef will cause that linedef to be NOT considered 
+as part of this search. Also, linedefs that are not rendered at 
+all will be skipped over.
+
+m=3 = Try every linedef as a possible root partition
+
+Will create tree for every linedef and pick best.
+
+If linedef is completely omitted from rendering (via linedef specials
+or special "BSPNOSEG" texture), it will not be used for partition 
+selection.
+
+
+Actually, in all cases VigilantBSP will not try _literally_
+every linedef, as a good number of them are collinear with each 
+other. Within a group of linedefs that are all collinear with
+each other, VigilantBSP will pick exactly one, as all collinear
+linedefs would produce the same root node. This helps speed up
+search without affecting the results. 
+
+Also, if you cull linedefs with -ni= option, only those linedefs
+from which segs are created will be considered, so that will also
+reduce running time for multi-tree (but results will be affected,
+for better or for worse).
+
+Example of use:
+vigilantbsp -na=2m=3 somefile.wad -o somefile_builtwithmultitree.wad
+This tells to build tree with every linedef in the map as root (except
+for not rendered ones), and use advanced visplane reduction for all 
+nodes in each trees except the root one. Note that it is really important
+to tell VigilantBSP to use visplane reduction via n=2, unless, I dunno,
+you are trying to reduce segs but not do anything about visplanes, or
+just benchmarking things. 
+
+How exactly "best" tree is selected might change from version to version,
+as of v0.74a it does this in this order:
+1) least total amount of subsectors (highest priority)
+2) least difference in BSP tree height between left subtree and right 
+subtree of root node
+3) least maximum height in BSP tree
+4) least total amount of segs
+5) (technical, you can ignore it if you don't understand) tree came
+from linedef earlier in the initially constructed list of linedefs
+to be considered (ensures the process is deterministic, note to still
+use -d explicitly if entire output file needs to be build 
+deterministically and not just nodes)
+
+This approach might miss condition when some VPO spot in the map could 
+be eliminated by raising visplane count (but not reaching visplane 
+limit) elsewhere, so this is why we should call this "best" and not 
+best. Improving on it is the task for the future, I can tell you that 
+computing visplanes for all spots in entire map at once is hard task,
+and even Visplane Explorer doesn't provide 100% accuracy as far as I
+know (not to say that if I were to implement something similar, may
+be difficult to define which is "best" really unless there is 
+clear-as-day improvement). ZokumBSP doesn't compute visplanes either,
+and there are other areas to fix or improve in VigilantBSP beside
+multi-tree that will have an effect on this.
+
+By the way, you CAN actually use this mode even with partition 
+selection other than visplane reduction types, and also can use it to
+generate DeeP nodes or on non-vanilla maps, but doing this has little 
+practical value. This mode was designed for vanilla maps and advanced
+visplane reduction (or at least Killough's).
+
+07:04 't' - Number of threads to use for multi-tree
+---------------------------------------------------
+Note: this option was introduced in VigilantBSP v0.74a. 
+
+This option controls how many threads to use when multi-tree mode
+is active for building all trees. It is only in effect when multi-tree
+mode is active (not 0 or unset). 
+
+The default value is '0', which has a special meaning of "the number of 
+threads to create = the number of threads reported by the system". 
+
+Specifying a non-zero value directly is useful if:
+1) you discovered that a lower value than the number of cores is more
+ effective
+2) VigilantBSP runs out of memory with the number of threads it 
+allocates automatically, so you have to explicitly tell it to use less
+threads
+3) your machine has more than 16 threads, but VigilantBSP doesn't use 
+that many by default, unless higher number is explicitly specified
+
+Specifying a different value will cause that exact number of threads to
+be used instead. 
+
+It should be noted that when this is not set, or set to 0, and so the number
+of threads is picked automatically, the cap of 16 threads is applied. This
+is because each thread allocates a lot of memory, and the higher the thread
+count, the higher memory usage in multi-tree mode.
+
+07:05 'i' - Cull (don't create segs from) invisible linedefs
 ------------------------------------------------------------
 
 This option is similar to option "Ignore invisible linedefs" in Zennode
@@ -932,7 +1086,7 @@ non-polygons being thrown away). In event of doubt or failure within
 perimiter computation algorithm (the code in VigilantBSP misses some part
 of original because of the rush to release it), linedefs are preserved.
 
-07:04 'c' - NODES format compatibility
+07:06 'c' - NODES format compatibility
 --------------------------------------
 
 There are various BSP tree formats even for "software" (non-GL) nodes. 
@@ -964,7 +1118,7 @@ people into thinking the accuracy is being provided when it is not. When
 the computation accuracy will be raised, the format support will be 
 implemented.
 
-07:05 'f' - Tuning factor (seg split cost, etc.)
+07:07 'f' - Tuning factor (seg split cost, etc.)
 ------------------------------------------------
 
 This factor is a constant that is used in partition selection evaluation
@@ -984,7 +1138,7 @@ be different.
 
 Default value is 17, same as BSP v5.2
 
-07:06 'd' - Penalty factor for diagonal lines
+07:08 'd' - Penalty factor for diagonal lines
 ---------------------------------------------
 
 Similar to the previous parameter, but this is penalty factor
@@ -1000,7 +1154,7 @@ Whether it can be benefits, has not been yet confirmed.
 Explicitly specifying non-zero value will enable it for all levels,
 while explicitly specifying 0 will disable it even for Hexen levels.
 
-07:07 Ongoing research
+07:09 Ongoing research
 ----------------------
 
 Besides the need to eliminate more VPOs still, there is a need to
@@ -1151,9 +1305,13 @@ There are plans to improve accuracy in these algos in future versions.
 ---------------------------------------------------
 
 Note: partial RMB support was first introduced in v0.74a
-of VigilantBSP. The manual for all RMB options can be
-found in rmb-manual.html file, however, only select few
-are actually supported.
+of VigilantBSP. The manual for original RMB program (whose
+author I am in no way affiliated with) is now packaged 
+with VigilantBSP (just like it was packaged with Zennode
+and ZokumBSP nodebuilders) - see rmb-manual.html - but 
+only a limited number of options discussed there is 
+supported. You will find the list of supported options
+below.
 
 There once existed a program called Reject Map Builder,
 or RMB, that could apply special effects to reject file,
@@ -1166,7 +1324,7 @@ computed reject, in plain text.
 Since RMB program was written for DOS, has stopped updating
 and its source code is unavailable, some nodebuilders 
 (Zennode, etc.) opted to provide support for *.rej options
-file. 
+file.
 
 This option (-rm) will make VigilantBSP find *.rej file in 
 the same directory as INPUT wad file, with same filename as 

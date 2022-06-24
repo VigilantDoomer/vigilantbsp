@@ -314,7 +314,7 @@ func (c *ProgramConfig) parseBlockmapParams(p []byte) {
 				}
 				if nos.whichType != ARG_ENABLED && int16(nos.value) < 0 {
 					// negative cannot be returned anyway... yet
-					Log.Error("Negative thread count is not supported - ignoring it.\n")
+					Log.Error("Negative blockmap thread count is not supported - ignoring it.\n")
 				} else if nos.whichType != ARG_ENABLED {
 					// value of 0 is ok. It's default, "auto" mode
 					c.BlockmapThreads = int16(nos.value)
@@ -563,6 +563,54 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 						Log.Error("Diagonal penalty can't be negative. Will disable it instead.\n")
 						c.DiagonalPenalty = 0
 					}
+				}
+				p = rest
+			}
+		case 'm':
+			{
+				nos, rest := readNumeric("-nm", p[1:])
+				switch nos.value {
+				case 0:
+					{
+						c.MultiTreeMode = MULTITREE_NOTUSED
+					}
+				case 1:
+					{
+						c.MultiTreeMode = MULTITREE_ROOT_ONLY
+						c.SpecialRootMode = MROOT_ONESIDED
+					}
+				case 2:
+					{
+						c.MultiTreeMode = MULTITREE_ROOT_ONLY
+						c.SpecialRootMode = MROOT_TWOSIDED
+					}
+				case 3:
+					{
+						c.MultiTreeMode = MULTITREE_ROOT_ONLY
+						c.SpecialRootMode = MROOT_EVERY
+					}
+				default:
+					{
+						Log.Error("Ignoring invalid (out of range) value for multi-tree mode\n")
+					}
+				}
+				p = rest
+			}
+		case 't':
+			{
+				nos, rest := readNumeric("-nt", p[1:])
+				if nos.whichType == ARG_DISABLED {
+					nos.value = 1
+				}
+				if nos.whichType != ARG_ENABLED && int16(nos.value) < 0 {
+					// negative cannot be returned anyway... yet
+					Log.Error("Negative BSP tree thread count is not supported - ignoring it.\n")
+				} else if nos.whichType != ARG_ENABLED {
+					// value of 0 is ok. It's default, "auto" mode
+					c.NodeThreads = int16(nos.value)
+				} else { // ARG_ENABLED
+					// to auto mode
+					c.NodeThreads = 0
 				}
 				p = rest
 			}

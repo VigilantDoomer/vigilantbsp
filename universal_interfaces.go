@@ -101,6 +101,11 @@ type WriteableLines interface {
 	GetVertices() interface{}
 	// returns underlying slice used for representing linedefs
 	GetLinedefs() interface{}
+	// returns deep copy of the structure of the same underlying type as this
+	// one
+	Clone() WriteableLines
+	// assigns structure fields from the structure of the same underlying type
+	AssignFrom(src WriteableLines)
 }
 
 // This is used to:
@@ -928,4 +933,45 @@ func (o *HexenAuxLinedefs) GetSolidVersion() SolidLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *DoomLinedefs) Clone() WriteableLines {
+	newVertices := make([]Vertex, len(o.vertices))
+	copy(newVertices, o.vertices)
+	o.vertices = newVertices
+	newLinedefs := make([]Linedef, len(o.linedefs))
+	copy(newLinedefs, o.linedefs)
+	o.linedefs = newLinedefs
+	return &DoomLinedefs{
+		linedefs: newLinedefs,
+		vertices: newVertices,
+	}
+}
+
+func (o *DoomLinedefs) AssignFrom(src WriteableLines) {
+	*o = *(src.(*DoomLinedefs))
+}
+
+func (o *HexenLinedefs) Clone() WriteableLines {
+	newVertices := make([]Vertex, len(o.vertices))
+	copy(newVertices, o.vertices)
+	o.vertices = newVertices
+	newLinedefs := make([]HexenLinedef, len(o.linedefs))
+	copy(newLinedefs, o.linedefs)
+	o.linedefs = newLinedefs
+
+	// Some things not deep-copied on the premise of immutability. The Clone()
+	// is written with multitree_plain.go in mind
+	return &HexenLinedefs{
+		linedefs:         newLinedefs,
+		vertices:         newVertices,
+		things:           o.things,           // NOTE we are not yet mutating things, do we?
+		sidedefs:         o.sidedefs,         // NOTE we are not yet mutating sidedefs, do we?
+		sectorHasPolyobj: o.sectorHasPolyobj, // NOTE we are not mutating sectorHasPolyobj anymore after DetectPolyobjs was called?
+		preciousLinedefs: o.preciousLinedefs, // NOTE we are not mutating preciousLinedefs anymore after DetectPolyobjs was called?
+	}
+}
+
+func (o *HexenLinedefs) AssignFrom(src WriteableLines) {
+	*o = *(src.(*HexenLinedefs))
 }

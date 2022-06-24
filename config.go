@@ -59,6 +59,13 @@ const VERSION = "0.74a"
 	p= Priority for partition selection.
 		0 Split minimization (default)
 		1 Depth reduction
+	m= Multi-tree mode (experimental, SLOW).
+		0 Don't use, build single tree (default)
+		1 Try every one-sided linedef as a possible root partition
+		2 Try every two-sided linedef as a possible root partition
+		3 Try every linedef as a possible root partition
+	t= Number of threads to use for multi-tree
+		(defaults to number of cores available)
 	i= Cull (don't create segs from) invisible linedefs.
 		0 Don't cull (default)
 		1 Cull, use faulty check to preserve self-referencing sectors.
@@ -146,6 +153,20 @@ const (
 	NODETYPE_ZDOOM_COMPRESSED
 )
 
+const (
+	MULTITREE_NOTUSED = iota
+	MULTITREE_ROOT_ONLY
+)
+
+// below constants must be chosen so that
+// MROOT_ONESIDED & MROOT_TWOSIDED = 0
+// MROOT_ONESIDED | MROOT_TWOSIDED = MROOT_EVERY
+const (
+	MROOT_ONESIDED = 0x01
+	MROOT_TWOSIDED = 0x02
+	MROOT_EVERY    = 0x03
+)
+
 type ProgramConfig struct {
 	InputFileName          string
 	OutputFileName         string
@@ -198,6 +219,10 @@ type ProgramConfig struct {
 	// there is no filter: all levels have to be rebuild.
 	FilterLevel [][]byte
 	UseRMB      bool
+	// Multi-tree mode
+	MultiTreeMode   int
+	SpecialRootMode int // used when MultiTreeMode = MULTITREE_ROOT_ONLY
+	NodeThreads     int16
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -247,6 +272,9 @@ func init() {
 		DepthArtifacts:         true,
 		FilterLevel:            nil,
 		UseRMB:                 false,
+		MultiTreeMode:          MULTITREE_NOTUSED,
+		SpecialRootMode:        MROOT_ONESIDED,
+		NodeThreads:            0,
 	})
 }
 
@@ -315,6 +343,13 @@ func PrintHelp() {
 	Log.Printf("	p= Priority for partition selection.\n")
 	Log.Printf("		0 Split minimization (default)\n")
 	Log.Printf("		1 Depth reduction\n")
+	Log.Printf("	m= Multi-tree mode (experimental, SLOW).\n")
+	Log.Printf("		0 Don't use, build single tree (default)\n")
+	Log.Printf("		1 Try every one-sided linedef as a possible root partition\n")
+	Log.Printf("		2 Try every two-sided linedef as a possible root partition\n")
+	Log.Printf("		3 Try every linedef as a possible root partition\n")
+	Log.Printf("	t= Number of threads to use for multi-tree\n")
+	Log.Printf("		(defaults to number of cores available)\n")
 	Log.Printf("	i= Cull (don't create segs from) invisible linedefs.\n")
 	Log.Printf("		0 Don't cull (default)\n")
 	Log.Printf("		1 Cull, use faulty check to preserve self-referencing sectors.\n")

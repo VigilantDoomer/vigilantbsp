@@ -78,6 +78,8 @@ type NodesInput struct {
 	linesToIgnore     []bool // dummy linedefs such as for scrolling
 	depthArtifacts    bool
 	nodeType          int
+	multiTreeMode     int
+	specialRootMode   int
 }
 
 type Number int
@@ -343,7 +345,24 @@ func NodesGenerator(input *NodesInput) {
 	initialSuper := workData.doInitialSuperblocks(rootBox)
 
 	// The main act
-	rootNode := CreateNode(&workData, rootSeg, rootBox, initialSuper) // recursively create nodes
+	var rootNode *NodeInProcess
+	if input.multiTreeMode == MULTITREE_NOTUSED {
+		// This is a most commonly used single-tree mode
+		rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper) // recursively create nodes
+	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
+		// Create multiple trees - bruteforce ROOT node among all (one-sided,
+		// two-sided, or every - depending on input.specialRootMode), the REST
+		// nodes are picked as NORMAL. So multiple trees are generated (in parallel
+		// with a limited number of worker threads) and the "best" is chosen
+		// This is NOT the way Zokumbsp does multi-tree, but rather a more
+		// simple feature requested by user nicknamed jerko
+		rootNode = MTPSentinel_MakeBestBSPTree(&workData, rootBox, initialSuper,
+			input.specialRootMode)
+	} else {
+		Log.Panic("Multi-tree variant not implemented.\n")
+	}
+	// NOTE rootBox, rootSeg, initialSuper must NOT be used past this point!
+
 	// Ok, so now we are printing stats, checking limits, and reverting the
 	// tree to produce the final data
 
@@ -1769,6 +1788,93 @@ const FIXED16DOT16_MULTIPLIER = 65536.0
 // Redundant declaration on Number, but will be relevant on ZNumber
 func (n Number) ToFixed16Dot16() int32 {
 	return int32(float64(n) * FIXED16DOT16_MULTIPLIER)
+}
+
+// GetInitialStateClone (kinda like Clone or DeepCopy, but not quite) for that
+// full-of-state NodesWork structure. Multi-tree algorithms depend very much on
+// it!
+// GetInitialStateClone won't produce data relevant to superblocks. You will
+// have to call doInitialSuperblocks on the result to obtain new root superblock
+// and actualize nextInSuper field in NodeSeg's
+func (w *NodesWork) GetInitialStateClone() *NodesWork {
+	newW := new(NodesWork)
+	*newW = *w
+	// TODO write tests to ensure programmers keep this function up-to-date
+	// (use reflection etc. to do deep tests about references). There shall be
+	// NO shared data
+
+	newW.sides = make([]Sidedef, len(w.sides))
+	for i := 0; i < len(newW.sides); i++ {
+		newW.sides[i] = w.sides[i]
+	}
+
+	newW.sectors = make([]Sector, len(w.sectors))
+	for i := 0; i < len(newW.sectors); i++ {
+		newW.sectors[i] = w.sectors[i]
+	}
+
+	newW.totals = &NodesTotals{
+		numNodes:               0,
+		numSSectors:            0,
+		numSegs:                0,
+		maxSegCountInSubsector: 0,
+		segSplits:              0,
+	}
+
+	newW.vertices = make([]NodeVertex, len(w.vertices))
+	for i := 0; i < len(newW.vertices); i++ {
+		newW.vertices[i] = w.vertices[i]
+	}
+
+	newW.segAliasObj = new(SegAliasHolder)
+	newW.sectorHits = make([]byte, len(w.sectorHits))
+	newW.incidental = make([]VertexPairC, 0)
+
+	// NOTE newW.solidMap should not be written, only read from. Else we are screwed
+
+	newW.nonVoidCache = make(map[int]NonVoidPerAlias)
+	newW.blocksHit = make([]BlocksHit, 0)
+
+	if newW.zdoomVertexHeader != nil {
+		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
+		*newW.zdoomVertexHeader = *w.zdoomVertexHeader
+	}
+
+	// deepCopy for lines. That damn interface!
+	// TODO it needs to be tested on Hexen maps with polyobjects
+	newW.lines = w.lines.Clone()
+
+	newW.allSegs = make([]*NodeSeg, len(w.allSegs))
+	for i := 0; i < len(newW.allSegs); i++ {
+		newW.allSegs[i] = new(NodeSeg)
+		*(newW.allSegs[i]) = *(w.allSegs[i])
+		// zero out superblock data - no way to clone it from here
+		newW.allSegs[i].nextInSuper = nil
+		newW.allSegs[i].block = nil
+		//
+		// Fucking StartVertex and EndVertex
+		newW.allSegs[i].StartVertex = &(newW.vertices[w.allSegs[i].StartVertex.idx])
+		newW.allSegs[i].EndVertex = &(newW.vertices[w.allSegs[i].EndVertex.idx])
+	}
+
+	// Links between segs can only be updated after all segs are filled in
+	for i := 0; i < len(newW.allSegs); i++ {
+		if i < len(newW.allSegs)-1 {
+			newW.allSegs[i].next = newW.allSegs[i+1]
+		} else {
+			newW.allSegs[i].next = nil
+		}
+		if w.allSegs[i].partner != nil {
+			// which one, previous or next?
+			if i > 0 && w.allSegs[i].partner == w.allSegs[i-1] {
+				newW.allSegs[i].partner = newW.allSegs[i-1]
+			} else {
+				newW.allSegs[i].partner = newW.allSegs[i+1]
+			}
+		}
+	}
+
+	return newW
 }
 
 /*---------------------------------------------------------------------------*
