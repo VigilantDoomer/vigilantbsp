@@ -350,8 +350,6 @@ func MTPSentinel_GetRootSegCandidates(allSegs []*NodeSeg, rootChoiceMethod int) 
 
 func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTPWorker_Result) {
 	for permutation := range input {
-		// Superblock was not cloned (difficult to do), needs to be created from
-		// scratch. Creation happens on the worker side
 		tree := MTP_CreateRootNode(permutation.workData,
 			permutation.ts, permutation.bbox, permutation.pseudoSuper,
 			permutation.pickSegIdx)
