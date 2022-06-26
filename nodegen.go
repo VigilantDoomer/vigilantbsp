@@ -1827,6 +1827,7 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	}
 
 	newW.segAliasObj = new(SegAliasHolder)
+	newW.segAliasObj.Init()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
 	newW.incidental = make([]VertexPairC, 0)
 
@@ -1840,8 +1841,8 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 		*newW.zdoomVertexHeader = *w.zdoomVertexHeader
 	}
 
-	// deepCopy for lines. That damn interface!
-	// TODO it needs to be tested on Hexen maps with polyobjects
+	// "deep copy" (or at least an approximationof such) for lines. That damn
+	// interface! Especially in case of Hexen
 	newW.lines = w.lines.Clone()
 
 	newW.allSegs = make([]*NodeSeg, len(w.allSegs))
