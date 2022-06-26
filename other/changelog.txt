@@ -1,5 +1,8 @@
 Changelog for VigilantBSP
 
+v0.75a (working name)
+- Sped up multi-tree just a bit 
+
 v0.74a
 - New feature: partial RMB support!
 - New feature: multi-tree! For now, it is simplest form of multi-tree (finding best BSP tree out of several) - where only root node is bruteforced among all possible choices. Credit: jerko for suggesting this.

@@ -42,11 +42,12 @@ import (
 // compare the results, use "best" one
 
 type MTPWorker_Input struct {
-	workData   *NodesWork
-	pickSegIdx int
-	ts         *NodeSeg
-	bbox       *NodeBounds
-	id         int
+	workData    *NodesWork
+	pickSegIdx  int
+	ts          *NodeSeg
+	bbox        *NodeBounds
+	pseudoSuper *Superblock
+	id          int
 }
 
 type MTPWorker_Result struct {
@@ -102,15 +103,27 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 		go MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
 	}
 
+	// pseudoSuper is a superblock containing only metadata used to create new
+	// superblocks: whether to initialize secEquivs and sector fields, etc.
+	// It can be shared between all tree workers. Avoids having to clone or
+	// rebuild the original with new seg references (which is expensive), and
+	// guards against possible future code change bringing in race condition
+	// (say, if DivideSegsActual begins to access seg stuff, but multitree
+	// code is not updated accordingly) - such shortsighted code change would
+	// cause null pointer access instead, signaling that superblock of root node
+	// in multi-tree was not meant to be accessed in this capacity
+	pseudoSuper := super.DerivePseudo()
+
 	// At start, feed each channel/thread exactly once
 	for i := 0; i < workerCount; i++ {
 		clonedWorkData, clonedBbox := MTPSentinel_Clone(w, bbox)
 		workerChans[i] <- MTPWorker_Input{
-			workData:   clonedWorkData,
-			pickSegIdx: rootSegCandidates[i],
-			ts:         clonedWorkData.allSegs[0],
-			bbox:       clonedBbox,
-			id:         i,
+			workData:    clonedWorkData,
+			pickSegIdx:  rootSegCandidates[i],
+			ts:          clonedWorkData.allSegs[0],
+			bbox:        clonedBbox,
+			id:          i,
+			pseudoSuper: pseudoSuper,
 		}
 	}
 	lastFedIdx := workerCount - 1
@@ -152,11 +165,12 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 			lastFedIdx++
 			clonedWorkData, clonedBbox := MTPSentinel_Clone(w, bbox)
 			workerChans[branchIdx[chi]] <- MTPWorker_Input{
-				workData:   clonedWorkData,
-				pickSegIdx: rootSegCandidates[lastFedIdx],
-				ts:         clonedWorkData.allSegs[0],
-				bbox:       clonedBbox,
-				id:         lastFedIdx,
+				workData:    clonedWorkData,
+				pickSegIdx:  rootSegCandidates[lastFedIdx],
+				ts:          clonedWorkData.allSegs[0],
+				bbox:        clonedBbox,
+				id:          lastFedIdx,
+				pseudoSuper: pseudoSuper,
 			}
 		} else {
 			// No more segs to try
@@ -338,9 +352,9 @@ func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTP
 	for permutation := range input {
 		// Superblock was not cloned (difficult to do), needs to be created from
 		// scratch. Creation happens on the worker side
-		super := permutation.workData.doInitialSuperblocks(permutation.bbox)
 		tree := MTP_CreateRootNode(permutation.workData,
-			permutation.ts, permutation.bbox, super, permutation.pickSegIdx)
+			permutation.ts, permutation.bbox, permutation.pseudoSuper,
+			permutation.pickSegIdx)
 
 		replyTo <- MTPWorker_Result{
 			workData: permutation.workData,
@@ -352,7 +366,7 @@ func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTP
 }
 
 func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
-	super *Superblock, pickSegIdx int) *NodeInProcess {
+	pseudoSuper *Superblock, pickSegIdx int) *NodeInProcess {
 	res := new(NodeInProcess)
 	var rights *NodeSeg
 	var lefts *NodeSeg
@@ -361,8 +375,8 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	// Divide node in two
 	w.totals.numNodes++
 	// New DivideSegs variant - uses provided seg as root seg
-	w.MTP_DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper,
-		w.allSegs[pickSegIdx])
+	w.MTP_DivideSegs(ts, &rights, &lefts, bbox, pseudoSuper, &rightsSuper,
+		&leftsSuper, w.allSegs[pickSegIdx])
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
@@ -407,7 +421,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 }
 
 func (w *NodesWork) MTP_DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
-	bbox *NodeBounds, super *Superblock, rightsSuper, leftsSuper **Superblock,
+	bbox *NodeBounds, pseudoSuper *Superblock, rightsSuper, leftsSuper **Superblock,
 	chosen *NodeSeg) {
 	best := chosen
 
@@ -425,5 +439,5 @@ func (w *NodesWork) MTP_DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
-	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
+	w.DivideSegsActual(ts, rs, ls, bbox, best, c, pseudoSuper, rightsSuper, leftsSuper)
 }

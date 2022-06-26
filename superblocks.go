@@ -248,6 +248,23 @@ func (s *Superblock) MarkSectorsHitNoCached(sectorsHit []uint8, mask uint8) {
 	}
 }
 
+// Multitree_plain hack. Copies only some superblock metadata but no
+// children or segs. Intended to be called only on root superblock, the returned
+// value is to be used as ephemism for initial root "superblock" for MTP trees
+func (s *Superblock) DerivePseudo() *Superblock {
+	res := &Superblock{
+		parent: nil,
+		x1:     s.x1,
+		y1:     s.x1,
+		x2:     s.x2,
+		y2:     s.y2,
+		subs:   [2]*Superblock{nil, nil},
+		segs:   nil,
+	}
+	res.InitSectorsIfNeeded(s) // this is actually what the return value is used for
+	return res
+}
+
 // func UtilPerpDist(part *NodeSeg, x, y float64) float64 {
 // 		return (x*float64(part.pdy) - y*float64(part.pdx) +
 // 			float64(part.perp)) / part.flen
