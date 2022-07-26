@@ -223,6 +223,7 @@ type ProgramConfig struct {
 	MultiTreeMode   int
 	SpecialRootMode int // used when MultiTreeMode = MULTITREE_ROOT_ONLY
 	NodeThreads     int16
+	StraightNodes   bool // write nodes without traditional reversal
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -275,6 +276,7 @@ func init() {
 		MultiTreeMode:          MULTITREE_NOTUSED,
 		SpecialRootMode:        MROOT_ONESIDED,
 		NodeThreads:            0,
+		StraightNodes:          false,
 	})
 }
 

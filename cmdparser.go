@@ -145,10 +145,12 @@ func (c *ProgramConfig) FromCommandLine() bool {
 				// Encountered a beginning of double hyphen argument, which is
 				// entire "word" followed by a double hyphen, rather than one
 				// letter following a single one
-				// TODO refactor. Will probably have more double hyphen
-				// arguments in the future. Current code mess is for files only
-				// and hard to read or extend
-				fileSatisfied := false
+
+				// fileSatisfied can become false in the following case:
+				// 1. The argument type requires a file to be specified, and
+				// 2. There was no file following argument type that takes a file
+				fileSatisfied := true
+
 				// parameter starts with double hyphen, e.g. --something
 				if bytes.Equal([]byte(arg), []byte("--cpuprofile")) {
 					// Parameter: write cpu profile to file following this
@@ -166,11 +168,27 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					c.MemProfile = true
 					c.MemProfilePath = args[argIdx+1]
 					skip = true
+				} else if bytes.Equal([]byte(arg), []byte("--unreversenodes")) {
+					// Parameter: write BSP tree without the traditionally
+					// used reversal, keeping only root node at the last index
+					// Idea: Linguica, "Stupid BSP tricks" thread on doomworld
+					// Explaination: usually, BSP tree is written in reversed
+					// order, where indices of child nodes of each node precede
+					// the index of node that references them. Anecdotal
+					// evidence shows that it provides suboptimal performance
+					// on old 486 processors, compared to reversing this
+					// reversal, which is what this option does.
+					// Caveat: root node still must be written last
+					// Caveat 2: the exact algorithm used by Linguica was lost
+					// (link expired), my implementation does not necessary
+					// match it and hence may not fulfill performance benefits
+					// See https://www.doomworld.com/forum/topic/74354-stupid-bsp-tricks/?do=findComment&comment=1524479
+					c.StraightNodes = true
 				} else {
 					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
 					return false
 				}
-				if !fileSatisfied {
+				if !fileSatisfied { // argument takes a file, but no file was supplied?
 					Log.Error("Modifier '%s' was present without a file name following it - aborting.\n",
 						arg)
 					return false

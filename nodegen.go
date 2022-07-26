@@ -1609,6 +1609,12 @@ func (w *NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 		w.nodes = make([]Node, w.totals.numNodes)
 		w.nreverse = 0
 	}
+	if config.StraightNodes { // reference to global: config
+		// this line shall be executed for root node only
+		// root node still needs to be placed last, even as if the rest of tree
+		// is written "unreversed"
+		return w.convertNodesStraight(node, uint32(w.totals.numNodes-1))
+	}
 	if node.nextR != nil {
 		node.RChild = w.reverseNodes(node.nextR)
 	}
@@ -1631,11 +1637,17 @@ func (w *NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 	return w.nreverse - 1
 }
 
-// Node reversal for deep nodes
+// Node reversal for deep/extended nodes
 func (w *NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 	if w.deepNodes == nil {
 		w.deepNodes = make([]DeepNode, w.totals.numNodes)
 		w.nreverse = 0
+	}
+	if config.StraightNodes { // reference to global: config
+		// this line shall be executed for root node only
+		// root node still needs to be placed last, even as if the rest of tree
+		// is written "unreversed"
+		return w.convertDeepNodesStraight(node, uint32(w.totals.numNodes-1))
 	}
 	if node.nextR != nil {
 		node.RChild = w.reverseDeepNodes(node.nextR)
@@ -1657,6 +1669,68 @@ func (w *NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 
 	w.nreverse++
 	return w.nreverse - 1
+}
+
+// Writes nodes without reversal, except the root node is still last
+// Standard nodes version
+func (w *NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32 {
+	rnode := w.nreverse
+	lnode := w.nreverse
+	if node.nextR != nil {
+		w.nreverse++
+	}
+	if node.nextL != nil {
+		w.nreverse++
+	}
+	if node.nextR != nil {
+		node.RChild = w.convertNodesStraight(node.nextR, rnode)
+		lnode++
+	}
+	if node.nextL != nil {
+		node.LChild = w.convertNodesStraight(node.nextL, lnode)
+	}
+	w.nodes[idx] = Node{
+		X:      node.X,
+		Y:      node.Y,
+		Dx:     node.Dx,
+		Dy:     node.Dy,
+		Rbox:   node.Rbox,
+		Lbox:   node.Lbox,
+		LChild: int16(node.LChild),
+		RChild: int16(node.RChild),
+	}
+	return idx
+}
+
+// Writes nodes without reversal, except the root node is still last
+// Deep/extended nodes version
+func (w *NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) uint32 {
+	rnode := w.nreverse
+	lnode := w.nreverse
+	if node.nextR != nil {
+		w.nreverse++
+	}
+	if node.nextL != nil {
+		w.nreverse++
+	}
+	if node.nextR != nil {
+		node.RChild = w.convertDeepNodesStraight(node.nextR, rnode)
+		lnode++
+	}
+	if node.nextL != nil {
+		node.LChild = w.convertDeepNodesStraight(node.nextL, lnode)
+	}
+	w.deepNodes[idx] = DeepNode{
+		X:      node.X,
+		Y:      node.Y,
+		Dx:     node.Dx,
+		Dy:     node.Dy,
+		Rbox:   node.Rbox,
+		Lbox:   node.Lbox,
+		LChild: int32(node.LChild),
+		RChild: int32(node.RChild),
+	}
+	return idx
 }
 
 // computeSectorEquivalence()

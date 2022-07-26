@@ -2,6 +2,7 @@ Changelog for VigilantBSP
 
 v0.75a (working name)
 - Sped up multi-tree just a bit 
+- Added hidden option to produce unreversed BSP nodes array, which might (or might not) offer performance benefits on old (486?) processors. See "Debug and other hidden parameters", "--unreversenodes".
 
 v0.74a
 - New feature: partial RMB support!

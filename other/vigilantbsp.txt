@@ -27,7 +27,7 @@ Index
 07. Nodes builder
 08. Reject builder
 09. Option -m: Rebuild only specific maps
-10. Debug parameters
+10. Debug and other hidden parameters
 11. Changelog
 12. Operating system and platform availability
 13. Other node builders
@@ -1416,20 +1416,20 @@ such as SLADE3. This issue is minor, it is not going to affect how
 the wad plays in ANY source port, because the content of each 
 respective lump is still identical in this case. 
 
-Section 10: Debug parameters
-============================
+Section 10: Debug and other hidden parameters
+=============================================
 
-Some parameters are not shown in the list. They are used for 
-debugging purposes by programmers and testers capable of understanding
-program code. All such parameters start with double hyphen ('--' 
+Some parameters are not shown in the list. They are either:
+1) used for debugging purposes by programmers and testers capable of
+understanding program code, and might require familiarity with
+Go toolset. 
+2) have really niche uses that can be confusing to users
+All such parameters start with double hyphen ('--' 
 rather than single hyphen ('-').
-
-If you don't know programming or don't understand how to work with
-the output (are not familiar with Go tools), these options are of
-no use to you.
 
 The following parameters are currently supported:
 --cpuprofile <filename>
+A debug option.
 Write cpu profile to the file described by filename following
 the parameter after a space. If file exists already, it will be
 overwritten. The result file contains data on how much each function
@@ -1438,14 +1438,10 @@ analysing tool such as "go tool pprof <filename>".
 
 It is recommended to give this file an extension of ".prof"
 
-NOTE You might need to supply such tools (not to VigilantBSP) 
-path to the source code of VigilantBSP if using an official version 
-of VigilantBSP or you built it with Makefile provided or stripped 
-this information from the VigilantBSP executable otherwise. Be sure
-to have checked out the source for that specific version! The 
-executables themselves and the profiles never contain source code.
+Also, see comments closing this section.
 
 --memprofile <filename>
+A debug option.
 Write memory allocations profile to  the file described by
 filename forllowing the parameter after a space. If file
 exists already, it will be overwritten. The result file contains
@@ -1455,7 +1451,33 @@ analysing tool such as "go tool pprof <filename>".
 
 It is recommended to give this file an extension of ".prof"
 
-NOTE You might need to supply such tools (not to VigilantBSP) 
+Also, see comments closing this section.
+
+--unreversenodes
+A niche use option.
+Linguica discovered (see https://www.doomworld.com/forum/topic/74354-stupid-bsp-tricks/?do=findComment&comment=1524479)
+that default, standard order in which nodes are stored may have not
+be the effective one for the processors of the time. The distinguishing
+feature of the standard order is that it is reversed: all child nodes
+have indices that precede (are less than), rather than follow (are 
+greater then), the index of the node referencing them. When this option
+is supplied, child nodes will be placed at greater indices than their
+parents, with exception of root node, which MUST be placed at last
+index still (all ports and vanilla expect to find root node at that
+exact place). The order is thus the reverse of the traditional, or
+ - as I prefer to call it - unreversed, since the traditional already
+ included reversal. In the chart produced on above link, "normal" means
+ what I call "traditional" (this option NOT specified), and "reversed"
+ means what I call "unreversed"  (this option specified).
+
+Since the link to the original algorithm Linguica produces has expired,
+it cannot be verified that the algorithm used by VigilantBSP is the
+same. Since even the original produced benefits only in some cases,
+this option is probably condemned to obscurity.
+
+Closing comments in regards to --memprofile and --cpuprofile options:
+
+You might need to supply Go tools (not to VigilantBSP) 
 path to the source code of VigilantBSP if using an official version 
 of VigilantBSP or you built it with Makefile provided or stripped 
 this information from the VigilantBSP executable otherwise. Be sure
