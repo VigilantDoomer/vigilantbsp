@@ -46,9 +46,6 @@ const VERSION = "0.75a"
 		2 Blockmap works in limit-removing ports is enough
 
 -d Deterministic output (default: disabled)
-	NOTE enabling this *together* with non-zero endgoal for blockmap (-be=... )
-	will DISABLE using multiple cores for trying multiple offsets, EVEN if
-	user directly specified the number of cores using -bt=...
 
 -n Rebuild NODES.
 	a= Partition selection algorithm.
@@ -332,9 +329,6 @@ func PrintHelp() {
 	Log.Printf("		2 Blockmap works in limit-removing ports is enough\n")
 	Log.Printf("\n")
 	Log.Printf("-d Deterministic output (default: disabled)\n")
-	Log.Printf("	NOTE enabling this *together* with non-zero endgoal for blockmap (-be=... )\n")
-	Log.Printf("	will DISABLE using multiple cores for trying multiple offsets, EVEN if\n")
-	Log.Printf("	user directly specified the number of cores using -bt=...\n")
 	Log.Printf("\n")
 	Log.Printf("-n Rebuild NODES.\n")
 	Log.Printf("	a= Partition selection algorithm.\n")

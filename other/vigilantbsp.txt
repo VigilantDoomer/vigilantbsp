@@ -125,9 +125,6 @@ is either a suboption of option above it, or a possible value:
 		2 Blockmap works in limit-removing ports is enough
 
 -d Deterministic output (default: disabled)
-	NOTE enabling this *together* with non-zero endgoal for blockmap (-be=... )
-	will DISABLE using multiple cores for trying multiple offsets, EVEN if
-	user directly specified the number of cores using -bt=...
 
 -n Rebuild NODES.
 	a= Partition selection algorithm.
@@ -674,10 +671,28 @@ of blockmap lump, that blockmap is chosen to be written into the wad.
 Caveat emptor: because of parallelism, the blockmap size or contents
 will often vary from one run to another. This is because threads can
 get ahead of each other. Consistency can be achieved by enabling
-determinism via option that will be covered later, BUT in that case,
-if this option is not set to zero, ONLY ONE THREAD will be used to 
-try all blockmap offsets that are there to be tried, which might be
-SLOW if most of them won't produce small enough blockmap.
+determinism via option that will be covered later. In versions
+prior to VigilantBSP v0.75a, if this option was not set to zero,
+and determinism was enabled, only one thread was used to try 
+all blockmap offsets. This limitation was finally lifted in 
+VigilantBSP v0.75a, resulting in improved performance when the
+number of offsets to try is high or if endgoal is impossible with
+all offsets.
+
+NOTE when the endgoal is non-zero and determinism is enabled,
+the current behavior (starting with v0.75a) is to use multiple threads
+first, and if endgoal IS reached, backtrack using single thread for
+every prior offset that was missed because thread progress is uneven.
+Sometimes, no offsets has been missed, thus backtracking is not always
+needed, the number of missing offsets varies (usually only a fraction
+of total pool of offsets) and thus it would not always be beneficial
+to use multi-threading for backtracking, but this area
+is still subject to further optimization. Let's just say that you
+DO get improvements over single-threaded mode when you most need
+them (trying a lot of offsets on a complex maps that takes seconds,
+not milliseconds), and the resulting files from building wad in
+deterministic single-threaded mode and determistic multi-threaded 
+mode are byte-for-byte identical when all other parameters are identical.
 
 05:07 Blockmap options that might get implemented in the future
 ---------------------------------------------------------------
@@ -719,12 +734,12 @@ input file with the same option list in the same version of VigilantBSP
 is guaranteed to produce the same byte-for-byte output file. This will
 generally increase running time, however, so is not enabled by default.
 
-Enabling determinism when also non-zero endgoal for blockmap is specified
-and multiple offsets are to be tried in search for a better blockmap
-will also FORCE blockmaps to be tried using ONLY ONE THREAD and this
-will not be overridden even if user specifies the exact number of threads
-for blockmap building (that number will get ignored instead). This 
-limitation may (or may not) be removed in future versions of VigilantBSP.
+Starting with VigilantBSP v0.75a, you CAN use multiple threads in
+deterministic mode with non-zero endgoal for blockmap and multiple 
+offsets to be tried. Prior versions of VigilantBSP forced single-threaded
+mode for computing blockmaps (even if user explicitly requested the
+number of threads to use for blockmap building), this limitation has
+been lifted.
 
 Section 07: Nodes builder
 =========================

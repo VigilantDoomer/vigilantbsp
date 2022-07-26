@@ -44,17 +44,41 @@ const MAX_ADDRESSABLE_BLOCKMAP_SIZE = 65535*2 + 2 + 65536*2 + 2
 const MIN_MAP_COORD = -32768
 
 type BlockmapBeeInput struct {
-	offsetYMax  int16
-	offsetXMax  int16
-	offsetXStep int16
-	offsetYStep int16
-	replyTo     chan<- BlockmapBeeOutput
-	bailout     uint16
+	offsetYMax   int16
+	offsetXMax   int16
+	offsetXStep  int16
+	offsetYStep  int16
+	replyTo      chan<- BlockmapBeeOutput
+	triedOffsets chan<- TriedOffsets
+	bailout      uint16
+	sieveMode    bool
 }
 
 type BlockmapBeeOutput struct {
 	data     []byte
 	blockmap *Blockmap
+	XOffset  int16
+	YOffset  int16
+	aborted  bool // skipped by heuristic
+}
+
+type SieveItemNoBool struct {
+	XOffset int16
+	YOffset int16
+}
+
+type SieveItem struct {
+	XOffset int16
+	YOffset int16
+	Marked  bool
+}
+
+type TriedOffsets struct {
+	data []SieveItemNoBool
+}
+
+type OffsetSieve struct {
+	values []SieveItem
 }
 
 // This is goroutine used to produce BLOCKMAP lump data and give it back
@@ -158,17 +182,20 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 	var cancel context.CancelFunc
 	if config.BlockmapSearchAbortion != BM_OFFSET_NOABORT { // global config
 		ctx, cancel = context.WithCancel(context.Background())
-		if config.Deterministic { // global config
-			// Currently, can't guarantee determinism when the search stops at first
-			// good blockmap unless only one thread is used for the search
-			// TODO might be possible to achieve determinism without this
-			// degradation?
-			Log.Printf("Forcing single-threaded mode for trying blockmap offsets - this is the only way I can be deterministic while allowing blockmap offset search to stop as soon as 'max offset satisfies limits' condition is reached.")
-			beeCount = 1
-		}
 	}
 
 	Log.Printf("Blockmap generator will use %d CPUs\n", beeCount)
+
+	deterministic := config.Deterministic // reference to global: config
+	var sieve *OffsetSieve
+	var offsetAggregators []chan TriedOffsets
+	if deterministic && beeCount > 1 && ctx != nil {
+		// sieve is used to track offsets for which blockmaps were not produced
+		// (because threads outpace each other) before the process was
+		// interrupted
+		sieve = BMCreateOffsetSieve(offsetXMax, offsetYMax, offsetStep)
+		offsetAggregators = make([]chan TriedOffsets, beeCount)
+	}
 
 	// So that no bee try the same offsets as any other one, each bee starts
 	// on a different X offset with Y = 0, and then increase it by a offsetBeeStep
@@ -176,7 +203,7 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 	// offsetXMax is taken care off in BlockmapBee - offsetY changes when that
 	// happens
 	offsetBeeStep := offsetStep * beeCount
-	bees = make([]chan BlockmapBeeOutput, beeCount, beeCount)
+	bees = make([]chan BlockmapBeeOutput, beeCount)
 	var i int16
 	for i = 0; i < beeCount; i++ {
 		bees[i] = make(chan BlockmapBeeOutput)
@@ -190,10 +217,16 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 			offsetYStep: offsetStep,
 			replyTo:     bees[i],
 			bailout:     bailout,
+			sieveMode:   sieve != nil,
+		}
+		if beeConfig.sieveMode {
+			offsetAggregators[i] = make(chan TriedOffsets)
+			beeConfig.triedOffsets = offsetAggregators[i]
 		}
 		go BlockmapBee(ctx, newInput, beeConfig)
 	}
-	res := BlockmapHive(ctx, cancel, bees)
+	res := BlockmapHive(ctx, cancel, bees, sieve, input, offsetAggregators,
+		bailout)
 	Log.Printf("Blockmap took %s\n", time.Since(start))
 	where <- res
 }
@@ -202,10 +235,12 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 // to BlockmapQueen. Also a regular function called from BlockmapQueen, waiting
 // synchronously for bees to complete their work.
 func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
-	bees []chan BlockmapBeeOutput) []byte {
+	bees []chan BlockmapBeeOutput, sieve *OffsetSieve, input BlockmapInput,
+	offsetAggregators []chan TriedOffsets, bailout uint16) []byte {
 	beeCount := len(bees)
 	NA := reflect.Value{}
 	var best BlockmapBeeOutput
+	var bestXOffset, bestYOffset int16
 	everRun := false
 	cancelled := false
 	// Because the number of channels to listen on is determined in run-time, we
@@ -220,42 +255,125 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 			Send: NA,
 		}
 	}
+	// 'chase' indicates whether to continue getting data even when further
+	// mining was cancelled, instead of ignoring it (on best effort basis, since
+	// threads will cancel themselves soon and thus blockmap results for certain
+	// offsets may still be absent)
+	chase := sieve != nil
 	for len(branches) > 0 {
 		chi, recv, recvOk := reflect.Select(branches)
 		if !recvOk { // channel closed
 			branches = BMHive_DeleteBranch(branches, chi)
 			continue
 		}
-		if !cancelled {
+		if !cancelled || chase {
 			work := (recv.Interface()).(BlockmapBeeOutput) // got best effort of bee #chi
-			// But is it best among all bees' work?
-			if !everRun { // this bee is the first to report, so store result as best so far
-				everRun = true
-				best = work
-			} else {
-				// check against previous best
-				if IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap) {
-					// Previous best value is now subject to garbage collection
+			if !work.aborted {                             // aborted happens in heuristic mode when determinism, multiple threads and endgoal (good enough blockmap) are present
+				// But is it best among all bees' work?
+				if !everRun { // this bee is the first to report, so store result as best so far
+					everRun = true
 					best = work
+					bestXOffset = work.XOffset
+					bestYOffset = work.YOffset
+				} else {
+					// check against previous best
+					if sieve == nil {
+						if IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap) {
+							// Previous best value is now subject to garbage collection
+							best = work
+							bestXOffset = work.XOffset
+							bestYOffset = work.YOffset
+						}
+					} else {
+						// We have to provide deterministic result in
+						// multi-threaded mode with an endgoal
+						// Since we have an endgoal, we need not the best, but
+						// we need the EARLIEST (determinism) good enough
+						// possible, as would be encountered if we were trying
+						// them sequentially
+						if IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap) ||
+							(OffsetPreceedes(work.XOffset, work.YOffset, bestXOffset, bestYOffset) &&
+								IsBlockmapGoodEnough(work.blockmap)) {
+							// Previous best value is now subject to garbage collection
+							best = work
+							bestXOffset = work.XOffset
+							bestYOffset = work.YOffset
+						}
+					}
 				}
-			}
 
-			if ctx != nil {
-				if IsBlockmapGoodEnough(best.blockmap) {
-					Log.Printf("Found blockmap that is within limits, aborting futher search.\n")
-					cancel()
-					cancelled = true
-					// Now all bees shutdown, and must reach by closing their channel,
-					// which results in clean exit from the loop once all channels
-					// are closed (as usual)
+				if ctx != nil {
+					if IsBlockmapGoodEnough(best.blockmap) {
+						if !cancelled {
+							Log.Printf("Found blockmap that is within limits, aborting futher search.\n")
+							cancel()
+							cancelled = true
+						}
+						// Now all bees shutdown, and must reach by closing their channel,
+						// which results in clean exit from the loop once all channels
+						// are closed (as usual)
+					}
 				}
 			}
 		}
 
 	} // loop is exited when all branches are deleted (all channels closed)
+
+	// Now collect all tried offsets, IF needed
+	BMHive_AggregateAll(offsetAggregators, sieve)
+
+	// Now see if we still need to check some untried offsets
+	cntHoles := sieve.CountHoles(bestXOffset, bestYOffset)
+	if cntHoles > 0 {
+		// We have an offset that produces good enough blockmap with regards to
+		// endgoal, but we have no data for some of the earlier offsets that
+		// might also produce good enough blockmap. Since user requested
+		// determinism, we must check all those offsets too, and we must always
+		// use the earliest which gives good enough blockmap, even if it is worse
+		// than the best we've found
+		best = BlockmapHoleChaser(&best, sieve, bestXOffset, bestYOffset,
+			input, bailout, cntHoles)
+	} else if sieve != nil {
+		Log.Printf("Blockmap generator: I happened to not need backtracking when looking for good enough blockmap under determinism in multi-threaded mode.")
+	}
+
 	StatBlockmap(best.blockmap)
 	DeleteIfTooBig(best.blockmap, &(best.data))
 	return best.data
+}
+
+func OffsetPreceedes(newX, newY, oldX, oldY int16) bool {
+	return newY < oldY || (newY == oldY && newX < oldX)
+}
+
+func BMHive_AggregateAll(offsetsAggregators []chan TriedOffsets, sieve *OffsetSieve) {
+	if offsetsAggregators == nil {
+		return
+	}
+	if sieve == nil {
+		Log.Panic("Inconsistency error (programmer error): offsetsAggregators is not nil but sieve is nil.")
+	}
+	beeCount := len(offsetsAggregators)
+	NA := reflect.Value{}
+	branches := make([]reflect.SelectCase, beeCount, beeCount)
+	for i := 0; i < beeCount; i++ {
+		branches[i] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(offsetsAggregators[i]),
+			Send: NA,
+		}
+	}
+	for len(branches) > 0 {
+		chi, recv, recvOk := reflect.Select(branches)
+		if !recvOk { // channel closed
+			branches = BMHive_DeleteBranch(branches, chi)
+			continue
+		}
+		offsets := (recv.Interface()).(TriedOffsets)
+		for _, item := range offsets.data {
+			sieve.Mark(item.XOffset, item.YOffset)
+		}
+	}
 }
 
 func BMHive_DeleteBranch(branches []reflect.SelectCase, chi int) []reflect.SelectCase {
@@ -272,6 +390,10 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 	var oldBm *Blockmap
 	everRun := false
 	var data []byte
+	var offsetsTried []SieveItemNoBool
+	if beeConfig.sieveMode {
+		offsetsTried = make([]SieveItemNoBool, 0)
+	}
 
 	gcShield := BlockmapCreateGCShield(BMBeeMaxSize(bmConfig.bounds),
 		config.SubsetCompressBlockmap) // reference to global variable "config"
@@ -291,7 +413,7 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 			case <-ctx.Done():
 				{
 					// we were cancelled, we're done and must signal it
-					close(beeConfig.replyTo) // allow Hive to exit loop
+					BlockmapBeeFinalize(beeConfig, offsetsTried)
 					return
 				}
 			default:
@@ -315,6 +437,13 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 				Log.Verbose(2, "Heuristics: offset (%d,%d) produces extra column and row\n", bmConfig.XOffset, bmConfig.YOffset)
 			}
 		}
+		if beeConfig.sieveMode {
+			// even if bailed out, mark this as done
+			offsetsTried = append(offsetsTried, SieveItemNoBool{
+				XOffset: bmConfig.XOffset,
+				YOffset: bmConfig.YOffset,
+			})
+		}
 		if !bailedOut {
 			bm := CreateBlockmap(bmConfig)
 			if config.SubsetCompressBlockmap { // another reference to global variable "config"
@@ -323,8 +452,13 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 				data = bm.GetBytes()
 			}
 			bmConfig.gcShield = bm.gcShield
-			if !everRun || IsBlockmapBetter(data, bm, lenOld, oldBm) {
-				// Found first / better blockmap
+			if !everRun || ((!beeConfig.sieveMode &&
+				IsBlockmapBetter(data, bm, lenOld, oldBm)) ||
+				(beeConfig.sieveMode && !IsBlockmapGoodEnough(oldBm) &&
+					(IsBlockmapGoodEnough(bm) || IsBlockmapBetter(data, bm, lenOld, oldBm)))) {
+				// Found first / better blockmap (or first good enough blockmap
+				// in lieu of better, if deterministic and endgoal parameters
+				// were used)
 				everRun = true
 				lenOld = len(data)
 				bm.blocklist = nil
@@ -336,20 +470,24 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 					select { // here we wait either for Hive to read, or to cancel us
 					case beeConfig.replyTo <- BlockmapBeeOutput{ // send it to Hive
 						data:     data,
-						blockmap: bm}:
+						blockmap: bm,
+						XOffset:  bmConfig.XOffset,
+						YOffset:  bmConfig.YOffset}:
 						{
 
 						}
 					case <-ctx.Done():
 						{ // we were cancelled, we're done and must signal it
-							close(beeConfig.replyTo) // allow Hive to exit loop
+							BlockmapBeeFinalize(beeConfig, offsetsTried)
 							return
 						}
 					}
 				} else {
 					beeConfig.replyTo <- BlockmapBeeOutput{ // send it to Hive
 						data:     data,
-						blockmap: bm}
+						blockmap: bm,
+						XOffset:  bmConfig.XOffset,
+						YOffset:  bmConfig.YOffset}
 				}
 
 			}
@@ -369,7 +507,18 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 		}
 	}
 	// We're done (here because we finished our part of work)
-	close(beeConfig.replyTo)
+	BlockmapBeeFinalize(beeConfig, offsetsTried)
+}
+
+func BlockmapBeeFinalize(beeConfig BlockmapBeeInput, triedOffsets []SieveItemNoBool) {
+	close(beeConfig.replyTo) // allow Hive to exit loop
+	if beeConfig.sieveMode {
+		// Ah, need to supply all the offsets we tried
+		beeConfig.triedOffsets <- TriedOffsets{
+			data: triedOffsets,
+		}
+		close(beeConfig.triedOffsets) // Hive will wait on this too (but at later point) in this mode
+	}
 }
 
 func BMBeeMaxSize(b LevelBounds) int {
@@ -586,4 +735,134 @@ func ChooseModeWithCutoff(mode int, offsetXMax, offsetYMax, offsetStep *int16,
 	}
 	// Currently the cutoff should work, but very suboptimally in some cases...
 	return mode
+}
+
+func BMCreateOffsetSieve(offsetXMax, offsetYMax, offsetStep int16) *OffsetSieve {
+	a := &OffsetSieve{
+		values: make([]SieveItem, 0),
+	}
+	offsetX := int16(0)
+	offsetY := int16(0)
+	hasOffsets := true // at least (0,0) will be there sure
+	for hasOffsets {
+		a.values = append(a.values, SieveItem{
+			XOffset: offsetX,
+			YOffset: offsetY,
+			Marked:  false,
+		})
+		offsetX += offsetStep
+		for offsetX >= offsetXMax {
+			offsetX -= offsetXMax
+			offsetY += offsetStep
+		}
+		hasOffsets = offsetY < offsetYMax
+	}
+	return a
+}
+
+// Marks offset pair as visited (blockmap or heuristic was evaluated for this)
+// to avoid computing blockmap a second time
+// SLOOOOW. Need to represent sieve in a different way, with O(1) lookups not O(n)
+func (s *OffsetSieve) Mark(XOffset, YOffset int16) {
+	if s == nil {
+		return
+	}
+	marked := false
+	for _, item := range s.values {
+		if item.XOffset == XOffset && item.YOffset == YOffset {
+			if item.Marked {
+				Log.Panic("This blockmap offset (%d,%d) was already registered within OffsetSieve (programmer error, shouldn't happen).\n",
+					XOffset, YOffset)
+			}
+			item.Marked = true
+			marked = true
+		}
+	}
+	if !marked {
+		Log.Panic("This blockmap offset  (%d,%d) is not present in OffsetSieve (programmer error, shouldn't happen).\n",
+			XOffset, YOffset)
+	}
+}
+
+func (s *OffsetSieve) CountHoles(LastXOffset, LastYOffset int16) int {
+	if s == nil {
+		return 0
+	}
+	cnt := 0
+	for _, item := range s.values {
+		if item.XOffset == LastXOffset && item.YOffset == LastYOffset {
+			return cnt
+		}
+		if !item.Marked {
+			cnt++
+		}
+	}
+	Log.Panic("Point that should not be reachable has been reached (programmer error).")
+	return cnt
+}
+
+// BlockmapHoleChaser iterates through all untried offsets in sieve till
+// (LastXOffset, LastYOffset) non-inclusive, computes blockmap in sequential
+// mode and returns it
+// TODO multi-threaded mode, but only if number of holes is above certain
+// threshold
+func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
+	LastXOffset, LastYOffset int16, input BlockmapInput, bailout uint16,
+	cntHoles int) BlockmapBeeOutput {
+	Log.Printf("Blockmap generator: backtracking to produce blockmap for %d skipped blockmap offsets to ensure determinism.\n",
+		cntHoles)
+	best := oldBest
+	gcShield := BlockmapCreateGCShield(BMBeeMaxSize(input.bounds),
+		config.SubsetCompressBlockmap) // reference to global variable "config"
+	input.gcShield = gcShield
+	for _, item := range sieve.values {
+		if item.XOffset == LastXOffset && item.YOffset == LastYOffset {
+			Log.Printf("Backtracking didn't find better earlier offset, sticking to (%d,%d)\n", LastXOffset, LastYOffset)
+			return *best
+		}
+		if !item.Marked {
+			// needs to compute
+			input.XOffset = item.XOffset
+			input.YOffset = item.YOffset
+			bailedOut := false
+			if bailout > 0 {
+				// Check block count against heuristics to early skip when testing 65536 offsets
+				xmin := int(input.bounds.Xmin - input.XOffset)
+				ymin := int(input.bounds.Ymin - input.YOffset)
+				xmax := int(input.bounds.Xmax)
+				ymax := int(input.bounds.Ymax)
+				xblocks := uint16(xmax-xmin)>>BLOCK_BITS + 1
+				yblocks := uint16(ymax-ymin)>>BLOCK_BITS + 1
+				if bailout == (xblocks * yblocks) {
+					bailedOut = true
+					Log.Verbose(2, "Heuristics: offset (%d,%d) produces extra column and row\n", input.XOffset, input.YOffset)
+				}
+			}
+			if bailedOut {
+				continue
+			}
+			var data []byte
+			bm := CreateBlockmap(input)
+			if config.SubsetCompressBlockmap { // another reference to global variable "config"
+				data = bm.GetBytesArcane()
+			} else {
+				data = bm.GetBytes()
+			}
+			input.gcShield = bm.gcShield
+			if IsBlockmapGoodEnough(bm) ||
+				(!IsBlockmapGoodEnough(best.blockmap) &&
+					IsBlockmapBetter(data, bm, len(best.data), best.blockmap)) {
+				best = &BlockmapBeeOutput{
+					data:     data,
+					blockmap: bm,
+					XOffset:  input.XOffset,
+					YOffset:  input.YOffset,
+					aborted:  false,
+				}
+				return *best
+			}
+		}
+	}
+	Log.Panic("The evaluated item was not present in the sieve (programmer error)\n")
+	return *best
 }
