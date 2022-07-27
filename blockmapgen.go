@@ -83,11 +83,17 @@ type OffsetSieve struct {
 
 // This is goroutine used to produce BLOCKMAP lump data and give it back
 // to the thing that run it
-func BlockmapGenerator(input BlockmapInput, where chan<- []byte) {
+func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
+	levelFormat int, sectors []Sector, sidedefs []Sidedef) {
 	var offsetXMax int16 // not inclusive, i.e. use < rather than <=
 	var offsetYMax int16 // not inclusive, i.e. use < rather than <=
 	var offsetStep int16
 	start := time.Now()
+
+	if config.RemoveNonCollideable { // reference to global: config
+		input.linesToIgnore = RemoveLinesFromBlockmap(input.linesToIgnore,
+			input.lines, levelFormat, sectors, sidedefs)
+	}
 
 	// Some lines may be excluded from blockmap, their vertices don't count
 	// And neither should any vertices added from building nodes on a map that
@@ -268,7 +274,10 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 		}
 		if !cancelled || chase {
 			work := (recv.Interface()).(BlockmapBeeOutput) // got best effort of bee #chi
-			if !work.aborted {                             // aborted happens in heuristic mode when determinism, multiple threads and endgoal (good enough blockmap) are present
+			if cancelled && chase {
+				Log.Verbose(1, "Blockmap generator: cancelled because reached endgoal but still getting (%d,%d) to ensure determinism\n", work.XOffset, work.YOffset)
+			}
+			if !work.aborted { // aborted happens in heuristic mode when determinism, multiple threads and endgoal (good enough blockmap) are present
 				// But is it best among all bees' work?
 				if !everRun { // this bee is the first to report, so store result as best so far
 					everRun = true
@@ -291,7 +300,8 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 						// we need the EARLIEST (determinism) good enough
 						// possible, as would be encountered if we were trying
 						// them sequentially
-						if IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap) ||
+						if (!IsBlockmapGoodEnough(best.blockmap) &&
+							IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap)) ||
 							(OffsetPreceedes(work.XOffset, work.YOffset, bestXOffset, bestYOffset) &&
 								IsBlockmapGoodEnough(work.blockmap)) {
 							// Previous best value is now subject to garbage collection
@@ -320,10 +330,13 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 	} // loop is exited when all branches are deleted (all channels closed)
 
 	// Now collect all tried offsets, IF needed
-	BMHive_AggregateAll(offsetAggregators, sieve)
+	BMHive_AggregateAll(offsetAggregators, sieve, cancelled)
 
 	// Now see if we still need to check some untried offsets
-	cntHoles := sieve.CountHoles(bestXOffset, bestYOffset)
+	cntHoles := 0
+	if cancelled {
+		cntHoles = sieve.CountHoles(bestXOffset, bestYOffset)
+	} // else there can't possibly be holes - no good enough blockmap for endgoal, we tried all offsets
 	if cntHoles > 0 {
 		// We have an offset that produces good enough blockmap with regards to
 		// endgoal, but we have no data for some of the earlier offsets that
@@ -333,10 +346,13 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 		// than the best we've found
 		best = BlockmapHoleChaser(&best, sieve, bestXOffset, bestYOffset,
 			input, bailout, cntHoles)
+		bestXOffset = best.XOffset
+		bestYOffset = best.YOffset
 	} else if sieve != nil {
 		Log.Printf("Blockmap generator: I happened to not need backtracking when looking for good enough blockmap under determinism in multi-threaded mode.")
 	}
 
+	Log.Printf("Blockmap offset: (%d,%d)\n", bestXOffset, bestYOffset)
 	StatBlockmap(best.blockmap)
 	DeleteIfTooBig(best.blockmap, &(best.data))
 	return best.data
@@ -346,7 +362,8 @@ func OffsetPreceedes(newX, newY, oldX, oldY int16) bool {
 	return newY < oldY || (newY == oldY && newX < oldX)
 }
 
-func BMHive_AggregateAll(offsetsAggregators []chan TriedOffsets, sieve *OffsetSieve) {
+func BMHive_AggregateAll(offsetsAggregators []chan TriedOffsets,
+	sieve *OffsetSieve, cancelled bool) {
 	if offsetsAggregators == nil {
 		return
 	}
@@ -364,14 +381,21 @@ func BMHive_AggregateAll(offsetsAggregators []chan TriedOffsets, sieve *OffsetSi
 		}
 	}
 	for len(branches) > 0 {
+		// We must retrieve all answers regardless of whether we need them
+		// - this unblocks the channel and let's those Bee goroutines terminate
 		chi, recv, recvOk := reflect.Select(branches)
 		if !recvOk { // channel closed
 			branches = BMHive_DeleteBranch(branches, chi)
 			continue
 		}
-		offsets := (recv.Interface()).(TriedOffsets)
-		for _, item := range offsets.data {
-			sieve.Mark(item.XOffset, item.YOffset)
+		if cancelled {
+			// Processing offsets is only meaningful when process was
+			// "cancelled" - we found good enough blockmap. If no blockmap is
+			// good enough, then we know that all offsets were tried already
+			offsets := (recv.Interface()).(TriedOffsets)
+			for _, item := range offsets.data {
+				sieve.Mark(item.XOffset, item.YOffset)
+			}
 		}
 	}
 }
@@ -466,7 +490,11 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 				// only rotating when data is uploaded to Hive, otherwise can
 				// use the same slot for generating another blockmap data
 				bmConfig.gcShield.RotateLumpPool()
-				if ctx != nil { // user specified that cancellation is possible
+
+				if ctx != nil && !beeConfig.sieveMode {
+					// user specified that cancellation is possible
+					// but beware that in sieveMode we still need to send
+					// computed result, as we already listed it
 					select { // here we wait either for Hive to read, or to cancel us
 					case beeConfig.replyTo <- BlockmapBeeOutput{ // send it to Hive
 						data:     data,
@@ -768,13 +796,13 @@ func (s *OffsetSieve) Mark(XOffset, YOffset int16) {
 		return
 	}
 	marked := false
-	for _, item := range s.values {
+	for i, item := range s.values {
 		if item.XOffset == XOffset && item.YOffset == YOffset {
 			if item.Marked {
 				Log.Panic("This blockmap offset (%d,%d) was already registered within OffsetSieve (programmer error, shouldn't happen).\n",
 					XOffset, YOffset)
 			}
-			item.Marked = true
+			s.values[i].Marked = true
 			marked = true
 		}
 	}
@@ -805,19 +833,24 @@ func (s *OffsetSieve) CountHoles(LastXOffset, LastYOffset int16) int {
 // (LastXOffset, LastYOffset) non-inclusive, computes blockmap in sequential
 // mode and returns it
 // TODO multi-threaded mode, but only if number of holes is above certain
-// threshold
+// threshold - might not be needed now that I fixed bug in sieve's Mark method?
+// It seems that the number of holes is always lowish
 func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 	LastXOffset, LastYOffset int16, input BlockmapInput, bailout uint16,
 	cntHoles int) BlockmapBeeOutput {
 	Log.Printf("Blockmap generator: backtracking to produce blockmap for %d skipped blockmap offsets to ensure determinism.\n",
 		cntHoles)
 	best := oldBest
+	if !IsBlockmapGoodEnough(best.blockmap) {
+		// BlockmapHoleChaser should not have been called
+		Log.Panic("Assertion failure: backtracking after exhaustive search through all tried offsets already revealed that no blockmap satisfies the endgoal limits.")
+	}
 	gcShield := BlockmapCreateGCShield(BMBeeMaxSize(input.bounds),
 		config.SubsetCompressBlockmap) // reference to global variable "config"
 	input.gcShield = gcShield
 	for _, item := range sieve.values {
 		if item.XOffset == LastXOffset && item.YOffset == LastYOffset {
-			Log.Printf("Backtracking didn't find better earlier offset, sticking to (%d,%d)\n", LastXOffset, LastYOffset)
+			Log.Printf("Backtracking didn't find better earlier blockmap offset, sticking to (%d,%d)\n", LastXOffset, LastYOffset)
 			return *best
 		}
 		if !item.Marked {
@@ -849,9 +882,7 @@ func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 				data = bm.GetBytes()
 			}
 			input.gcShield = bm.gcShield
-			if IsBlockmapGoodEnough(bm) ||
-				(!IsBlockmapGoodEnough(best.blockmap) &&
-					IsBlockmapBetter(data, bm, len(best.data), best.blockmap)) {
+			if IsBlockmapGoodEnough(bm) {
 				best = &BlockmapBeeOutput{
 					data:     data,
 					blockmap: bm,
@@ -859,10 +890,170 @@ func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 					YOffset:  input.YOffset,
 					aborted:  false,
 				}
+				Log.Printf("Backtracking revealed better earlier blockmap offset at (%d,%d) instead of (%d,%d)\n",
+					input.XOffset, input.YOffset, LastXOffset, LastYOffset)
 				return *best
 			}
 		}
 	}
 	Log.Panic("The evaluated item was not present in the sieve (programmer error)\n")
 	return *best
+}
+
+func RemoveLinesFromBlockmap(linesToIgnore []bool, lines AbstractLines,
+	levelFormat int, sectors []Sector, sidedefs []Sidedef) []bool {
+	cntLines := lines.Len()
+	oldEfficiency := 0
+	if linesToIgnore == nil {
+		linesToIgnore = make([]bool, cntLines)
+	} else {
+		// need copy! the original is shared with sector and reject builder
+		newLinesToIgnore := make([]bool, cntLines)
+		for i, v := range linesToIgnore {
+			if v {
+				oldEfficiency++
+			}
+			newLinesToIgnore[i] = v
+		}
+		linesToIgnore = newLinesToIgnore
+	}
+	// ZokumBSP special switch. Disables removing non-collideable lines between
+	// distinct sectors if any linedefs are capable of acting on multiple
+	// sectors
+	multiSectorSpecial := false
+	if levelFormat == FORMAT_HEXEN {
+		// In Hexen, specials can be executed via ACS and not necessarily
+		// linedefs, thus the possibility of multi sector special existing can
+		// not be ruled out
+		multiSectorSpecial = true
+	}
+	if !multiSectorSpecial {
+		multiSectorSpecial = hasMultiSectorSpecial(lines, cntLines)
+	}
+
+	// TODO Zokumbsp has one more removal feature (which seems to be active
+	// always, rather than only when "non-collideable lines" removal is
+	// enabled). It's description:
+	// "Remove boundary walls in sectors that have 0 height, not tagged, not a door."
+	// Guess we'll have to implement it also. But, it relies on exhaustive
+	// definition of "door" and probably doesn't work well with other games
+	// and/or advanced ports...
+
+	cull := new(Culler)
+	cull.SetMode(CREATE_BLOCKMAP, sidedefs)
+	cull.SetAbstractLines(lines)
+	cull.EnablePerimeterSink(true)
+
+	for cid := uint16(0); cid < cntLines; cid++ {
+		if linesToIgnore[cid] { // ignore dummy lines for fast scrollers
+			continue
+		}
+		culled := cull.AddLine(cid)
+		if culled {
+			// Potentially non-collideable line with same sector on both sides
+			linesToIgnore[cid] = true // might be changed later
+		} else if !multiSectorSpecial {
+			// In this branch, we are looking for potentially non-collideable
+			// lines with different sectors on both sides
+			// ! Branch is prevented from executions if map has specials that
+			// act on multiple sectors (either through linedef, or map is in
+			// Hexen format and sh*t can happen)
+			firstSdef := lines.GetSidedefIndex(cid, true)
+			secondSdef := lines.GetSidedefIndex(cid, false)
+			investigate := FirstStageUncollideable(lines, sidedefs, cid,
+				firstSdef, secondSdef)
+			if !investigate || sidedefs[firstSdef].Sector ==
+				sidedefs[secondSdef].Sector {
+				continue
+			}
+			// we have two sided linedef, without any action, between two
+			// different sectors
+			fsector := sidedefs[firstSdef].Sector
+			bsector := sidedefs[secondSdef].Sector
+			// if floor and ceiling are the same, etc... then this linedef
+			// should be safe to be considered non-collideable
+			if sectors[fsector].FloorHeight == sectors[bsector].FloorHeight &&
+				sectors[fsector].CeilHeight == sectors[bsector].CeilHeight &&
+				sectors[fsector].Tag == 0 && sectors[bsector].Tag == 0 &&
+				// timed doors sector specials
+				sectors[fsector].Special != 10 && sectors[bsector].Special != 10 &&
+				sectors[fsector].Special != 14 && sectors[bsector].Special != 14 {
+				linesToIgnore[cid] = true
+			}
+		}
+	}
+	// Now let's see if we destroyed self-referencing sector effects with
+	// our overly eager assumptions
+	cull.Analyze()
+	// inner lines may still be non-collideable, but perimeters of
+	// self-referencing sectors have to be collideable
+	sectorPerimeters := cull.GetPerimeters()
+	for _, perimeters := range sectorPerimeters {
+		for _, perimeter := range perimeters {
+			for _, line := range perimeter {
+				linesToIgnore[line] = false
+			}
+		}
+	}
+	// but if we failed analyzing some perimeter(s), we must assume that all
+	// 2-sided same sector lines (within that sector where failure occured)
+	// are collideable. Here is where all the screw-ups will land.
+	// If all perimeters computed successfully (which is a desirable
+	// scenario), this loop will have no data to iterate over
+	for cull.SpewBack() {
+		i := cull.GetLine()
+		linesToIgnore[i] = false
+	}
+
+	efficiency := 0
+	for _, v := range linesToIgnore {
+		if v {
+			efficiency++
+		}
+	}
+	efficiency = efficiency - oldEfficiency
+	Log.Printf("Blockmap: removed %d non-collideable lines.\n", efficiency)
+
+	return linesToIgnore
+}
+
+// Returns true if there exist linedef with a type which affects or can
+// affect multiple sectors (stairs, donuts)
+func hasMultiSectorSpecial(lines AbstractLines, cntLines uint16) bool {
+	for cid := uint16(0); cid < cntLines; cid++ {
+		tpe := lines.GetAction(cid)
+		// FIXME was copied from ZokumBSP. Sure as hell not sufficient,
+		// Heretic, Hexen ffs! possibly other Boom types, too, and never forget
+		// advanced engines
+		// Zokum: we look for raising stairs and donuts
+		switch tpe {
+		case 9, 8, 127, 100, 7:
+			{
+				return true
+			}
+			// Heretic types - stairs:
+		case 106, 107:
+			{
+				return true
+			}
+			// TODO Strife support
+			// Boom types - stairs
+		case 258, 256, 259, 257:
+			{
+				return true
+			}
+			// Boom types - donuts
+		case 146, 155, 191:
+			{
+				return true
+			}
+		}
+		// Generalized Boom types - stairs
+		if tpe >= 0x3000 && tpe <= 0x33FF {
+			return true
+		}
+		// There are no generalized donuts, thank goodness
+	}
+	return false
+
 }

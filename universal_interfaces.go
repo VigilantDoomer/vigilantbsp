@@ -52,6 +52,8 @@ type AbstractLines interface {
 	// use in reject builder, when trying to rewire self-referencing effect
 	// lines to indicate the true sectors
 	GetAuxVersion() AbstractLines
+	// Return numeric code for linedef's action. Use other methods when possible!
+	GetAction(lidx uint16) uint16
 }
 
 // SolidLines subclasses AbstractLines inteface. Classes implementing it are
@@ -79,8 +81,6 @@ type WriteableLines interface {
 	IsDoNotRender(lidx uint16) bool
 	// BSP v5.2 horizon effect for tag 999 on one-sided lines
 	IsHorizonEffect(lidx uint16) bool
-	// Return numeric code for linedef's action. Use other methods when possible!
-	GetAction(lidx uint16) uint16
 	// Return numeric code for linedef's tag. Use other methods when possible!
 	GetTag(lidx uint16) uint16
 	// Returns what kind of treatment needs to be applied to seg's computed
@@ -760,6 +760,10 @@ func (o *DoomSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
 	return x1, y1, x2, y2
 }
 
+func (o *DoomSolidLinedefs) GetAction(lidx uint16) uint16 {
+	return o.linedefs[lidx].Action
+}
+
 func (o *DoomSolidLinedefs) Len() uint16 {
 	return uint16(len(o.linedefs))
 }
@@ -801,6 +805,10 @@ func (o *DoomSolidLinedefs) TreatAsSolid(lidx uint16) {
 		o.treatAsSolid = make(map[uint16]bool)
 	}
 	o.treatAsSolid[lidx] = true
+}
+
+func (o *HexenSolidLinedefs) GetAction(lidx uint16) uint16 {
+	return uint16(o.linedefs[lidx].Action)
 }
 
 func (o *HexenSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
@@ -895,6 +903,10 @@ func (o *DoomAuxLinedefs) GetSolidVersion() SolidLines {
 	}
 }
 
+func (o *DoomAuxLinedefs) GetAction(lidx uint16) uint16 {
+	return uint16(o.linedefs[lidx].Action)
+}
+
 func (o *HexenAuxLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
 	line := o.linedefs[idx]
 	x1 := int(o.vertices[line.StartVertex].XPos)
@@ -933,6 +945,10 @@ func (o *HexenAuxLinedefs) GetSolidVersion() SolidLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *HexenAuxLinedefs) GetAction(lidx uint16) uint16 {
+	return uint16(o.linedefs[lidx].Action)
 }
 
 func (o *DoomLinedefs) Clone() WriteableLines {

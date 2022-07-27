@@ -28,6 +28,7 @@ const ( // culler mode
 	CREATE_SEGS = iota
 	CREATE_SEGS_SLOPPY
 	CREATE_REJECT
+	CREATE_BLOCKMAP
 )
 
 // Culler is responsible for informing the caller when to skip lines, and which
@@ -106,7 +107,7 @@ func (c *Culler) SetMode(cullerMode int, sidedefs []Sidedef) {
 			c.checkThisSector = make(map[uint16]bool)
 			c.spewOut = make([]uint16, 0)
 		}
-	case CREATE_REJECT:
+	case CREATE_REJECT, CREATE_BLOCKMAP:
 		{
 			c.invisibleLines = make(map[uint16][]uint16) // sector index -> array of linedef indices
 			c.allLines = make(map[uint16][]uint16)       // sector index -> array of linedef indices
@@ -114,7 +115,7 @@ func (c *Culler) SetMode(cullerMode int, sidedefs []Sidedef) {
 		}
 	default:
 		{
-			panic("Unknown mode for culler.")
+			Log.Panic("Unknown mode for culler.\n")
 		}
 	}
 }
@@ -172,6 +173,15 @@ func (c *Culler) AddLine(idx uint16) bool {
 			return c.addLineForReject(c.absLines, c.sidedefs, idx,
 				firstSdef, secondSdef)
 		}
+	case CREATE_BLOCKMAP:
+		{
+			return c.addLineForBlockmap(c.absLines, c.sidedefs, idx,
+				firstSdef, secondSdef)
+		}
+	default:
+		{
+			Log.Panic("Unknown mode for culler.\n")
+		}
 	}
 	return false // should never reach here
 }
@@ -193,6 +203,14 @@ func (c *Culler) Analyze() {
 	case CREATE_REJECT:
 		{
 			c.analyzeForReject()
+		}
+	case CREATE_BLOCKMAP:
+		{
+			c.analyzeForBlockmap()
+		}
+	default:
+		{
+			Log.Panic("Unknown mode for culler.\n")
 		}
 	}
 	// Let's do it unconditionally. Do not want inconsistent visplane results
@@ -323,7 +341,6 @@ func (c *Culler) addLineForReject(lines AbstractLines, sidedefs []Sidedef,
 		firstSdef != SIDEDEF_NONE && secondSdef != SIDEDEF_NONE &&
 		sidedefs[firstSdef].Sector == sidedefs[secondSdef].Sector
 	if canCull {
-		// c.checkThisSector[sidedefs[firstSdef].Sector] = true
 		hashmapAddLineToSector(c.invisibleLines, sidedefs[firstSdef].Sector,
 			i)
 		result = true
@@ -342,6 +359,45 @@ func (c *Culler) addLineForReject(lines AbstractLines, sidedefs []Sidedef,
 			i)
 	}
 	return result
+}
+
+func (c *Culler) addLineForBlockmap(lines AbstractLines, sidedefs []Sidedef,
+	i uint16, firstSdef, secondSdef uint16) bool {
+	result := false
+	canCull := FirstStageUncollideable(lines, sidedefs, i, firstSdef,
+		secondSdef) && sidedefs[firstSdef].Sector == sidedefs[secondSdef].Sector
+	if canCull {
+		hashmapAddLineToSector(c.invisibleLines, sidedefs[firstSdef].Sector,
+			i)
+		result = true
+	}
+	// Here the visibleLines will contain ALL lines in sector, not just the
+	// really visible lines. This will allow us to compute perimeter of sector
+	// - the lines forming the border - in Analyze, and then all invisibleLines
+	// that are in perimeter can be said to be implementing self-referencing
+	// effect.
+	if firstSdef != SIDEDEF_NONE {
+		hashmapAddLineToSector(c.allLines, sidedefs[firstSdef].Sector,
+			i)
+	}
+	if secondSdef != SIDEDEF_NONE {
+		hashmapAddLineToSector(c.allLines, sidedefs[secondSdef].Sector,
+			i)
+	}
+	return result
+}
+
+// returns if line may be uncollideable, if certain additional requisites are
+// met (same sector on both sides but not self-referencing, or different sectors
+// but very specific conditions)
+func FirstStageUncollideable(lines AbstractLines, sidedefs []Sidedef,
+	i uint16, firstSdef, secondSdef uint16) bool {
+	flags := lines.GetFlags(i)
+	return (uint16(flags)&LF_TWOSIDED == LF_TWOSIDED) &&
+		!(uint16(flags)&LF_IMPASSABLE == LF_IMPASSABLE) &&
+		!(uint16(flags)&LF_BLOCK_MONSTER == LF_BLOCK_MONSTER) &&
+		lines.GetAction(i) == 0 &&
+		firstSdef != SIDEDEF_NONE && secondSdef != SIDEDEF_NONE
 }
 
 // Sloppy simply looks if whole sector may be declared self-referencing,
@@ -461,6 +517,31 @@ func (c *Culler) analyzeForReject() {
 				// from being marked as always visible, thus I simplified this
 				// message
 				Log.Verbose(1, "Reject: failed to compute sector perimeter for sector #%d.\n", sector)
+				mustUncull = true
+			}
+		}
+		// mustUncull = true ALWAYS now
+		for i := 0; i < len(culledLines); i++ {
+			line := culledLines[i]
+			c.spewOut = append(c.spewOut, line)
+		}
+	}
+}
+
+func (c *Culler) analyzeForBlockmap() {
+	for sector, culledLines := range c.invisibleLines {
+		properLines := c.allLines[sector]
+		// If no other lines make up the sector, this IS a self-referencing
+		// one. About the only one time when you can guarantee there is no
+		// mistake
+		mustUncull := len(properLines) == len(culledLines)
+		if !mustUncull || c.perimeterSink != nil {
+			// More expensive heuristics
+			handled := c.deepAnalysis(sector, properLines, culledLines, false)
+			if handled {
+				continue
+			} else {
+				Log.Verbose(1, "Blockmap (removing non-collideable lines): failed to compute sector perimeter for sector #%d.\n", sector)
 				mustUncull = true
 			}
 		}

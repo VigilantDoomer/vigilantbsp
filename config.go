@@ -32,6 +32,9 @@ const VERSION = "0.75a"
 		3 Heuristic method to reduce from 65536 offsets
 		4 Best of all 65536 offset combinations
 		x,y Specify specific offsets
+	r Remove non-collideable lines from blockmap (default: disabled)
+		This option is experimental and is likely to break
+		non-vanilla or non-Doom maps. Enable at your own risk
 	s Subset compress BLOCKMAP.
 	a Aggressive subset compression. If enabled, overrides s.
 	z= Zero/dummy header configuration
@@ -221,6 +224,8 @@ type ProgramConfig struct {
 	SpecialRootMode int // used when MultiTreeMode = MULTITREE_ROOT_ONLY
 	NodeThreads     int16
 	StraightNodes   bool // write nodes without traditional reversal
+	//
+	RemoveNonCollideable bool // dangerous option. Tries to reason about which lines are not necessary to be included in blockmap and removes then. Prone to break advanced maps and maps not for Doom
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -274,6 +279,7 @@ func init() {
 		SpecialRootMode:        MROOT_ONESIDED,
 		NodeThreads:            0,
 		StraightNodes:          false,
+		RemoveNonCollideable:   false,
 	})
 }
 
@@ -283,9 +289,9 @@ func Configure() {
 	Log.Printf("Copyright (c)   2022 VigilantDoomer\n")
 	Log.Printf("This program is built upon ideas first implemented in DEU by Raphael Quinet, \n")
 	Log.Printf("BSP v5.2 by Colin Reed, Lee Killough and other contributors to BSP (program),\n")
-	Log.Printf("ZDBSP by Marisa Heit, Zennode by Marc Rousseau, Zokumbsp by Kim Roar Foldøy Hauge,\n")
-	Log.Printf("AJ-BSP by Andrew Apted, et al, and is distributed under the terms of \n")
-	Log.Printf(" GNU General Public License v2.\n")
+	Log.Printf("ZDBSP by Marisa Heit, Zennode by Marc Rousseau,\n")
+	Log.Printf("Zokumbsp by Kim Roar Foldøy Hauge, AJ-BSP by Andrew Apted, et al,\n")
+	Log.Printf("and is distributed under the terms of GNU General Public License v2.\n")
 	Log.Printf("\n")
 	// Proceed to parse command line
 	if !(config.FromCommandLine()) {
@@ -315,6 +321,9 @@ func PrintHelp() {
 	Log.Printf("		3 Heuristic method to reduce from 65536 offsets\n")
 	Log.Printf("		4 Best of all 65536 offset combinations\n")
 	Log.Printf("		x,y Specify specific offsets\n")
+	Log.Printf("	r Remove non-collideable lines from blockmap (default: disabled)\n")
+	Log.Printf("		This option is experimental and is likely to break\n")
+	Log.Printf("		non-vanilla or non-Doom maps. Enable at your own risk\n")
 	Log.Printf("	s Subset compress BLOCKMAP.\n")
 	Log.Printf("	a Aggressive subset compression. If enabled, overrides s.\n")
 	Log.Printf("	z= Zero/dummy header configuration\n")
@@ -357,15 +366,17 @@ func PrintHelp() {
 	Log.Printf("		17 - default seg split cost\n")
 	Log.Printf("	d= Penalty factor for _diagonal_ lines\n")
 	Log.Printf("		34 - default for Hexen format levels, for others 0 (disabled)\n")
-	Log.Printf("		Explicitly specifying non-zero value will enable it for all levels,\n")
-	Log.Printf("		while explicitly specifying 0 will disable it even for Hexen levels\n")
+	Log.Printf("		Explicitly specifying non-zero value will enable it for all\n")
+	Log.Printf(" 		levels,	while explicitly specifying 0 will disable it even\n")
+	Log.Printf("		for Hexen levels\n")
 	Log.Printf("\n")
 	Log.Printf("-r Rebuild REJECT resource.\n")
 	Log.Printf("	z Insert zero-filled REJECT resource\n")
 	Log.Printf("	g Use graphs to reduce LOS calculations (default: enabled)\n")
 	Log.Printf("	s= If 2-sided lines have same sector on both sides\n")
 	Log.Printf("		0 Mark such sectors as always visible (default)\n")
-	Log.Printf("		1 Mark visible only when self-referencing sector effects are detected\n")
+	Log.Printf("		1 Mark visible only when self-referencing sector effects are\n")
+	Log.Printf("			detected\n")
 	Log.Printf("		2 Be pedantic about self-referencing sector visibility\n")
 	Log.Printf("	m Process RMB option file (.rej)\n")
 	Log.Printf("\n")

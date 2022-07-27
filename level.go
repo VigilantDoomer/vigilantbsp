@@ -82,8 +82,10 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	mapName := string(ByteSliceBeforeTerm(le[action.DirIndex].Name[:]))
 	loadedThings := false
 	loadedLinedefsAndVertices := false
+	blockmapNeedsSectors := config.RemoveNonCollideable
 	rejectSkip := config.Reject == REJECT_ZEROFILLED || config.Reject == REJECT_DONTTOUCH
 	rejectDone := rejectSkip
+	blockmapDone := !config.RebuildBlockmap
 	bname := ByteSliceBeforeTerm(le[idx].Name[:])
 	Log.Printf("Processing level %s:\n", bname)
 	if action.LevelFormat == FORMAT_HEXEN {
@@ -241,22 +243,24 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				genworker:     bgenerator,
 				linesToIgnore: linesToIgnore,
 			})
+		}
 
+		if !blockmapDone && loadedLinedefsAndVertices && (!blockmapNeedsSectors ||
+			(sectors != nil && sidedefs != nil)) {
+			blockmapDone = true // don't trigger twice
 			// And this actually generates BLOCKMAP lump
-			if config.RebuildBlockmap {
-				Log.Printf("Generating BLOCKMAP...\n")
-				l.BlockmapLumpChannel = make(chan []byte)
-				go BlockmapGenerator(BlockmapInput{
-					lines:           l.newLines,
-					bounds:          bounds,
-					XOffset:         config.BlockmapXOffset,
-					YOffset:         config.BlockmapYOffset,
-					useZeroHeader:   config.UseZeroHeader,
-					internalPurpose: false,
-					gcShield:        nil,
-					linesToIgnore:   linesToIgnore,
-				}, l.BlockmapLumpChannel)
-			}
+			Log.Printf("Generating BLOCKMAP...\n")
+			l.BlockmapLumpChannel = make(chan []byte)
+			go BlockmapGenerator(BlockmapInput{
+				lines:           l.newLines,
+				bounds:          bounds,
+				XOffset:         config.BlockmapXOffset,
+				YOffset:         config.BlockmapYOffset,
+				useZeroHeader:   config.UseZeroHeader,
+				internalPurpose: false,
+				gcShield:        nil,
+				linesToIgnore:   linesToIgnore,
+			}, l.BlockmapLumpChannel, action.LevelFormat, sectors, sidedefs)
 		}
 
 		// Hexen needs more to build nodes - it needs things to know where

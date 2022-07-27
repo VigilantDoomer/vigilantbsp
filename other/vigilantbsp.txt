@@ -111,6 +111,9 @@ is either a suboption of option above it, or a possible value:
 		3 Heuristic method to reduce from 65536 offsets
 		4 Best of all 65536 offset combinations
 		x,y Specify specific offsets
+	r Remove non-collideable lines from blockmap (default: disabled)
+		This option is experimental and is likely to break
+		non-vanilla or non-Doom maps. Enable at your own risk
 	s Subset compress BLOCKMAP.
 	a Aggressive subset compression. If enabled, overrides s.
 	z= Zero/dummy header configuration
@@ -526,8 +529,75 @@ artifact requires a specific setting. Apparently the collision detection
 algorithm performs differently when linedefs are on the exact edge of a grid in
 the blockmap.
 
-05:02 'z' - Zero/dummy header configuration
---------------------------------------
+05:02 'r' - Remove non-collideable lines from blockmap 
+------------------------------------------------------
+
+Note: this feature also originated in ZokumBSP. It was first introduced
+to VigilantBSP in v0.75a version, and unlike ZokumBSP, defaults to
+DISABLED and there are no plans to ever change this default.
+
+ZokumBSP supports feature of removing lines from the blockmap if they 
+cannot be interacted with - to reduce blockmap size and potentially fit
+it under limits when it wouldn't otherwise. Although nice in theory,
+this requires knowledge of all the actions that can be supported in
+a source port, including, but not limited to, Boom format maps,
+non-Doom maps and advanced port extensions (especially hard to 
+support). When it was *first* implemented in ZokumBSP, an oversight 
+caused Boom maps to not function correctly. It then was fixed, 
+however still misses certain stuff for Heretic, nevermind Hexen 
+games, as well as not being friendly to self-referencing sector
+effects.
+
+VigilantBSP considers support for advanced ports (so long as they
+use traditional Doom format) and Heretic and Hexen games as first
+class as its support for vanilla Doom. The way this feature is
+implemented in VigilantBSP should preserve self-referencing sectors
+(because special care is taken to discover self-referencing sectors
+and to prevent their perimeters from being removed from blockmap),
+as well as being at least a bit safer to use with Heretic maps and
+Hexen format maps. The feature still requires a lot of feedback
+from people who map for non-Doom games or advanced ports.
+
+Which lines are considered non-collideable? Let's see a list:
+1. Two-sided lines with same sector on both sides (but not making
+up the perimeter of self-referencing sector), not marked impassable
+and not blocking monsters, and not having any action set
+2. Two-sided lines with different sectors, not marked impassable
+and not blocking monsters, having no action set, floor height of both
+sectors is equal, ceiling height of both sectors is equal, both sectors
+are untagged, both sectors do not "timed doors" special AND there are
+no linedefs with types that act on multiple sectors anywhere on the 
+map (such types are donuts and stair builders, including Boom ones). Unlike
+ZokumBSP, VigilantBSP also prohibits such lines to be removed in Hexen 
+format AT ALL - because in Hexen format, stair actions on multiple sectors
+can be performed via ACS - indeed the original Hexen game does so.
+3. (ZokumBSP only, not YET implemented in VigilantBSP) Boundary walls
+in sectors that have 0 height, not tagged, not a door. ZokumBSP always
+forces this, even if "remove non-collideable" option is disabled.
+VigilantBSP plans to incorporate this later.
+
+Besides reducing blockmap size, removing non-collideable lines can
+help remove/reduce chance of intercepts overflow. I have a map (which
+might later be edited into example) where I have built a cage as an 
+invisible elevated platform (self-referencing sector) with "bottom"
+built from lots of linedefs inside it. This setup can't work in vanilla
+or even limit-removing (-complevel 2) maps without triggering intercepts
+overflow unless this option is used, and since all this linedef-intensive
+stuff is placed in self-referencing sector, using this option in 
+VigilantBSP is the only way to prevent that and still render it properly
+(tagging hundreds of linedefs with "remove from blockmap" tag would be
+exhaustive), as VigilantBSP will preserve perimeter of self-referencing
+sector in blockmap but remove inner lines from it. So this option is 
+practically useful, although has to be used with care as ZokumBSP
+insights never took into account games other than Doom, and Boom is not 
+the most advanced port there is.
+
+I expect that this option doesn't play nice with Edge programmable actions
+for linedefs, but I don't have much experience working with Edge or other
+source ports. 
+
+05:03 'z' - Zero/dummy header configuration
+-------------------------------------------
 
 Note: this feature also originated in ZokumBSP.
 
@@ -582,7 +652,7 @@ by Doom engines. It also adds about 2 bytes of overhead per list in the
 blockmap, but the possibility of saving 2 bytes overall via "byte stealing"
 is lost.
 
-05:03 's' - Subset compress BLOCKMAP.
+05:04 's' - Subset compress BLOCKMAP.
 -------------------------------------
 
 This option will merge every list in the blockmap that is a sub set of
@@ -596,7 +666,7 @@ named 'subset compression' of ZokumBSP, which is also implemented in
 VigilantBSP under a different name: 'aggressive subset compression' 
 (see below).
 
-05:04 'a' - Aggressive subset compression
+05:05 'a' - Aggressive subset compression
 -----------------------------------------
 
 This option, when enabled, completely overrides 's' whether that was
@@ -618,7 +688,7 @@ it "subset elimination" instead, or you could call it lossy compression
 (think of how WAV compresses into MP3 rather than into FLAC - the process
 is not reversible and involves loss of precision)
 
-05:05 't' - Number of cores to use when trying multiple offsets
+05:06 't' - Number of cores to use when trying multiple offsets
 ---------------------------------------------------------------
 
 When trying multiple offsets in a search for smaller blockmap (blockmap 
@@ -634,7 +704,7 @@ be used instead.
 Obviously, when blockmap is created for only one fixed offset, this
 option is ignored.
 
-05:06 'e' - Endgoal for multiple offsets
+05:07 'e' - Endgoal for multiple offsets
 ----------------------------------------
 
 Because searching for smallest blockmap can be slow on some maps 
@@ -675,43 +745,9 @@ determinism via option that will be covered later. In versions
 prior to VigilantBSP v0.75a, if this option was not set to zero,
 and determinism was enabled, only one thread was used to try 
 all blockmap offsets. This limitation was finally lifted in 
-VigilantBSP v0.75a, resulting in improved performance when the
-number of offsets to try is high or if endgoal is impossible with
-all offsets.
-
-NOTE when the endgoal is non-zero and determinism is enabled,
-the current behavior (starting with v0.75a) is to use multiple threads
-first, and if endgoal IS reached, backtrack using single thread for
-every prior offset that was missed because thread progress is uneven.
-Sometimes, no offsets has been missed, thus backtracking is not always
-needed, the number of missing offsets varies (usually only a fraction
-of total pool of offsets) and thus it would not always be beneficial
-to use multi-threading for backtracking, but this area
-is still subject to further optimization. Let's just say that you
-DO get improvements over single-threaded mode when you most need
-them (trying a lot of offsets on a complex maps that takes seconds,
-not milliseconds), and the resulting files from building wad in
-deterministic single-threaded mode and determistic multi-threaded 
-mode are byte-for-byte identical when all other parameters are identical.
-
-05:07 Blockmap options that might get implemented in the future
----------------------------------------------------------------
-
-ZokumBSP supports another nice-to-have feature of removing lines from 
-the blockmap if they cannot be interacted with. However, this requires
-knowledge of all the actions that can be supported in a source port, 
-such as Boom format maps. When it was *first* implemented in ZokumBSP,
-an oversight caused Boom maps to not function correctly. It then was 
-fixed, however I am not entirely sure if the fix is 100%. This feature
-needs to be implemented carefully so that self-referencing sectors
-continue to work, which ZokumBSP never bothered to ensure, while
-aggressively setting this option as default. I am against having
-a feature marked as default when it can cause problems.
-
-Since this feature tends to produce major savings in BLOCKMAP size,
-it is considered for implementation in future versions of 
-VigilantBSP, but will only be implemented when there are guarantees
-of its correctness.
+VigilantBSP v0.75a, resulting in greatly improved performance when 
+the number of offsets to try is high or if endgoal is impossible 
+with all offsets.
 
 Section 06: Determinism option
 ==============================

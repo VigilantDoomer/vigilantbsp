@@ -49,7 +49,7 @@ type BlockmapInput struct {
 	useZeroHeader   bool
 	internalPurpose bool              // whether blockmap is for internal purposes only. Used by reject and nodes builder
 	gcShield        *BlockmapGCShield // if non-nil, will reduce allocations by caching them. (NOTE Go supports calling methods on nil object.)
-	linesToIgnore   []bool            // dummy linedefs such as for scrolling
+	linesToIgnore   []bool            // dummy linedefs such as for scrolling, might also be non-collideable lines as judged by faulty(?) heuristic
 }
 
 type BlockLines []uint16 // these long-lived slices must be tripping gc up... cause there can be like 262144 of them for a single blockmap

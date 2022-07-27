@@ -432,6 +432,12 @@ func (c *ProgramConfig) parseBlockmapParams(p []byte) {
 				}
 				p = rest
 			}
+		case 'r':
+			{
+				on, rest := isEnabled(p[1:])
+				c.RemoveNonCollideable = on
+				p = rest
+			}
 		default:
 			{
 				Log.Error("Error passing blockmap params - ignoring '%s'.\n", string(p))
