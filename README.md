@@ -75,3 +75,18 @@ Usage: vigilantbsp {-options} filename.wad {-o output.wad}
 See the documentation file README.txt for more information.
 
 ```
+
+## Website / contact information
+
+You can contact me (the developer) through a forum:
+<https://thegreatresist.freeforums.net>
+username: vigilantdoomer displayname: Vigilante
+
+Discussion of nodebuilder happens currently in this
+thread: 
+<https://thegreatresist.freeforums.net/thread/7/vigilantbsp-v0-multi-threaded-nodebuilder>
+
+If not, see subforum "Doom (series), Heretic, Hexen" and look for thread that has 
+"VigilantBSP" in its name.
+
+And of course you can open an issue on github.
