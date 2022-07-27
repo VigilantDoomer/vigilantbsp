@@ -282,6 +282,16 @@ In Hexen wad format, polyobjects can be constructed, and they require special
 care. I ported some relevant code from AJ-BSP into VigilantBSP, and intend to
 do more (testers needed, and possibly people in the know).
 
+In VigilantBSP v0.75a, a number of adjustments were made to partitioners that
+may increase BSP tree size for Hexen maps but nonetheless will prevent more
+sectors with polyobjects from getting split into multiple subsectors 
+instead of one. For example, one of polyobjects in map05 of Hexen, Guardian
+of Steel, used to get broken when hexen.wad was rebuilt using seg balancing,
+default partitioner, BEFORE the adjustments were made. Even visplane-aware
+partitioners used to split that sector into 2 subsectors, but the update now
+causes entire sector in question in that map to be covered with 1 subsector
+(finally!), which is preferable for sectors involved in polyobjects.
+
 Section 04: Custom linedef specials and tags
 ============================================
 

@@ -155,6 +155,14 @@ func minorIsBetter_Always(current, prev MinorCosts) bool {
 	return true
 }
 
+// Fpr simple partition algorithms - avoid splitting precious segs
+func minorIsBetter_Precious(current, prev MinorCosts) bool {
+	if current.PreciousSplit < prev.PreciousSplit {
+		return true
+	}
+	return false
+}
+
 // PickNode_traditional is an implementation of PickNode that is classic (since
 // DEU5beta source code (c) Raphael Quinet) way to pick a partition: partitions
 // are chosen based on seg so that there is minimal amount of seg splits and the
@@ -163,6 +171,9 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeSeg {
 	best := ts                        // make sure always got something to return
 	bestcost := int(INITIAL_BIG_COST) //
+	bestMinors := MinorCosts{
+		PreciousSplit: int(INITIAL_BIG_COST),
+	}
 	cnt := 0
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
@@ -197,6 +208,9 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		cost := 0
 		tot := 0
 		diff := cnt
+		minors := MinorCosts{
+			PreciousSplit: 0,
+		}
 
 		// See PickNode_visplaneKillough for explanation. There it happens in
 		// a different place - but here we don't count sectors, so this ends up
@@ -208,7 +222,7 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		//progress();           	        // Something for the user to look at.
 
 		prune := w.evalPartitionWorker_Traditional(super, part, &tot, &diff,
-			&cost, bestcost)
+			&cost, bestcost, minors)
 		if prune { // Early exit and skip past the tests below
 			continue
 		}
@@ -224,10 +238,12 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// Make sure at least one Seg is on each side of the partition
 		if (tot + cnt) > diff {
 			cost += diff
-			if cost < bestcost {
+			if cost < bestcost || (cost == bestcost &&
+				minorIsBetter_Precious(minors, bestMinors)) {
 				// We have a new better choice
 				bestcost = cost
 				best = part // Remember which Seg
+				bestMinors = minors
 			}
 		}
 
@@ -238,7 +254,7 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // If returns true, the partition &part must be skipped, because it produced
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
-	part *NodeSeg, tot, diff, cost *int, bestcost int) bool {
+	part *NodeSeg, tot, diff, cost *int, bestcost int, minors MinorCosts) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -285,6 +301,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 						} else {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
 						}
+						minors.PreciousSplit++
 					}
 
 					*cost += w.pickNodeFactor
@@ -294,10 +311,29 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 						return true
 					}
 					(*tot)++
-				} else if checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
-					leftside = true
+				} else {
+					if checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
+						leftside = true
+					}
 				}
 			} else {
+				// TODO review, possibly find another way to solve this
+				// This workaround seems to fix the problem with Hexen map05
+				// (Guardian of Steel) polyobject recipient sector 275 getting
+				// broken in default partitioner (visplane-aware and maelstrom
+				// are blessed to avoid this). The resulting wad seems beefier
+				// after this fix. The inspiration for writing it was some code
+				// in AJ-BSP where they rejected partition passing through
+				// vertex
+				if w.diagonalPenalty != 0 &&
+					w.lines.IsTaggedPrecious(check.Linedef) {
+					if part.pdx != 0 && part.pdy != 0 {
+						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
+					} else {
+						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
+					}
+					minors.PreciousSplit++
+				}
 				leftside = true
 			}
 		} else if a <= 0 {
@@ -327,7 +363,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 		}
 
 		if w.evalPartitionWorker_Traditional(block.subs[num], part, tot, diff,
-			cost, bestcost) {
+			cost, bestcost, minors) {
 			return true
 		}
 	}
@@ -377,6 +413,9 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeSeg {
 	best := ts                        // make sure always got something to return
 	bestcost := int(INITIAL_BIG_COST) //
+	bestMinors := MinorCosts{
+		PreciousSplit: int(INITIAL_BIG_COST),
+	}
 	cnt := 0
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
@@ -413,6 +452,9 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		tot := 0
 		slen := Number(0) // length of partition that is incidental with segs
 		diff := cnt
+		minors := MinorCosts{
+			PreciousSplit: 0,
+		}
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
 		w.sectorHits[0] = 0
@@ -424,7 +466,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		//progress();           	        // Something for the user to look at.
 		w.blocksHit = w.blocksHit[:0]
 		prune := w.evalPartitionWorker_VisplaneKillough(super, part, &tot, &diff,
-			&cost, bestcost, &slen)
+			&cost, bestcost, &slen, minors)
 		if prune { // Early exit and skip past the tests below
 			continue
 		}
@@ -488,7 +530,8 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			cost += w.diagonalPenalty
 		}
 		cost += diff
-		if cost >= bestcost {
+		if cost > bestcost || (cost == bestcost &&
+			!minorIsBetter_Precious(minors, bestMinors)) {
 			continue
 		}
 
@@ -509,7 +552,8 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		//  --VigilantDoomer
 		if slen < l {
 			cost += w.pickNodeFactor
-			if cost >= bestcost {
+			if cost > bestcost || (cost == bestcost &&
+				!minorIsBetter_Precious(minors, bestMinors)) {
 				continue
 			}
 		}
@@ -517,6 +561,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// We have a new better choice
 		bestcost = cost
 		best = part // Remember which Seg
+		bestMinors = minors
 	}
 	return best // All finished, return best Seg
 }
@@ -524,7 +569,8 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // If returns true, the partition &part must be skipped, because it produced
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
-	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number) bool {
+	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number,
+	minors MinorCosts) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -577,6 +623,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 						} else {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
 						}
+						minors.PreciousSplit++
 					}
 
 					*cost += w.pickNodeFactor
@@ -591,6 +638,23 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 					leftside = true
 				}
 			} else {
+				// TODO review, possibly find another way to solve this
+				// Ported from default partitioner. After checking with node
+				// viewer, it seems that the damn 275 sector in Hexen map05
+				// was split into two subsectors in visplane-aware partitioners,
+				// and was just lucky to avoid problems caused by this. This
+				// sector really ought to be one subsector for safety sake.
+				// Default partitioner (seg-only guided) used to create multiple
+				// subsectors before this workaround
+				if w.diagonalPenalty != 0 &&
+					w.lines.IsTaggedPrecious(check.Linedef) {
+					if part.pdx != 0 && part.pdy != 0 {
+						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
+					} else {
+						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
+					}
+					minors.PreciousSplit++
+				}
 				leftside = true
 			}
 		} else if a <= 0 {
@@ -621,7 +685,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 		}
 
 		if w.evalPartitionWorker_VisplaneKillough(block.subs[num], part, tot, diff,
-			cost, bestcost, slen) {
+			cost, bestcost, slen, minors) {
 			return true
 		}
 	}
@@ -1009,6 +1073,23 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 					leftside = true
 				}
 			} else {
+				// TODO review, possibly find another way to solve this
+				// Ported from default partitioner. After checking with node
+				// viewer, it seems that the damn 275 sector in Hexen map05
+				// was split into two subsectors in visplane-aware partitioners,
+				// and was just lucky to avoid problems caused by this. This
+				// sector really ought to be one subsector for safety sake.
+				// Default partitioner (seg-only guided) used to create multiple
+				// subsectors before this workaround
+				if w.diagonalPenalty != 0 &&
+					w.lines.IsTaggedPrecious(check.Linedef) {
+					if part.pdx != 0 && part.pdy != 0 {
+						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
+					} else {
+						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
+					}
+					minors.PreciousSplit++
+				}
 				leftside = true
 			}
 		} else if a <= 0 {
@@ -1499,7 +1580,7 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 			continue
 		}
 
-		if w.evalPartitionWorker_Traditional(block.subs[num], part, tot, diff,
+		if w.evalPartitionWorker_Maelstrom(block.subs[num], part, tot, diff,
 			cost, bestcost) {
 			return true
 		}
