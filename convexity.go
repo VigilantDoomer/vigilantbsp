@@ -55,12 +55,22 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	var leftsSuper *Superblock
 	// Divide node in two
 	w.totals.numNodes++
-	w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super, &rightsSuper,
-		&leftsSuper)
+	part := w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super,
+		&rightsSuper, &leftsSuper)
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
 	res.Dy = int16(w.nodeDy)
+	needSubstitute := false
+	substituteIdx := 0
+	if w.linWork != nil && part.Flip == 0 { // should also probably panic if non-zero offset
+		for i, portal := range w.linWork.bundle.linguortals {
+			if portal.lidx == part.Linedef {
+				needSubstitute = true
+				substituteIdx = i
+			}
+		}
+	}
 
 	// These will form the left box
 	leftBox := FindLimits(lefts)
@@ -74,6 +84,23 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	} else { // only NONCONVEX_ONESECTOR can be here
 		res.nextL = CreateNodeForSingleSector(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
+	}
+	if needSubstitute {
+		subst := NodeSubstitute{
+			sacrificial: NodeOrSubsector{
+				node:    res.nextL,
+				ssector: res.LChild,
+			},
+			replacement: *w.linWork.nodes[substituteIdx],
+		}
+		if w.linWork.latestSubstitutions[substituteIdx] == nil {
+			w.linWork.nodeSubstitutes = append(w.linWork.nodeSubstitutes,
+				subst)
+			w.linWork.latestSubstitutions[substituteIdx] =
+				&(w.linWork.nodeSubstitutes[len(w.linWork.nodeSubstitutes)-1])
+		} else {
+			*w.linWork.latestSubstitutions[substituteIdx] = subst
+		}
 	}
 
 	// These will form the right box
@@ -96,7 +123,7 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // DivideSegsForSingleSector is like DivideSegs, but nodepicker is different
 func (w *NodesWork) DivideSegsForSingleSector(ts *NodeSeg, rs **NodeSeg,
 	ls **NodeSeg, bbox *NodeBounds, super *Superblock, rightsSuper,
-	leftsSuper **Superblock) {
+	leftsSuper **Superblock) *NodeSeg {
 	// Pick best node to use
 	best := PickNode_SingleSector(w, ts, bbox, super)
 
@@ -119,6 +146,7 @@ func (w *NodesWork) DivideSegsForSingleSector(ts *NodeSeg, rs **NodeSeg,
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
+	return best
 }
 
 // A modification of PickNode_Traditional, which uses more expensive (but more

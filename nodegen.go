@@ -120,6 +120,43 @@ type NodesTotals struct {
 	segSplits              int
 }
 
+type NodeOrSubsector struct {
+	node    *NodeInProcess
+	ssector uint32
+}
+
+type NodeSubstitute struct {
+	sacrificial NodeOrSubsector
+	replacement NodeOrSubsector
+}
+
+type LinguortalWork struct {
+	// substitutes to be applied to final node list so as to create "linguortal"
+	// effects
+	nodeSubstitutes     []NodeSubstitute
+	bundle              *LinguortalBundle  // returned from WriteableLines.GetLinguortalBundle - do not EDIT!
+	segs                [][]*NodeSeg       // for linguortal destinations as well as "normal" map
+	nodes               []*NodeOrSubsector // for linguortal destinations
+	whereMain           *NodeHook
+	latestSubstitutions []*NodeSubstitute
+}
+
+// Box with a possible reference to linguortal destination
+type BoxPlusL struct {
+	bbox          *NodeBounds
+	isLinguortal  bool
+	linguortalNum int
+}
+
+type NodeHook struct {
+	target *NodeInProcess
+	left   bool
+}
+
+type BoxLine struct {
+	X1, Y1, X2, Y2 int
+}
+
 type NodesWork struct {
 	lines           WriteableLines
 	sides           []Sidedef
@@ -160,6 +197,7 @@ type NodesWork struct {
 	zdoomVertices     []ZdoomNode_Vertex
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
+	linWork           *LinguortalWork
 }
 
 type NodeVertex struct {
@@ -204,6 +242,7 @@ type NodeInProcess struct {
 	RChild       uint32   // This may contain either int16 Node.RChild or int32 DeepNode.RChild value
 	LChild       uint32   // likewise
 	nextL, nextR *NodeInProcess
+	finalAddress uint32 // index in Node/DeepNode array
 }
 
 // DoLinesIntersect and ComputeIntersection use this
@@ -241,6 +280,15 @@ func NodesGenerator(input *NodesInput) {
 	// perform detection of polyobjects (sectors containing polyobjects must not
 	// be split if possible)
 	input.lines.DetectPolyobjects()
+	// detect linguortals (linguortal is a trick that violates BSP tree
+	// constraints - as it become a graph instead of tree - but nonetheless
+	// can be rendered by vanilla engine, and even some source port engines.
+	// Since it exploits artifacts created by violating constraints, and these
+	// artifacts are only exploitable if level is partitioned a certain way
+	// rather any valid way from BSP perspective, it is difficult to guarantee
+	// it will work. It is also difficult to specify using only traditional
+	// map primitives what areas are to be included in effect)
+	input.lines.DetectLinguortals()
 
 	allSegs, intVertices := createSegs(input.lines, input.sidedefs,
 		input.linesToIgnore, input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
@@ -342,26 +390,11 @@ func NodesGenerator(input *NodesInput) {
 		}
 	}
 	workData.segAliasObj.Init()
-	initialSuper := workData.doInitialSuperblocks(rootBox)
 
 	// The main act
-	var rootNode *NodeInProcess
-	if input.multiTreeMode == MULTITREE_NOTUSED {
-		// This is a most commonly used single-tree mode
-		rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper) // recursively create nodes
-	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
-		// Create multiple trees - bruteforce ROOT node among all (one-sided,
-		// two-sided, or every - depending on input.specialRootMode), the REST
-		// nodes are picked as NORMAL. So multiple trees are generated (in parallel
-		// with a limited number of worker threads) and the "best" is chosen
-		// This is NOT the way Zokumbsp does multi-tree, but rather a more
-		// simple feature requested by user nicknamed jerko
-		rootNode = MTPSentinel_MakeBestBSPTree(&workData, rootBox, initialSuper,
-			input.specialRootMode)
-	} else {
-		Log.Panic("Multi-tree variant not implemented.\n")
-	}
-	// NOTE rootBox, rootSeg, initialSuper must NOT be used past this point!
+	rootNode := CreateBSP(&workData, rootBox, input.multiTreeMode,
+		input.specialRootMode)
+	// NOTE rootBox, rootSeg must NOT be used past this point!
 
 	// Ok, so now we are printing stats, checking limits, and reverting the
 	// tree to produce the final data
@@ -398,6 +431,13 @@ func NodesGenerator(input *NodesInput) {
 		// Same node structure for Deep, Extended and Compressed non-GL nodes
 		workData.reverseDeepNodes(rootNode)
 	}
+	// BSP trees are initially written without linguortal artifacts.
+	// NodesWork.performNodeSubstitutes can introduce computed linguortal
+	// artifacts (that were stored in workData.nodeSubstitutes) to output
+	workData.performNodeSubstitutes(rootNode)
+
+	// workData.invertNodes() // debug. Proven to have no effect on the renderer
+
 	Log.Printf("Max seg count in subsector: %d\n", workData.totals.maxSegCountInSubsector)
 
 	// Now we can actually UNDO all our hard work if limits were exceeded
@@ -1143,7 +1183,7 @@ func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
 // method), because a twin named "DivideSegsForSingleSector" exists in
 // convexity.go
 func (w *NodesWork) DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg, bbox *NodeBounds,
-	super *Superblock, rightsSuper, leftsSuper **Superblock) {
+	super *Superblock, rightsSuper, leftsSuper **Superblock) *NodeSeg {
 	// Pick best node to use
 	best := w.pickNode(w, ts, bbox, super)
 
@@ -1167,6 +1207,7 @@ func (w *NodesWork) DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg, bbox *No
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
+	return best
 }
 
 // This does the actual splitting job (partition already picked) using the
@@ -1535,11 +1576,23 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	var leftsSuper *Superblock
 	// Divide node in two
 	w.totals.numNodes++
-	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
+	part := w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
+		&leftsSuper)
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
 	res.Dy = int16(w.nodeDy)
+	res.finalAddress = 0
+	needSubstitute := false
+	substituteIdx := 0
+	if w.linWork != nil && part.Flip == 0 { // should also probably panic if non-zero offset
+		for i, portal := range w.linWork.bundle.linguortals {
+			if portal.lidx == part.Linedef {
+				needSubstitute = true
+				substituteIdx = i
+			}
+		}
+	}
 
 	// These will form the left box
 	leftBox := FindLimits(lefts)
@@ -1557,6 +1610,23 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	} else {
 		res.nextL = CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
+	}
+	if needSubstitute {
+		subst := NodeSubstitute{
+			sacrificial: NodeOrSubsector{
+				node:    res.nextL,
+				ssector: res.LChild,
+			},
+			replacement: *w.linWork.nodes[substituteIdx],
+		}
+		if w.linWork.latestSubstitutions[substituteIdx] == nil {
+			w.linWork.nodeSubstitutes = append(w.linWork.nodeSubstitutes,
+				subst)
+			w.linWork.latestSubstitutions[substituteIdx] =
+				&(w.linWork.nodeSubstitutes[len(w.linWork.nodeSubstitutes)-1])
+		} else {
+			*w.linWork.latestSubstitutions[substituteIdx] = subst
+		}
 	}
 
 	// These will form the right box
@@ -1611,7 +1681,7 @@ func (w *NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 	}
 	if config.StraightNodes { // reference to global: config
 		// this line shall be executed for root node only
-		// root node still needs to be placed last, even as if the rest of tree
+		// root node still needs to be placed last, even as the rest of tree
 		// is written "unreversed"
 		return w.convertNodesStraight(node, uint32(w.totals.numNodes-1))
 	}
@@ -1632,6 +1702,7 @@ func (w *NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 		LChild: int16(node.LChild),
 		RChild: int16(node.RChild),
 	}
+	node.finalAddress = w.nreverse
 
 	w.nreverse++
 	return w.nreverse - 1
@@ -1645,7 +1716,7 @@ func (w *NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 	}
 	if config.StraightNodes { // reference to global: config
 		// this line shall be executed for root node only
-		// root node still needs to be placed last, even as if the rest of tree
+		// root node still needs to be placed last, even as the rest of tree
 		// is written "unreversed"
 		return w.convertDeepNodesStraight(node, uint32(w.totals.numNodes-1))
 	}
@@ -1666,6 +1737,7 @@ func (w *NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 		LChild: int32(node.LChild),
 		RChild: int32(node.RChild),
 	}
+	node.finalAddress = w.nreverse
 
 	w.nreverse++
 	return w.nreverse - 1
@@ -1699,6 +1771,7 @@ func (w *NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32
 		LChild: int16(node.LChild),
 		RChild: int16(node.RChild),
 	}
+	node.finalAddress = idx
 	return idx
 }
 
@@ -1730,7 +1803,97 @@ func (w *NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) ui
 		LChild: int32(node.LChild),
 		RChild: int32(node.RChild),
 	}
+	node.finalAddress = idx
 	return idx
+}
+
+// store linguortal effects in final BSP tree (or rather graph) representation
+func (w *NodesWork) performNodeSubstitutes(node *NodeInProcess) {
+	/*if true {
+		return // debug
+	}*/
+	if w.linWork.nodeSubstitutes == nil {
+		return
+	}
+	if node.nextR != nil {
+		w.performNodeSubstitutes(node.nextR)
+		if w.nodes != nil {
+			b, repl := w.substituteNode(node.nextR)
+			if b {
+				w.nodes[node.finalAddress].RChild = int16(repl)
+			}
+		} else {
+			b, repl := w.substituteNode(node.nextR)
+			if b {
+				w.deepNodes[node.finalAddress].RChild = repl
+			}
+		}
+	} else {
+		if w.nodes != nil {
+			b, repl := w.substituteSubsector(node.RChild)
+			if b {
+				w.nodes[node.finalAddress].RChild = int16(repl)
+			}
+		} else {
+			b, repl := w.substituteSubsector(node.RChild)
+			if b {
+				w.deepNodes[node.finalAddress].RChild = repl
+			}
+		}
+	}
+
+	if node.nextL != nil {
+		w.performNodeSubstitutes(node.nextL)
+		if w.nodes != nil {
+			b, repl := w.substituteNode(node.nextL)
+			if b {
+				w.nodes[node.finalAddress].LChild = int16(repl)
+			}
+		} else {
+			b, repl := w.substituteNode(node.nextL)
+			if b {
+				w.deepNodes[node.finalAddress].LChild = repl
+			}
+		}
+	} else {
+		if w.nodes != nil {
+			b, repl := w.substituteSubsector(node.LChild)
+			if b {
+				w.nodes[node.finalAddress].LChild = int16(repl)
+			}
+		} else {
+			b, repl := w.substituteSubsector(node.LChild)
+			if b {
+				w.deepNodes[node.finalAddress].LChild = repl
+			}
+		}
+	}
+}
+
+func (w *NodesWork) substituteSubsector(ssector uint32) (bool, int32) {
+	for _, item := range w.linWork.nodeSubstitutes {
+		if item.sacrificial.ssector == ssector {
+			if item.replacement.node == nil {
+				return true, int32(item.replacement.ssector)
+			} else {
+				return true, int32(item.replacement.node.finalAddress)
+			}
+		}
+	}
+	return false, 0
+}
+
+func (w *NodesWork) substituteNode(node *NodeInProcess) (bool, int32) {
+	for _, item := range w.linWork.nodeSubstitutes {
+		if item.sacrificial.node == node {
+			if item.replacement.node == nil {
+				return true, int32(item.replacement.ssector)
+			} else {
+				return true, int32(item.replacement.node.finalAddress)
+			}
+		}
+	}
+	return false, 0
 }
 
 // computeSectorEquivalence()
@@ -1810,7 +1973,8 @@ func (ni *NodesInput) applySectorEquivalence(allSegs []*NodeSeg, sectorEquiv []u
 }
 
 // Create superblocks from initial list of segs before the start of partitioning
-func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *Superblock {
+func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds,
+	segArray []*NodeSeg) *Superblock {
 	ret := NewSuperBlock()
 	ret.SetBounds(rootBox)
 	if w.pickNodeUser == PICKNODE_VISPLANE {
@@ -1820,7 +1984,7 @@ func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *Superblock {
 		ret.secEquivs = make([]uint16, 0)
 		ret.secMap = make(map[uint16]bool)
 	}
-	for _, seg := range w.allSegs {
+	for _, seg := range segArray {
 		ret.AddSegToSuper(seg)
 	}
 	return ret
@@ -1888,16 +2052,33 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	}
 
 	newW.totals = &NodesTotals{
-		numNodes:               0,
-		numSSectors:            0,
-		numSegs:                0,
-		maxSegCountInSubsector: 0,
-		segSplits:              0,
+		numNodes:               w.totals.numNodes,
+		numSSectors:            w.totals.numSSectors,
+		numSegs:                w.totals.numSegs,
+		maxSegCountInSubsector: w.totals.maxSegCountInSubsector,
+		segSplits:              w.totals.segSplits,
 	}
 
 	newW.vertices = make([]NodeVertex, len(w.vertices))
 	for i := 0; i < len(newW.vertices); i++ {
 		newW.vertices[i] = w.vertices[i]
+	}
+
+	newW.subsectors = make([]SubSector, len(w.subsectors))
+	if len(w.subsectors) != 0 {
+		copy(newW.subsectors[:], w.subsectors[:])
+	}
+	newW.segs = make([]Seg, len(w.segs))
+	if len(w.segs) != 0 {
+		copy(newW.segs[:], w.segs[:])
+	}
+	newW.deepSubsectors = make([]DeepSubSector, len(w.deepSubsectors))
+	if len(w.deepSubsectors) != 0 {
+		copy(newW.deepSubsectors[:], w.deepSubsectors[:])
+	}
+	newW.deepSegs = make([]DeepSeg, len(w.deepSegs))
+	if len(w.deepSegs) != 0 {
+		copy(newW.deepSegs[:], w.deepSegs[:])
 	}
 
 	newW.segAliasObj = new(SegAliasHolder)
@@ -1909,6 +2090,7 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 
 	newW.nonVoidCache = make(map[int]NonVoidPerAlias)
 	newW.blocksHit = make([]BlocksHit, 0)
+	newW.blockity = nil
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -1949,7 +2131,400 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 		}
 	}
 
+	if w.linWork != nil {
+		// linWork is not deep copied, as most of it should not be edited anymore,
+		// except for substitutions info, which need to be allocated anew
+		newW.linWork = &LinguortalWork{
+			bundle:              w.linWork.bundle, //
+			nodeSubstitutes:     make([]NodeSubstitute, 0),
+			latestSubstitutions: make([]*NodeSubstitute, len(w.linWork.bundle.linguortals)),
+			segs:                w.linWork.segs,
+			nodes:               w.linWork.nodes,
+			whereMain:           w.linWork.whereMain,
+		}
+	}
+
 	return newW
+}
+
+// This function handles which way to build the map depending on whether it
+// has linguortals or not
+func CreateBSP(w *NodesWork, rootBox *NodeBounds, multiTreeMode,
+	rootChoiceMethod int) *NodeInProcess {
+
+	// Now, if I have linguortal(s), I need to first isolate them, and those
+	// CreateNode/MTPSentinel_MakeBestBSPTree/etc. will work with not actual
+	// root node, but the largest node containing only normal stuff and no
+	// linguortals
+	lb := w.lines.GetLinguortalBundle()
+	if lb != nil { // got linguortals?
+		// Yes... prepare for PAIN!
+		w.linWork = &LinguortalWork{
+			nodeSubstitutes:     make([]NodeSubstitute, 0),
+			bundle:              lb,
+			segs:                segListsForIslands(lb, w.allSegs),
+			nodes:               make([]*NodeOrSubsector, len(lb.linguortals)),
+			latestSubstitutions: make([]*NodeSubstitute, len(lb.linguortals)),
+		}
+		initialBoxes := w.GetInitialBoxesPlusL()
+		// this splits away linguortal destinations and also partitions their
+		// nodes, but doesn't partition "main" area of the map (the one without
+		// any linguortal destinations).
+		// w.linWork.whereMain will be initialized so that we know where does
+		// main area of the map belong in overall BSP
+		root := w.BSPWithLinguortals(rootBox, initialBoxes)
+		// Now build main area of the map (it will peruse w.linWork.nodes to
+		// hook in references to linguortal destinations into it)
+		if w.linWork.whereMain == nil {
+			Log.Panic("A placeholder for node for main area was not designated when partitioning linguortal destinations.\n")
+		}
+		mainSuper := w.doInitialSuperblocks(w.linWork.bundle.bigFree,
+			w.linWork.segs[0])
+		w.allSegs = w.linWork.segs[0] // looks like such foolery is needed (see
+		// GetInitialStateClone, also MTPSentinel_MakeBestBSPTree)
+		mainNode := w.BSPMain(w.linWork.bundle.bigFree, mainSuper, multiTreeMode,
+			rootChoiceMethod)
+		// Hook main area of the map into BSP tree now
+		// There is an assumption here: that it is always a node and not a
+		// subsector (unlike linguortal destinations, which ARE allowed to be
+		// subsectors)
+		tgt := w.linWork.whereMain.target
+		if w.linWork.whereMain.left {
+			tgt.nextL = mainNode
+		} else {
+			tgt.nextR = mainNode
+		}
+		// root node in this case was returned from BSPWithLinguortals call, not
+		// BSPMain call
+		return root
+	} else {
+		// No linguortals - straightforward approach
+		initialSuper := w.doInitialSuperblocks(rootBox, w.allSegs)
+		return w.BSPMain(rootBox, initialSuper, multiTreeMode, rootChoiceMethod)
+	}
+}
+
+// This function is supposed to produce the root node when map has no
+// linguortals. If map does have linguortals, this will only work on the part
+// of map without any islands that would be linguortals destinations, and in
+// this case, nodes for all linguortals destinations have to be build BEFORE
+// this is called, so already built linguortals can be hooked into intended
+// positions
+func (w *NodesWork) BSPMain(rootBox *NodeBounds, super *Superblock,
+	multiTreeMode, rootChoiceMethod int) *NodeInProcess {
+	var rootNode *NodeInProcess
+	if multiTreeMode == MULTITREE_NOTUSED {
+		// This is a most commonly used single-tree mode
+		rootNode = CreateNode(w, w.allSegs[0], rootBox, super) // recursively create nodes
+	} else if multiTreeMode == MULTITREE_ROOT_ONLY {
+		// Create multiple trees - bruteforce ROOT node among all (one-sided,
+		// two-sided, or every - depending on input.specialRootMode), the REST
+		// nodes are picked as NORMAL. So multiple trees are generated (in parallel
+		// with a limited number of worker threads) and the "best" is chosen
+		// This is NOT the way Zokumbsp does multi-tree, but rather a more
+		// simple feature requested by user nicknamed jerko
+		rootNode = MTPSentinel_MakeBestBSPTree(w, rootBox, super,
+			rootChoiceMethod)
+	} else {
+		Log.Panic("Multi-tree variant not implemented.\n")
+	}
+	return rootNode
+}
+
+// Recurses into itself or CreateNode (for linguortal destinations), BUT doesn't
+// recurse into BSPMain
+func (w *NodesWork) BSPWithLinguortals(bbox *NodeBounds, boxes []*BoxPlusL) *NodeInProcess {
+	res := new(NodeInProcess)
+	// Divide node in two
+	w.totals.numNodes++
+	lbbox := new(*NodeBounds)
+	rbbox := new(*NodeBounds)
+	lboxes := new([]*BoxPlusL)
+	rboxes := new([]*BoxPlusL)
+	w.DivideBoxes(bbox, boxes, lbbox, lboxes, rbbox, rboxes)
+	res.X = int16(w.nodeX)
+	res.Y = int16(w.nodeY)
+	res.Dx = int16(w.nodeDx)
+	res.Dy = int16(w.nodeDy)
+	res.finalAddress = 0
+
+	// These will form the left box**
+	res.Lbox[BB_TOP] = int16((*lbbox).Ymax)
+	res.Lbox[BB_BOTTOM] = int16((*lbbox).Ymin)
+	res.Lbox[BB_LEFT] = int16((*lbbox).Xmin)
+	res.Lbox[BB_RIGHT] = int16((*lbbox).Xmax)
+	if len(*lboxes) == 1 {
+		singular := (*lboxes)[0]
+		if !singular.isLinguortal {
+			// main area - build later with BSPMain
+			if w.linWork.whereMain != nil {
+				Log.Panic("Found another 'main' area that is non-linguortal destination, but can have only one. This situation should have been ruled out earlier.\n")
+			}
+			w.linWork.whereMain = &NodeHook{
+				target: res,
+				left:   true,
+			}
+		} else {
+			// isolated linguortal destination - partition now!
+			lefts := w.linWork.segs[singular.linguortalNum+1]
+			state := w.isItConvex(lefts[0])
+			leftBox := w.linWork.bundle.linguortals[singular.linguortalNum].bbox
+			leftsSuper := w.doInitialSuperblocks(leftBox, lefts)
+			if state == CONVEX_SUBSECTOR {
+				res.nextL = nil
+				res.LChild = w.CreateSSector(lefts[0]) | w.SsectorMask
+			} else if state == NONCONVEX_ONESECTOR {
+				res.nextL = w.createNodeSS(w, lefts[0], leftBox, leftsSuper)
+				res.LChild = 0
+			} else {
+				res.nextL = CreateNode(w, lefts[0], leftBox, leftsSuper)
+				res.LChild = 0
+			}
+			w.linWork.nodes[singular.linguortalNum] = &NodeOrSubsector{
+				node:    res.nextL,
+				ssector: res.LChild,
+			}
+		}
+	} else {
+		res.nextL = w.BSPWithLinguortals(*lbbox, *lboxes)
+		res.LChild = 0
+	}
+
+	// These will form the right box
+	res.Rbox[BB_TOP] = int16((*rbbox).Ymax)
+	res.Rbox[BB_BOTTOM] = int16((*rbbox).Ymin)
+	res.Rbox[BB_LEFT] = int16((*rbbox).Xmin)
+	res.Rbox[BB_RIGHT] = int16((*rbbox).Xmax)
+	if len(*rboxes) == 1 {
+		singular := (*rboxes)[0]
+		if !singular.isLinguortal {
+			// main area - build later with BSPMain
+			if w.linWork.whereMain != nil {
+				Log.Panic("Found another 'main' area that is not linguortal destination, but can have only one such. This situation should have been ruled out earlier.\n")
+			}
+			w.linWork.whereMain = &NodeHook{
+				target: res,
+				left:   false,
+			}
+		} else {
+			// isolated linguortal destination - partition now!
+			rights := w.linWork.segs[singular.linguortalNum+1]
+			state := w.isItConvex(rights[0])
+			rightBox := w.linWork.bundle.linguortals[singular.linguortalNum].bbox
+			rightsSuper := w.doInitialSuperblocks(rightBox, rights)
+			if state == CONVEX_SUBSECTOR {
+				res.nextR = nil
+				res.RChild = w.CreateSSector(rights[0]) | w.SsectorMask
+			} else if state == NONCONVEX_ONESECTOR {
+				res.nextR = w.createNodeSS(w, rights[0], rightBox, rightsSuper)
+				res.RChild = 0
+			} else {
+				res.nextR = CreateNode(w, rights[0], rightBox, rightsSuper)
+				res.RChild = 0
+			}
+			w.linWork.nodes[singular.linguortalNum] = &NodeOrSubsector{
+				node:    res.nextR,
+				ssector: res.RChild,
+			}
+		}
+	} else {
+		res.nextR = w.BSPWithLinguortals(*rbbox, *rboxes)
+		res.RChild = 0
+	}
+
+	return res
+}
+
+// returns array with N+1 items where N is number of linguortals,
+// [0] item - is an array of all segs belonging to main non-linguortal node,
+// [1-N] item - is an item belonging to respective linguortal
+func segListsForIslands(lb *LinguortalBundle, allSegs []*NodeSeg) [][]*NodeSeg {
+	linedefToIsland := make(map[uint16]int)
+	ret := make([][]*NodeSeg, len(lb.linguortals)+1)
+	for i, _ := range ret {
+		ret[i] = make([]*NodeSeg, 0)
+	}
+	for i, portal := range lb.linguortals {
+		for _, line := range portal.dgraph.lines {
+			linedefToIsland[line.id] = i
+		}
+	}
+	for _, seg := range allSegs {
+		// loop - sort seg into respective islands
+		// partner segs will naturally go together, for they belong to the same
+		// linedef
+		island, ok := linedefToIsland[seg.Linedef]
+		if ok {
+			ret[island+1] = append(ret[island+1], seg)
+		} else {
+			ret[0] = append(ret[0], seg)
+		}
+	}
+
+	// Make sure lists of segs are isolated from each other - items in
+	// each list are allowed to reference items only within that list
+	for i, _ := range ret {
+		ll := len(ret[i]) - 1 // last element of the current list
+		for j, _ := range ret[i] {
+			if j < ll {
+				// reference to next element within the same list
+				ret[i][j].next = ret[i][j+1]
+			} else {
+				// last element references nothing as next
+				ret[i][j].next = nil
+			}
+		}
+	}
+	return ret
+}
+
+func (w *NodesWork) GetInitialBoxesPlusL() []*BoxPlusL {
+	ret := make([]*BoxPlusL, 1)
+	ret[0] = &BoxPlusL{
+		isLinguortal: false,
+		bbox:         w.linWork.bundle.bigFree,
+	}
+	for i, portal := range w.linWork.bundle.linguortals {
+		ret = append(ret, &BoxPlusL{
+			bbox:          portal.bbox,
+			isLinguortal:  true,
+			linguortalNum: i,
+		})
+	}
+	return ret
+}
+
+func (w *NodesWork) DivideBoxes(bbox *NodeBounds, boxes []*BoxPlusL,
+	lbbox **NodeBounds, lboxes *[]*BoxPlusL,
+	rbbox **NodeBounds, rboxes *[]*BoxPlusL) {
+	// besides declared arguments, this also must write to
+	// w.nodeX, w.nodeY, w.nodeDx, w.nodeDy
+
+	// Idea - from each side of each of the small boxes, produce a line
+	// From all such lines, pick a partition line so that it doesn't split
+	// any boxes, but has non-zero number of boxes on each side of partition
+	// line
+
+	lines := GetLineCandidates(bbox, boxes) // lines are always orthogonal here
+	best := PickBoxLine(bbox, boxes, lines)
+
+	if best == nil {
+		// To programmers: write PickBoxLine so it never happens
+		Log.Panic("Couldn't pick nodeline! (DivideBoxes)\n")
+	}
+
+	w.nodeX = best.X1
+	w.nodeY = best.Y1
+	w.nodeDx = best.X2 - w.nodeX
+	w.nodeDy = best.Y2 - w.nodeY
+
+	// The choice was made - now sort boxes to respective side of partition line
+	*lboxes = make([]*BoxPlusL, 0)
+	*rboxes = make([]*BoxPlusL, 0)
+	for _, mbox := range boxes {
+		if GetBoxAndLineState(mbox, best) < 0 {
+			*lboxes = append(*lboxes, mbox)
+		} else { // necessary > 0 - shall never be = 0 here
+			*rboxes = append(*rboxes, mbox)
+		}
+	}
+
+	*lbbox = (*lboxes)[0].bbox
+	*rbbox = (*rboxes)[0].bbox
+	for i, mbox := range *lboxes {
+		if i == 0 {
+			continue
+		}
+		*lbbox = mergeBbox(*lbbox, mbox.bbox)
+	}
+	for i, mbox := range *rboxes {
+		if i == 0 {
+			continue
+		}
+		*rbbox = mergeBbox(*rbbox, mbox.bbox)
+	}
+}
+
+// Returns lines that can be tried to keep boxes apart from each other. Lines
+// are produced from each side of every box
+func GetLineCandidates(bbox *NodeBounds, boxes []*BoxPlusL) []BoxLine {
+	lines := make([]BoxLine, 0)
+	dupTracker := make(map[BoxLine]bool)
+	for _, bI := range boxes {
+		// for each "minor" box side, produce line collinear with it that ends
+		// on the "major" box sides
+		boxI := bI.bbox
+		lineYmin := BoxLine{
+			X1: bbox.Xmin,
+			X2: bbox.Xmax,
+			Y1: boxI.Ymin,
+			Y2: boxI.Ymin,
+		}
+		if !dupTracker[lineYmin] {
+			dupTracker[lineYmin] = true
+			lines = append(lines, lineYmin)
+		}
+		lineYmax := BoxLine{
+			X1: bbox.Xmin,
+			X2: bbox.Xmax,
+			Y1: boxI.Ymax,
+			Y2: boxI.Ymax,
+		}
+		if !dupTracker[lineYmax] {
+			dupTracker[lineYmax] = true
+			lines = append(lines, lineYmax)
+		}
+		lineXmin := BoxLine{
+			X1: boxI.Xmin,
+			X2: boxI.Xmin,
+			Y1: bbox.Ymin,
+			Y2: bbox.Ymax,
+		}
+		if !dupTracker[lineXmin] {
+			dupTracker[lineXmin] = true
+			lines = append(lines, lineXmin)
+		}
+		lineXmax := BoxLine{
+			X1: boxI.Xmax,
+			X2: boxI.Xmax,
+			Y1: bbox.Ymin,
+			Y2: bbox.Ymax,
+		}
+		if !dupTracker[lineXmax] {
+			dupTracker[lineXmax] = true
+			lines = append(lines, lineXmax)
+		}
+	}
+	return lines
+}
+
+func invertNode(node *Node) {
+	node.X = node.X + node.Dx
+	node.Y = node.Y + node.Dy
+	node.Dx = -node.Dx
+	node.Dy = -node.Dy
+	node.Lbox, node.Rbox = node.Rbox, node.Lbox
+	node.LChild, node.RChild = node.RChild, node.LChild
+}
+
+// No, this won't have any effect at all on rendering (linguortal defects) or
+// visplane count. How bsp is traversed - the renderer makes choiced based
+// on player's angle respective to the partition line, and not "front first,
+// back second". If it selected front first in original order, after flipping
+// that node traversal will chose its back instead
+func (w *NodesWork) invertNodes() {
+	if w.nodes == nil { // only implemented for normal nodes, not Deep nodes (lazy)
+		return
+	}
+	if config.Deterministic { // reference to global: config
+		return
+	}
+	for i, _ := range w.nodes {
+		//if rand.Intn(2) == 1 { // was math/rand package
+		invertNode(&(w.nodes[i]))
+		//}
+	}
+	Log.Printf("nodes inverted\n")
 }
 
 /*---------------------------------------------------------------------------*

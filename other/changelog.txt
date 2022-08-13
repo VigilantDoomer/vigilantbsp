@@ -6,6 +6,7 @@ v0.75a (working name)
 - Sped up multi-tree just a bit 
 - Added hidden option to produce unreversed BSP nodes array, which might (or might not) offer performance benefits on old (486?) processors. See "Debug and other hidden parameters", "--unreversenodes".
 - Improvement: specifying an endgoal for blockmap in deterministic mode no longer cancels multi-threading
+- (Broken, incomplete) Support for a primitive version of linguortal. Maps built with linguortals can have visual glitches, a lot of work remains to support proper linguortals 
 
 v0.74a
 - New feature: partial RMB support!

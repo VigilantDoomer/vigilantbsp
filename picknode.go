@@ -1590,6 +1590,97 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 	return false
 }
 
+// Line picker for linguortal-infested nodes. Lines always orthogonal, with
+// dx >= 0, dy >= 0 and the return value must never intersect any box but have
+// at least one box on each side from line
+func PickBoxLine(bbox *NodeBounds, boxes []*BoxPlusL, lines []BoxLine) *BoxLine {
+	best := &(lines[0]) // make sure always something to return
+	scoreBest := int(INITIAL_BIG_COST)
+	score2Best := int(INITIAL_BIG_COST)
+	for i := 0; i < len(lines); i++ {
+		part := &(lines[i])
+		skip := false
+		left := 0
+		right := 0
+		score := 0
+		score2 := 0
+		for j := 0; j < len(boxes); j++ {
+			state := GetBoxAndLineState(boxes[j], part)
+			if state == 0 {
+				// line intersects box! Not allowed
+				skip = true
+				break
+			} else if state < 0 {
+				if boxes[j].isLinguortal {
+					score2++
+				}
+				left++
+			} else { // state > 0
+				if boxes[j].isLinguortal {
+					score2++
+				}
+				right++
+			}
+		}
+		skip = skip || left == 0 || right == 0
+		if skip {
+			continue
+		}
+		score = right - left
+		if score < 0 {
+			score = -score
+		}
+		// score2best tries to ensure lines that pass through a side of
+		// linguortal-destination box are preferred over those passing the
+		// normal map box, also this didn't seem to achieve the desired effect
+		// of reducing the instances of linguortal bleeding from spots it is
+		// not expected to seen.
+		if score < scoreBest || (score == scoreBest && score2 < score2Best) {
+			scoreBest = score
+			score2Best = score2
+			best = part
+		}
+	}
+	return best
+}
+
+// -1 = LEFT (TOP)
+// 0 - intersects (bad)
+// 1 = RIGHT (BOTTOM)
+func GetBoxAndLineState(boxpl *BoxPlusL, line *BoxLine) int {
+	var p1, p2 int
+	box := boxpl.bbox
+	if line.X1 == line.X2 { // vertical line
+		if box.Xmax > line.X1 {
+			p1 = +1
+		} else {
+			p1 = -1
+		}
+		if box.Xmin > line.X1 {
+			p2 = +1
+		} else {
+			p2 = -1
+		}
+		// line dy always > 0, hence inverting p1 & p2 is never needed
+	} else { // horizontal line
+		if box.Ymax < line.Y1 {
+			p1 = +1
+		} else {
+			p1 = -1
+		}
+		if box.Ymin < line.Y1 {
+			p2 = +1
+		} else {
+			p2 = -1
+		}
+		// line dx always > 0, hence inverting p1 & p2 is never needed
+	}
+	if p1 == p2 {
+		return p1
+	}
+	return 0
+}
+
 // Good Lord, Raphael Quinet, you were right: writing a node builder takes HEAPS of
 // time! Big thanks for reaching there before the rest of us. -- VigilantDoomer
 

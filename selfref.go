@@ -560,7 +560,7 @@ func (c *Culler) analyzeForBlockmap() {
 func (c *Culler) deepAnalysis(secIdx uint16, allLines, culledLines []uint16,
 	doingForSegs bool) bool {
 	// Represent sector as graph
-	graph := c.convertLinesToGraph(allLines)
+	graph := convertLinesToGraph(c.absLines, allLines, true)
 	// Split graph into connected components (thus sector is split into
 	// connected parts. Most sectors will have only one such part, but sectors
 	// that were produced as a result of linking distant sectors will have
@@ -883,14 +883,15 @@ func angleOf_InRadians(x, y float64) float64 {
 	}
 }
 
-func (c *Culler) convertLinesToGraph(lines []uint16) CullerGraph {
+func convertLinesToGraph(litf AbstractLines, lines []uint16,
+	removeA bool) CullerGraph {
 	var g CullerGraph
 	g.lines = make([]CullerLine, 0)
 	g.vertices = make([]NodeVertex, 0)
 	verticeMap := make(map[BareVertex]int) // to index in vertices array
 	verticesUse := make([]int, 0)
 	for _, line := range lines {
-		X1, Y1, X2, Y2 := c.absLines.GetAllXY(line)
+		X1, Y1, X2, Y2 := litf.GetAllXY(line)
 		vBegin := BareVertex{X: X1, Y: Y1}
 		vEnd := BareVertex{X: X2, Y: Y2}
 		iBegin, ok := verticeMap[vBegin]
@@ -923,7 +924,9 @@ func (c *Culler) convertLinesToGraph(lines []uint16) CullerGraph {
 		verticesUse[iBegin]++
 		verticesUse[iEnd]++
 	}
-	removeAppendages(&g, verticesUse)
+	if removeA {
+		removeAppendages(&g, verticesUse)
+	}
 	return g
 }
 
@@ -1029,7 +1032,7 @@ func (g *CullerGraph) split() ([]CullerGraph, bool) {
 		return []CullerGraph{*g}, true
 	} else if numComponents == 0 {
 		// should never happen
-		Log.Verbose(1, "Couldn't find components in a graph representing sector. (culler)\n")
+		Log.Verbose(1, "Couldn't find components in a graph.\n")
 		return nil, false
 	}
 	// And now, we create a graph from each component

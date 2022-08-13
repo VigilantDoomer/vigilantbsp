@@ -292,6 +292,29 @@ partitioners used to split that sector into 2 subsectors, but the update now
 causes entire sector in question in that map to be covered with 1 subsector
 (finally!), which is preferable for sectors involved in polyobjects.
 
+03:07 Linguortal support
+------------------------
+
+Linguortal support is still under development and has lots of bugs and
+limitations. This unofficial release of development version of 0.75a allows
+some people to experiment with it nonetheless.
+
+The currently "supported" version doesn't move segs but instead tries to
+reuse node built for off-map linguortal destination in another place,
+which might or might not come with acceptable limitations.
+
+To use linguortal effect in your own map - assuming you are using
+the appropriate version of VigilantBSP - you need to make an "island" 
+(surrounded by void only and not inside some other geometry) OFF MAP.
+Then, to view that island, you need to tag one of linedefs belonging to
+it with an unique tag (but not put a special), then you put the same
+tag AND special number 1097 on linedef from whose back you want to see
+that destination you drew earlier off map.
+
+You will likely need to experiment with building the same map with different
+partition algorithms so that one of them would provide somewhat acceptable
+results, as the research on implementation is still ongoing.
+
 Section 04: Custom linedef specials and tags
 ============================================
 

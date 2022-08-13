@@ -106,6 +106,11 @@ type WriteableLines interface {
 	Clone() WriteableLines
 	// assigns structure fields from the structure of the same underlying type
 	AssignFrom(src WriteableLines)
+	// MUTATES detects user-supplied instructions to create linguortal(s), if
+	// any were supplied, and the areas and linedefs that are going to be
+	// involved in them
+	DetectLinguortals()
+	GetLinguortalBundle() *LinguortalBundle
 }
 
 // This is used to:
@@ -116,8 +121,9 @@ type WriteableLines interface {
 // 2. build nodes. This implements WriteableLines interface, and yes methods
 // that mutate state are absolutely used for this
 type DoomLinedefs struct {
-	linedefs []Linedef
-	vertices []Vertex
+	linedefs         []Linedef
+	vertices         []Vertex
+	linguortalBundle *LinguortalBundle
 }
 
 // This is used to build blockmap consisting only of solid lines, which is used
@@ -151,6 +157,7 @@ type HexenLinedefs struct {
 	sidedefs         []Sidedef
 	sectorHasPolyobj map[uint16]bool
 	preciousLinedefs []bool // true for linedefs that are part of sector that has a polyobj
+	linguortalBundle *LinguortalBundle
 }
 
 // Hexen analogue of DoomSolidLinedefs
@@ -366,6 +373,14 @@ func (o *DoomLinedefs) GetSolidVersion() SolidLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *DoomLinedefs) DetectLinguortals() {
+	o.linguortalBundle = DetectLinguortals(o)
+}
+
+func (o *DoomLinedefs) GetLinguortalBundle() *LinguortalBundle {
+	return o.linguortalBundle
 }
 
 func (o *HexenLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
@@ -749,6 +764,14 @@ func (o *HexenLinedefs) GetSolidVersion() SolidLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *HexenLinedefs) DetectLinguortals() {
+	o.linguortalBundle = DetectLinguortals(o)
+}
+
+func (o *HexenLinedefs) GetLinguortalBundle() *LinguortalBundle {
+	return o.linguortalBundle
 }
 
 func (o *DoomSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
