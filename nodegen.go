@@ -338,7 +338,7 @@ func NodesGenerator(input *NodesInput) {
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
 		workData.zdoomVertexHeader = &ZdoomNode_VertexHeader{
-			ReusedOriginalVertices: uint32(input.lines.Len()),
+			ReusedOriginalVertices: uint32(input.lines.GetVerticesCount()),
 		}
 	}
 	workData.segAliasObj.Init()
@@ -929,7 +929,7 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 
 	a := c.pdy*dx2 - c.pdx*dy2
 	b := c.pdy*dx3 - c.pdx*dy3
-	if (a^b) < 0 && (a != 0) && (b != 0) { // Line is split, just check that
+	if DiffSign(a, b) && (a != 0) && (b != 0) { // Line is split, just check that
 
 		x, y := c.computeIntersection()
 		dx2 = c.lsx - x // Find distance from line start
@@ -976,6 +976,10 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 	}
 
 	return val
+}
+
+func DiffSign(a, b Number) bool {
+	return (a ^ b) < 0
 }
 
 // IsItConvex returns whether the list of segs:
@@ -1580,14 +1584,6 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	return res
 }
 
-func SegCount(seg *NodeSeg) int { // printf debugging
-	i := 0
-	for ; seg != nil; seg = seg.next {
-		i++
-	}
-	return i
-}
-
 func HeightOfNodes(node *NodeInProcess) int {
 	lHeight := 1
 	rHeight := 1
@@ -1842,7 +1838,8 @@ func (w *NodesWork) getZdoomNodesBytes() []byte {
 		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
 	}
 	// NOTE always LittleEndian per Zdoom specs
-	binary.Write(writ, binary.LittleEndian, &w.zdoomVertexHeader)
+	vertexHeader := *(w.zdoomVertexHeader)
+	binary.Write(writ, binary.LittleEndian, vertexHeader)
 	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
 	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
 	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)

@@ -275,7 +275,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 		leftside := false
 		a := part.pdy*check.psx - part.pdx*check.psy + part.perp
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
-		if (a ^ b) < 0 {
+		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
@@ -600,7 +600,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 		a := part.pdy*check.psx - part.pdx*check.psy + part.perp
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		mask := uint8(2)
-		if (a ^ b) < 0 {
+		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
@@ -916,7 +916,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 			// Divide node line length by two. This was verified as important
 			// indeed (worse results produced when not dividing) --VigilantDoomer
-			l = l >> 1
+			l = l / 2
 
 			// part III (final):
 			// Now check if the length of node line incidental with segs is less
@@ -1034,7 +1034,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 		mask := uint8(2)
 		a := part.pdy*check.psx - part.pdx*check.psy + part.perp
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
-		if (a ^ b) < 0 {
+		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
@@ -1521,7 +1521,7 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 		leftside := false
 		a := part.pdy*check.psx - part.pdx*check.psy + part.perp
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
-		if (a ^ b) < 0 {
+		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len

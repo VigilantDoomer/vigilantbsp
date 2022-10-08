@@ -109,7 +109,7 @@ func (log *MyLogger) Flush() {
 }
 
 func (log *MyLogger) DumpSegs(ts *NodeSeg) {
-	if !config.DumpSegs || ts == nil { // reference to global: config
+	if !config.DumpSegsFlag || ts == nil { // reference to global: config
 		return
 	}
 	// Assume all come from same sector

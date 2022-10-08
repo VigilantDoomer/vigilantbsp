@@ -61,6 +61,10 @@ Partial support for RMB effects is already implemented since
 version 0.74a. Eventually, most RMB effects are going to be
 supported.
 
+Since 0.75, VigilantBSP can output non-GL nodes in Zdoom 
+extended and compressed nodes format besides vanilla and
+DeeP format. 
+
 Section 02: Basic usage
 =======================
 
@@ -151,7 +155,9 @@ is either a suboption of option above it, or a possible value:
 		2 Cull, robust preservation of self-referencing sectors.
 	c= NODES format compatibility
 		v Vanilla format which all software ports recognise
-		d Deep nodes format (limited recognition)
+		d Deep nodes format
+		x Zdoom extended nodes format
+		z Zdoom compressed nodes format
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -292,6 +298,14 @@ partitioners used to split that sector into 2 subsectors, but the update now
 causes entire sector in question in that map to be covered with 1 subsector
 (finally!), which is preferable for sectors involved in polyobjects.
 
+03:07 Multiple node formats support
+-----------------------------------
+
+VigilantBSP supports multiple formats for representing (non-GL) nodes
+beside vanilla: DeepBSP, Zdoom extended and Zdoom compressed nodes format.
+See "Nodes format compatibility" subsection under "Nodes builder" 
+(-nc option)
+
 Section 04: Custom linedef specials and tags
 ============================================
 
@@ -330,8 +344,16 @@ Linedef tags with special meanings:
 ** This can be used to produce horizon and infinite ocean effect when angle
 in degrees = 180, see 
 https://www.doomworld.com/forum/topic/94604-horizon-effect-in-vanilla-only/
-(credit: Bzzrak). However, historically, most limit-removing and advanced
-ports wouldn't display this effect correctly, if they chose to override angle
+(credit: Bzzrak).
+
+Important note about angle effects (applies to all items marked by ** above):
+1. Effect will NOT work if the output format for nodes is chosen to be
+Zdoom extended or Zdoom compressed node formats, because the support for 
+how effect is implemented is missing in the format itself. In case of tag 999,
+it has two effects, the effect on rendering will not be applied in this case,
+but the effect of removing linedef from blockmap will work.
+2. Historically, most limit-removing and advanced ports wouldn't display
+this effect correctly, if they chose to override angle
 with a more precise computation required for wall wiggle fix (TODO add link)
 UNCONDITIONALLY. Preventing wall wiggle does NOT have to break this effect, 
 but historically used implementations did, and most versions of such popular 
@@ -344,6 +366,11 @@ implementing wall wiggle fix as the latter not compatible with the goals of that
 project. Ports such as Chocolate Doom and CnDoom (as well as outdated versions 
 of Sprinkled Doom when it was more of limit-raising rather than limit-removing port) 
 always supported this effect.
+
+Additional note on 999 linedef tag: if blockmap is too big, a zero-sized label is
+writing instead of BLOCKMAP lump and while some ports may still play the map
+by generating blockmap internally (not subject to format limitations), they are
+not likely to detect and apply effect in this case.
 
 Linedef tags >=900 and the rotation part for tag 999 effect originate from BSP
 nodebuilder. 
@@ -1154,30 +1181,52 @@ There are various BSP tree formats even for "software" (non-GL) nodes.
 Some of them aim at raising the limits and/or improving accuracy of seg 
 splits (coordinates being fixed point instead of integer).
 
-And then some are supported by VigilantBSP. 
+And then some are supported by VigilantBSP. Please note than formats
+other than the vanilla may not be supported by all source ports.
 
 c=v - Vanilla format which all software ports recognise
 
 This is the default, original nodes format. Every port is going to support
 this if it uses non-GL nodes at all.
 
-c=d - Deep nodes format (limited recognition)
+c=d - Deep nodes format (limited recognition amount source ports) 
 
-Also called "standard V4", this is the format invented by DeepBSP, it is
-supported by at least PrBoom-Plus (todo: which version it began
+Also called "standard V4", this is the format invented by DeepBSP.
+It is supported by at least PrBoom-Plus (todo: which version it began
 supporting it?) and Risen3D. It raises the number of segs and subsectors
 which can be referenced by BSP tree, but doesn't improve accuracy.
 
-There are plans to also support Zdoom extended nodes format and their
-compressed variant, which has the benefit of greater accuracy as well
-as raising limits as well. The exact reason the support is not yet
-implemented is that the BSP tree algorithm is currently performing the
-good deal of the computation using integer math, the accuracy thus missing
-in computation. Implementing format support for the sake of raising limits 
-alone (without accuracy benefit) would be possible, but could delude 
-people into thinking the accuracy is being provided when it is not. When
-the computation accuracy will be raised, the format support will be 
-implemented.
+c=x - Zdoom extended nodes format (also limited recognition)
+
+This format is noticeably different from previous two ones, in that
+it, on one hand, introduces substantial improvements, on the other
+hand, drops support for seg angle-altering special effects, including
+bzzrak effect ("horizon effect"/"infinite ocean"). 
+
+Improvements include:
+1. increased precision of seg coordinates (fixed-point 16.16 instead
+of 16-bit integer)
+2. increased number of not only segs and subsectors, but also of
+additional vertices (that are generate to represent segs) to 4G.
+
+Downsides is that some special effects (including potentially yet
+unknown side effects of changing offset and angle of a seg relative
+to linedef) are absolutely impossible to represent.
+
+PrBoom-Plus and some other relatively advanced ports do implement
+support for this (TODO provide more detail). The lists of ports
+that support DeeP nodes and Zdoom extended nodes overlap, although 
+not identical if I recall correctly.
+
+c=z - Zdoom compressed nodes format (most limited recognition)
+
+This format is identical to the previous in terms of features and
+downsides, except a certain compression algorithm is used, which
+*further* limits the number of source ports that support it. For example, 
+PrBoom-Plus v2.6.2um DOES support it, but Prboom-Plus v2.5.1.5 doesn't.
+
+Compression may occassionally result in smaller file size than other
+formats.
 
 07:07 'f' - Tuning factor (seg split cost, etc.)
 ------------------------------------------------

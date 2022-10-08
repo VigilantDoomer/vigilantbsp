@@ -930,7 +930,7 @@ func main() {
 		Log.Printf("I/O error on flushing data / closing files. The data might not have been saved!\n")
 	}
 	Log.Printf("Total time: %s\n", time.Since(timeStart))
-	if config.DumpSegs {
+	if config.DumpSegsFlag {
 		DebugSaveDumpedSegs(config.SegDumpFile)
 	}
 	if config.MemProfile {

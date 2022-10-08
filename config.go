@@ -21,7 +21,7 @@ import (
 )
 
 const PROG_CAPIT_NAME = "VigilantBSP"
-const VERSION = "0.75a"
+const VERSION = "0.75"
 
 /*
 -b Rebuild BLOCKMAP.
@@ -72,7 +72,9 @@ const VERSION = "0.75a"
 		2 Cull, robust preservation of self-referencing sectors.
 	c= NODES format compatibility
 		v Vanilla format which all software ports recognise
-		d Deep nodes format (limited recognition)
+		d Deep nodes format
+		x Zdoom extended nodes format
+		z Zdoom compressed nodes format
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -195,7 +197,7 @@ type ProgramConfig struct {
 	//
 	BlockmapSearchAbortion int    // when trying multiple offsets, finish the search for a good blockmap as soon as it fits the limit
 	UseGraphsForLOS        bool   // use graphs for LOS calculations (build reject faster)
-	DumpSegs               bool   // seg debugging
+	DumpSegsFlag           bool   // seg debugging
 	SegDumpFile            string // where do dumped segs go?
 	DebugNoSlyForReject    bool   // reenable zennodes' buggy behavior of making self-referencing sectors always invisible
 	CullInvisibleSegs      int    // do not create segs for linedefs that will be invisible anyway
@@ -246,7 +248,7 @@ func init() {
 		UseZeroHeader:          true,
 		ZeroHeaderIsZero:       false,
 		SubsetCompressBlockmap: false,
-		DumpSegs:               false,
+		DumpSegsFlag:           false,
 		SegDumpFile:            "",
 		Profile:                false,
 		ProfilePath:            "",
@@ -361,7 +363,9 @@ func PrintHelp() {
 	Log.Printf("		2 Cull, robust preservation of self-referencing sectors.\n")
 	Log.Printf("	c= NODES format compatibility\n")
 	Log.Printf("		v Vanilla format which all software ports recognise\n")
-	Log.Printf("		d Deep nodes format (limited recognition)\n")
+	Log.Printf("		d Deep nodes format\n")
+	Log.Printf("		x Zdoom extended nodes format\n")
+	Log.Printf("		z Zdoom compressed nodes format \n")
 	Log.Printf("	f= Tuning factor (seg split cost, etc.)\n")
 	Log.Printf("		17 - default seg split cost\n")
 	Log.Printf("	d= Penalty factor for _diagonal_ lines\n")

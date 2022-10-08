@@ -19,6 +19,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 )
 
@@ -56,21 +57,25 @@ import (
 //
 // #pragma replace Number.Trunc with ZNumber.Trunc
 // #pragma replace RoundToPrecision with ZRoundToPrecision
+// #pragma replace DiffSign with ZDiffSign
 // #pragma replace Number.Abs with ZNumber.Abs
 // #pragma replace Number.Ceil with ZNumber.Ceil
 
 // And some functions need to be generated, but from a different function than
 // the one it replaces
 //
-// #pragma replace_prototype NodesWork.AddVertex with NodesWork.ZAddVertex_Proto
-// #pragma replace_prototype NodesWork.CreateSSector with NodesWork.ZCreateSSector_Proto
+// #pragma replace_prototype *NodesWork.AddVertex with *NodesWork.ZAddVertex_Proto
+// #pragma replace_prototype *NodesWork.CreateSSector with *NodesWork.ZCreateSSector_Proto
 // #pragma replace_prototype PointOnLineSide with ZPointOnLineSide_Proto
+// #pragma replace_prototype *MyLogger.DumpSegs with *MyLogger.ZDumpSegs_Proto
 
 // Finally, we need to assign the core function - which will include all other
 // generated stuff in its calltree - to a predefined callback. The generated
 // code will perform the assignment in init() function
 //
 // #pragma init ZNodesGenerator with morphed NodesGenerator
+
+//// debugging - these are local variables that should not be found: #pragma init sectorEquiv with morphed solidMap
 
 // -----------------------------------------------------------------------------
 // End block of pragma directives
@@ -93,6 +98,10 @@ func (n ZNumber) Trunc(x float64) float64 {
 
 func ZRoundToPrecision(n float64) ZNumber {
 	return ZNumber(n)
+}
+
+func ZDiffSign(a, b ZNumber) bool {
+	return (a > 0 && b < 0) || (a < 0 && b > 0)
 }
 
 func (n ZNumber) Abs() ZNumber {
@@ -139,7 +148,7 @@ func (w *NodesWork) ZCreateSSector_Proto(tmps *NodeSeg) uint32 {
 			StartVertex: uint32(tmps.StartVertex.idx),
 			EndVertex:   uint32(tmps.EndVertex.idx),
 			Linedef:     tmps.Linedef,
-			Flip:        tmps.Flip,
+			Flip:        byte(tmps.Flip),
 		})
 	}
 	currentCount = uint32(len(w.zdoomSegs)) - oldNumSegs
@@ -171,4 +180,26 @@ func UtilPerpDist_Float64(part *NodeSeg, x, y float64) float64 {
 
 func Float64AbsAndSign(perp float64) (float64, bool) {
 	return math.Abs(perp), math.Signbit(perp)
+}
+
+func (log *MyLogger) ZDumpSegs_Proto(ts *NodeSeg) {
+	if !config.DumpSegsFlag || ts == nil { // reference to global: config
+		return
+	}
+	// Assume all come from same sector
+	allSector := ts.sector
+	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
+	for tmps := ts; tmps != nil; tmps = tmps.next {
+		log.segs.WriteString(fmt.Sprintf(
+			"  Linedef: %d Flip: %d (%f,%f) - (%f, %f)",
+			tmps.Linedef, tmps.Flip, tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.EndVertex.X, tmps.EndVertex.Y))
+		if tmps.sector != allSector {
+			// Is not supposed to write stuff from multiple sectors. You'll have
+			// to rewrite code in this function to adjust it to your use case
+			log.segs.WriteString(fmt.Sprintf(" BAD! Sector = %d\n", tmps.sector))
+		} else {
+			log.segs.WriteString("\n")
+		}
+	}
 }

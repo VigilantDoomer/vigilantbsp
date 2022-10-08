@@ -13,7 +13,12 @@ clean:
 	rm -f vigilantbsp.exe
 	rm -f vigilantbsp32
 	rm -f vigilantbsp32.exe
+	rm -f gen/gen
+	rm -f gen/gen.exe
+	
+generate:
+	go generate
 
-$(PLATFORMS):
+$(PLATFORMS): generate
 	GOOS=$(os) GOARCH=$(arch) go build -ldflags="-s -w -buildid=" -trimpath -o 'vigilantbsp$(suffix)'
 

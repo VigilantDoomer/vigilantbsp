@@ -387,7 +387,7 @@ type ZdoomNode_Seg struct {
 	StartVertex uint32
 	EndVertex   uint32
 	Linedef     uint16
-	Flip        int16
+	Flip        byte
 }
 
 // ZdoomNode_node is not defined - it is same as DeepNode
