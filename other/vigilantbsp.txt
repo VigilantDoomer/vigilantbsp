@@ -247,6 +247,18 @@ opt-in or opt-out) to increase the chance that blockmaps will work
 under either vanilla or limit-removing port, when blockmap is closer
 to limit. 
 
+From v0.75 onwards, in vanilla nodes format, VigilantBSP can move 
+segs corresponding to the largest subsector towards the end of SEGS
+lump to prevent a specific type of overflow in the format (or
+vanilla engine): the index of FIRST seg belonging to subsector 
+exceeding 32767 (vanilla, or ports that treat field as signed) or
+65535 (ports that treat field as unsigned). This allows to support
+loading some maps with >32768 or >65536 segs that previously would
+either require an advanced source port or an advanced nodes format
+(note that not all maps can be made to fit within the limit). To my
+knowledge, no other nodebuilder does this as of yet, although the 
+possibility was previously documented by someone. 
+
 03:04 Continuing research on reducing visplanes
 --------------------------------------
 
@@ -1187,7 +1199,30 @@ other than the vanilla may not be supported by all source ports.
 c=v - Vanilla format which all software ports recognise
 
 This is the default, original nodes format. Every port is going to support
-this if it uses non-GL nodes at all.
+this if it uses non-GL nodes at all. Some ports will treat certain
+fields in vanilla format as unsigned integer values instead of signed,
+this is considered by VigilantBSP to constitute the same format.
+
+From v0.75 onwards, VigilantBSP prints warning if certain limits
+for vanilla target (where integer values are treated as signed) are
+exceeded but map can still work in advanced source ports. 
+
+Also, from v0.75 onwards, VigilantBSP will attempt to segs of the 
+largest subsector to the end of the SEGS lump, if overflow can 
+be avoided this way. Subsector in this format is represented by 
+two 16-bit integer values (signed in vanilla, unsigned in some
+other ports), denoting a contiguos range of segs: index of first
+seg belonging to the subsector and number of segs in subsector. The 
+maximum possible value for these is 32767 for vanilla target and
+and 65536 for ports that support unsigned values. However, the total
+number of segs in SEGS lump is not subject to these limitations, so
+moving some range of segs around can sometimes be used to "squeeze" 
+the map to work in vanilla or advanced ports.
+
+In the event when format limits are exceeded HARD (even for the 
+ports that treat certain fields as unsigned integers), 
+VigilantBSP will not only print a warning but also empty NODES,
+SUBSECTORS, and SEGS lumps (rather than write incorrect values)
 
 c=d - Deep nodes format (limited recognition amount source ports) 
 
@@ -1225,8 +1260,8 @@ downsides, except a certain compression algorithm is used, which
 *further* limits the number of source ports that support it. For example, 
 PrBoom-Plus v2.6.2um DOES support it, but Prboom-Plus v2.5.1.5 doesn't.
 
-Compression may occassionally result in smaller file size than other
-formats.
+Compression may occassionally result in smaller file size than even
+vanilla format.
 
 07:07 'f' - Tuning factor (seg split cost, etc.)
 ------------------------------------------------

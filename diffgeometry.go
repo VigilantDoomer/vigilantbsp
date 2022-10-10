@@ -147,7 +147,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	// candidate enters the map and where it goes to the void outside
 	sort.Stable(pts)
 	if pts[0] != *partStart || pts[len(pts)-1] != *partEnd {
-		Log.Verbose(2, "Failed to produce a solid hits array %t %t (%d, %d) != (%d, %d).\n",
+		Log.Verbose(2, "Failed to produce a solid hits array %t %t (%v, %v) != (%v, %v).\n",
 			pts[0] != *partStart, pts[len(pts)-1] != *partEnd,
 			pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
 			partEnd.v.X, partEnd.v.Y)
@@ -183,7 +183,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		// PersistThroughInsanity was set to false
 		// Log.Verbose(2, "Sanity check failed! Evaluated partition line (%d,%d)-(%d,%d) doesn't consistently go in/out of the void when crossing solid lines. %s\nOld content: %s",
 		// part.psx, part.psy, part.pex, part.pey, pts.toString(), ptsOld.toString())
-		Log.Verbose(2, "Sanity check failed! Evaluated partition line (%d,%d)-(%d,%d) doesn't consistently go in/out of the void when crossing solid lines. %s\n",
+		Log.Verbose(2, "Sanity check failed! Evaluated partition line (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines. %s\n",
 			part.psx, part.psy, part.pex, part.pey, pts.toString())
 		if !config.PersistThroughInsanity { // reference to global: config
 			return NonVoidPerAlias{
@@ -330,7 +330,7 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 			// Hid behind verbose lvl2 (reason: message lack of clarity level / technical speak)
 			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
 				len(intersectPoints), linesTried)
-			Log.Verbose(2, "part from linedef %d!%d+%d: (%d %d) - (%d %d) bbox: (%d %d) - (%d %d)\n",
+			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
 				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
@@ -575,7 +575,7 @@ func (x CollinearVertexPairCByCoord) toString() string {
 	}
 	s := ""
 	for i := 0; i < len(x); i++ {
-		s += fmt.Sprintf("; [(%d;%d)-(%d;%d)]", x[i].StartVertex.X, x[i].StartVertex.Y,
+		s += fmt.Sprintf("; [(%v;%v)-(%v;%v)]", x[i].StartVertex.X, x[i].StartVertex.Y,
 			x[i].EndVertex.X, x[i].EndVertex.Y)
 	}
 	return s
@@ -631,6 +631,9 @@ func (x CollinearOrientedVertices) toString() string {
 	s := "["
 	for i := 0; i < len(x); i++ {
 		s = s + fmt.Sprintf(",%s", x[i].toString())
+	}
+	if len(s) > 1 {
+		s = "[" + s[2:] // remove "," immediately after "["
 	}
 	return s + "]"
 }
@@ -758,7 +761,7 @@ func (x *OrientedVertex) toString() string {
 	if x.left {
 		str = "LEFT"
 	}
-	return fmt.Sprintf("%s(%d,%d)", str, x.v.X, x.v.Y)
+	return fmt.Sprintf("%s(%v,%v)", str, x.v.X, x.v.Y)
 }
 
 // A cached record of useful things related to quickly finding the segments of

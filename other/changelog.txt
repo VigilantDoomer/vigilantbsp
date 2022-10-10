@@ -1,11 +1,12 @@
 Changelog for VigilantBSP
 
 v0.75
-- New feature: can now generate nodes in Zdoom non-GL extended and compressed formats, if requested
+- New feature: option to generate nodes in Zdoom non-GL extended and compressed formats
 - New feature: an option to remove non-collideable lines from blockmap, disabled by default. Takes care not to destroy self-referencing sector effects, but still needs a lot of testing from users targeting non-Doom games or advanced engines
 - Fixed bug: Guardian of Steel, map05 of Hexen, had broken polyobject when rebuilt using default partitioner 
-    This fix may increase the number of visplanes when building maps and using non-zero diagonal penalty is used (which is default for Hexen maps).
 - Sped up multi-tree just a bit 
+- The initial order of segs (before splits) will now correspond to order of linedefs even when using "cull invisible linedefs" option
+- In vanilla nodes format, when number of segs grows large, segs corresponding to subsector with greatest amount of segs will be moved to the end of seg list to prevent overflow in vanilla/unsigned ports provided this is possible
 - Added hidden option to produce unreversed BSP nodes array, which might (or might not) offer performance benefits on old (486?) processors. See "Debug and other hidden parameters", "--unreversenodes".
 - Improvement: specifying an endgoal for blockmap in deterministic mode no longer cancels multi-threading
 - Minor change: removed "(limited recognition)" notice next to Deep nodes format option as it can be read ambiguously. 

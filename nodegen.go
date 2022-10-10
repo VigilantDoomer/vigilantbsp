@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -50,14 +51,16 @@ import (
 // was moved into separate branch
 // TODO ZokumBSP (maybe Zennode too) sorts segs in case splits upset "seg
 // ordering", as some effects (which ones?) allegedly depend on the order of
-// segs in subsectors matching the numerical order of linedefs. Currently, in
-// VigilantBSP there is a definitive source of disruption, in case "cull
+// segs in subsectors matching the numerical order of linedefs. Prior to
+// VigilantBSP v0.75, there was a definitive source of disruption - when "cull
 // invisible segs" is used: when segs that could have been invisible determined
 // to be NOT so, they are inserted at the END of the seg array, write before
-// a single node is created. This might trigger that condition of wrong order.
-// If those effects ZokumBSP alludes to exist, at the very least "cull segs"
-// option should result in "unculled" segs to be inserted at their "original"
-// spots into initial segs list - where their creation was first skipped
+// a single node is created. In VigilantBSP 0.75, this disruption no longer
+// occurs in this case (again, this change leads to a different BSP generated
+// for "cull invisible segs" modes compared to previous versions, because when
+// multiple segs score the same in partition selection - which occurs frequently
+// - the earliest seg wins). It remains to be seen if sorting segs is still
+// necessary when forming a subsector
 
 const SSECTOR_NORMAL_MASK = 0x8000
 const SSECTOR_DEEP_MASK = 0x80000000
@@ -405,13 +408,11 @@ func NodesGenerator(input *NodesInput) {
 		Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
 			workData.totals.numSSectors)
 		workData.emptyNodesLumps()
-	} else if workData.tooManySegs() {
+	} else if workData.tooManySegsCantFix() {
 		Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
 			len(workData.segs))
 		workData.emptyNodesLumps()
 	}
-	// TODO for vanilla limits (when in not deep nodes mode of course) - try to
-	// move segs so that FirstSeg is <= 32767
 
 	if input.nodeType == NODETYPE_DEEP {
 		input.nodesChan <- NodesResult{
@@ -540,7 +541,10 @@ func (w *NodesWork) emptyNodesLumps() {
 	w.subsectors = nil
 }
 
-func (w *NodesWork) tooManySegs() bool {
+// tooManySegsCantFix checks if there is overflow in SSECTORS when referencing
+// segs. In some cases, it can (and then will) be fixed, so this function can
+// mutate data
+func (w *NodesWork) tooManySegsCantFix() bool {
 	// Currently only normal nodes are checked, not deep nodes or extended nodes
 	// (w.segs expected to be nil for both of those)
 	if w.segs == nil { // assume no overflow is possible for advanced node formats
@@ -550,11 +554,100 @@ func (w *NodesWork) tooManySegs() bool {
 	if l == 0 { // wtf number of subsectors should never be zero
 		return true
 	}
-	// Now, easy: FirstSeg and SegCount are both uint16. If their sum is not
-	// equal to the total number of segs, it is obvious we had uint16 overflow
-	// (truncation)
-	return len(w.segs) > (int(w.subsectors[l-1].FirstSeg) +
-		int(w.subsectors[l-1].SegCount))
+
+	UNSIGNED_MAXSEGINDEX := uint16(65535)
+	VANILLA_MAXSEGINDEX := uint16(32767)
+
+	if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
+		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX)
+		if !couldFix {
+			return true
+		}
+		Log.Printf("You almost exceeded UNSIGNED addressable seg limit in SSECTORS (that would have made it invalid for all ports) - managed to reorder segs to avoid that. Changed subsector: %d\n",
+			pivotSsector)
+		Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
+	} else if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
+		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX)
+		if !couldFix {
+			Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
+			// But it can run in some ports, so don't return true (failure)
+		} else {
+			Log.Printf("You almost exceeded vanilla addressable seg limit in SSECTORS - managed to reorder segs to avoid that. Changed subsector: %d\n",
+				pivotSsector)
+		}
+	}
+
+	return false
+}
+
+// lastSubsectorOverflows returns true, if at least one of the following
+// condition regarding last subsector is true:
+// 1. FirstSeg field is not correct because original value overflowed int16
+// type (was >= 65536). This is detected by adding FirstSeg and SegCount and
+// comparing to total seg count
+// 2. FirstSeg field value exceeds maxSegIndex
+// NOTE that while (the converted version of) this might end up in znodegen.go,
+// it won't be actually called there
+func (w *NodesWork) lastSubsectorOverflows(maxSegIndex uint16) bool {
+	l := len(w.subsectors)
+	firstSeg := int(w.subsectors[l-1].FirstSeg)
+	segCnt := int(w.subsectors[l-1].SegCount)
+	if len(w.segs) > (firstSeg + segCnt) {
+		// seg count is not valid
+		return true
+	}
+	if firstSeg > int(maxSegIndex) {
+		return true
+	}
+	return false
+}
+
+// fitSegsToTarget reorders seg array (for SEG lump) so that all subsectors
+// can have their FirstSeg value <= maxSegIndex, if possible, and updates
+// subsectors array to point to correct segs. It is assumed this value overflows
+// (must have been tested before call)
+// If this couldn't be done, return false
+// Assumes segs are not shared between different subsectors
+// Assumes sequential order of segs matches sequential order of subsectors
+// before call
+// NOTE that while (the converted version of) this might end up in znodegen.go,
+// it won't be actually called there
+func (w *NodesWork) fitSegsToTarget(maxSegIndex uint16) (bool, int) {
+	newMaxSegIndex := uint32(len(w.segs)) - w.totals.maxSegCountInSubsector
+	if newMaxSegIndex > uint32(maxSegIndex) {
+		// Nothing can be done
+		return false, 0
+	}
+
+	// not necessary the only one, btw. We'll fetch the last one
+	biggestSubsector := -1
+	for i := len(w.subsectors) - 1; i >= 0; i-- {
+		if uint32(w.subsectors[i].SegCount) == w.totals.maxSegCountInSubsector {
+			biggestSubsector = i
+		}
+	}
+	if biggestSubsector == -1 {
+		Log.Panic("Couldn't find subsector whose seg count matches computed maximum. (programmer error)\n")
+	}
+
+	// if maxSegIndex was 65535, all FirstSeg values following biggestSubsector
+	// were overflowed, so one has to recompute the value from scratch
+	newAddr := uint16(0)
+	if biggestSubsector > 0 {
+		newAddr = w.subsectors[biggestSubsector-1].FirstSeg +
+			w.subsectors[biggestSubsector-1].SegCount
+	}
+
+	pivot := w.subsectors[biggestSubsector].FirstSeg
+	pivot2 := pivot + w.subsectors[biggestSubsector].SegCount
+	// Move pivot:pivot2 subslice to the end of w.segs slice
+	w.segs = append(w.segs[:pivot], append(w.segs[pivot2:], w.segs[pivot:pivot2]...)...)
+	for i := biggestSubsector + 1; i < len(w.subsectors); i++ {
+		w.subsectors[i].FirstSeg = newAddr
+		newAddr += w.subsectors[i].SegCount
+	}
+	w.subsectors[biggestSubsector].FirstSeg = uint16(newMaxSegIndex)
+	return true, biggestSubsector
 }
 
 // createSegs iterates over linedefs to create initial segs
@@ -632,6 +725,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 
 	// Now that analysis determined some lines were skipped in error, we create
 	// segs for those lines here
+	unculled := false
 	for cull.SpewBack() {
 		line := cull.GetLine()
 		vidx1, vidx2 := lines.GetLinedefVertices(line)
@@ -650,6 +744,13 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 		// We need to add segs for this line after all.
 		addSegsPerLine(myVertices, line, lines, vidx1, vidx2, firstSdef, secondSdef,
 			&rootCs, &lastCs, sidedefs, &res, extNode)
+		unculled = true
+	}
+
+	if unculled {
+		// A note in Zennode claims that it is important for some effects (which
+		// ones?) that order of segs match the order of linedefs.
+		restoreSegOrder(res)
 	}
 
 	return res, myVertices
@@ -707,7 +808,7 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 		// Internally, angle is still computed with all the effects. But with
 		// or without the effect, angle is not stored in Zdoom nodes format
 		// because that format does not provide any field for it
-		Log.Printf("Warning: linedef %d has BAM or horizon effect specified, but it cannot be supported in Zdoom nodes format and so will be ignored.\n",
+		Log.Verbose(1, "Linedef %d has BAM or horizon effect specified, but it cannot be supported in Zdoom nodes format and so will be ignored.\n",
 			i)
 	}
 	if lcs != nil && rcs != nil {
@@ -784,6 +885,41 @@ func computeAngle(dx, dy Number) int {
 
 	return int(w)
 }
+
+// restoreSegOrder orders segs so that indices of linedef they come from are
+// in ascending order. This occurs naturally when segs are created, unless an
+// option to remove some segs was used, which causes some segs to be inserted
+// out-of-order
+// NOTE not suitable for sorting segs after splits already happened - built
+// under assumption there is at most 2 segs per linedef encountered in the
+// supplied array
+func restoreSegOrder(segs []*NodeSeg) {
+	sort.Sort(InitialSegOrderByLinedef(segs))
+	for i, x := range segs {
+		if i < len(segs)-1 {
+			x.next = segs[i+1]
+		}
+	}
+	// For safety, this should be already guaranteed! If/when GL nodes
+	// generation is implemented, such error would be grave
+	for _, x := range segs {
+		if x.partner != nil && x.next != x.partner && x.partner.next != x {
+			x.partner = nil
+			Log.Verbose(1, "restoreSegOrder: partner was not referencing a neighbor seg!\n")
+		}
+	}
+}
+
+type InitialSegOrderByLinedef []*NodeSeg
+
+func (x InitialSegOrderByLinedef) Len() int { return len(x) }
+func (x InitialSegOrderByLinedef) Less(i, j int) bool {
+	// primitive ordering - doesn't include offset, because damn offset
+	// should be always ZERO for the intended use case
+	return (x[i].Linedef < x[j].Linedef) ||
+		(x[i].Linedef == x[j].Linedef && x[i].Flip < x[j].Flip)
+}
+func (x InitialSegOrderByLinedef) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
 // FindLimits scans all SEGs in a list to find a minimal bounding box within
 // which they all fit. It does this by stepping through the segs and
@@ -1261,6 +1397,9 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 				s := ""
 				for sector := range sectorsHit {
 					s += "," + strconv.Itoa(int(sector))
+				}
+				if s != "" { // should be always true
+					s = s[1:] // remove "," at the beginning (",3,4,5" => "3,4,5")
 				}
 				Log.Verbose(1, "No left side, moving partition into left side (sectors %s)\n", s)
 			} else {

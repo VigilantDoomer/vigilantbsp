@@ -222,7 +222,7 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		//progress();           	        // Something for the user to look at.
 
 		prune := w.evalPartitionWorker_Traditional(super, part, &tot, &diff,
-			&cost, bestcost, minors)
+			&cost, bestcost, &minors)
 		if prune { // Early exit and skip past the tests below
 			continue
 		}
@@ -237,6 +237,9 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 		// Make sure at least one Seg is on each side of the partition
 		if (tot + cnt) > diff {
+			// NOTE btw, block under this may fail to execute and first seg
+			// will keep being "best", yes. Other partitioners have this quirk,
+			// too
 			cost += diff
 			if cost < bestcost || (cost == bestcost &&
 				minorIsBetter_Precious(minors, bestMinors)) {
@@ -248,13 +251,17 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 
 	}
+	// NOTE bestMinors and best might have never been updated after being set
+	// their initial values. Happens often enough! Applies to other partitioners
+	// as well. This means that every partition attempt resulted in all segs
+	// being to one side of the partition
 	return best // All finished, return best Seg
 }
 
 // If returns true, the partition &part must be skipped, because it produced
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
-	part *NodeSeg, tot, diff, cost *int, bestcost int, minors MinorCosts) bool {
+	part *NodeSeg, tot, diff, cost *int, bestcost int, minors *MinorCosts) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -296,7 +303,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
-						if w.diagonalPenalty != 0 && part.pdx != 0 && part.pdy != 0 {
+						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 						} else {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
@@ -325,8 +332,13 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 				// after this fix. The inspiration for writing it was some code
 				// in AJ-BSP where they rejected partition passing through
 				// vertex
-				if w.diagonalPenalty != 0 &&
-					w.lines.IsTaggedPrecious(check.Linedef) {
+				// FIXME I suspect this logic produces false positive when
+				// partition line is coincident with line that comes from the
+				// same polyobject-hosting sector as check.Linedef. If sector
+				// was convex to begin with, it is not broken into non-convex
+				// pieces by this. Needs to replace with more elaborate
+				// condition (update other partitioners also)
+				if w.lines.IsTaggedPrecious(check.Linedef) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -466,7 +478,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		//progress();           	        // Something for the user to look at.
 		w.blocksHit = w.blocksHit[:0]
 		prune := w.evalPartitionWorker_VisplaneKillough(super, part, &tot, &diff,
-			&cost, bestcost, &slen, minors)
+			&cost, bestcost, &slen, &minors)
 		if prune { // Early exit and skip past the tests below
 			continue
 		}
@@ -570,7 +582,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number,
-	minors MinorCosts) bool {
+	minors *MinorCosts) bool {
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -618,7 +630,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
-						if w.diagonalPenalty != 0 && part.pdx != 0 && part.pdy != 0 {
+						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 						} else {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
@@ -646,8 +658,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 				// sector really ought to be one subsector for safety sake.
 				// Default partitioner (seg-only guided) used to create multiple
 				// subsectors before this workaround
-				if w.diagonalPenalty != 0 &&
-					w.lines.IsTaggedPrecious(check.Linedef) {
+				if w.lines.IsTaggedPrecious(check.Linedef) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -719,6 +730,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		PreciousSplit: int(INITIAL_BIG_COST),
 		SegsSplit:     int(INITIAL_BIG_COST),
 		SectorsSplit:  int(INITIAL_BIG_COST),
+		Unmerged:      int(INITIAL_BIG_COST),
 	}
 	var parts []SegMinorBundle
 	if w.multipart {
@@ -1052,7 +1064,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
-						if w.diagonalPenalty != 0 && part.pdx != 0 && part.pdy != 0 {
+						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 						} else {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY
@@ -1081,8 +1093,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 				// sector really ought to be one subsector for safety sake.
 				// Default partitioner (seg-only guided) used to create multiple
 				// subsectors before this workaround
-				if w.diagonalPenalty != 0 &&
-					w.lines.IsTaggedPrecious(check.Linedef) {
+				if w.lines.IsTaggedPrecious(check.Linedef) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -1307,7 +1318,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 	}
 
 	if contextStart.equalTo(contextEnd) {
-		Log.Verbose(2, "Partition line seems to have zero length inside the node box (%d,%d)-(%d,%d) in (%d,%d,%d,%d) yielded (%d,%d)-(%d,%d).\n",
+		Log.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
 			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 			contextStart.v.X, contextStart.v.Y, contextEnd.v.X, contextEnd.v.Y)
@@ -1343,7 +1354,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		// Really, how can this be? We had this seg within our bounds, but my
 		// deconstruction didn't see it there
 		Log.Verbose(2, nonVoidStruc.original.toString())
-		Log.Verbose(2, "More dropouts! %d %d %s [%s-%s]\n", hitStart, hitStop,
+		Log.Verbose(2, "More dropouts! %v %v %s [%s-%s]\n", hitStart, hitStop,
 			CollinearVertexPairCByCoord(nonVoid).toString(), contextStart.toString(),
 			contextEnd.toString())
 		return GetFullPartitionLength(part, bbox)

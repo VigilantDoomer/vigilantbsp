@@ -29,12 +29,14 @@ import (
 // The pragmas aren't part of Go languages and are not parsed by Go compiler or
 // the go build command. Instead, go generate will be used to call a special
 // program I wrote that will parse source code into ASTs, apply modifications to
-// it, and then produce a new file
-// TODO the generator is NOT written yet - it is in the PLANS. The idea is to
-// avoid having separate SOURCE code for vanilla/Deep nodes and Zdoom extended
-// nodes, but not make vanilla node generation any slower and not worsen its
-// quality as well YET one has to acknowledge that this necessiates different
-// running algorithms for vanilla case and Zdoom extended nodes case.
+// it, and then produce a new file (see gen/codegen.go in VigilantBSP source
+// tree)
+// The idea is to avoid having separate SOURCE code for vanilla/Deep nodes and
+// Zdoom extended nodes (where all updates and bugfixes would have to be
+// duplicated by human between two), but not make vanilla node generation any
+// slower and not worsen its quality as well YET, because of the latter, one has
+// to acknowledge that this necessiates different running algorithms for vanilla
+// case and Zdoom extended nodes case.
 // So, the SHARED code will be written for vanilla case, while Zdoom extended
 // case will be generated from it + incorporate some minor stuff that is unique
 // to it

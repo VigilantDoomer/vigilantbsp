@@ -832,9 +832,9 @@ func (s *OffsetSieve) CountHoles(LastXOffset, LastYOffset int16) int {
 // BlockmapHoleChaser iterates through all untried offsets in sieve till
 // (LastXOffset, LastYOffset) non-inclusive, computes blockmap in sequential
 // mode and returns it
-// TODO multi-threaded mode, but only if number of holes is above certain
-// threshold - might not be needed now that I fixed bug in sieve's Mark method?
-// It seems that the number of holes is always lowish
+// NOTE this is implemented as a single thread and would not necessary benefit
+// from multi-threading. In fact, multi-threading could be detrimental if number
+// of holes is very low, which is what indeed happens on maps I ran it on
 func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 	LastXOffset, LastYOffset int16, input BlockmapInput, bailout uint16,
 	cntHoles int) BlockmapBeeOutput {

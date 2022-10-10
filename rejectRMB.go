@@ -607,6 +607,7 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 // the chosen method are eliminated via LINE
 // NOTE functionality DISABLED for v0.74 release because I am having doubts
 // about whether LINE should have this quirk for self-referencing sectors.
+// NOTE remains DISABLED for v0.75 release as well
 func (r *RejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
 	// Temporarily ignoring LINE, has effect of not implementing it
 	return false
