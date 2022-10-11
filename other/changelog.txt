@@ -1,7 +1,8 @@
 Changelog for VigilantBSP
 
-v0.75
+v0.75a
 - New feature: option to generate nodes in Zdoom non-GL extended and compressed formats
+    Known bug: a section near the end of map02 of watrsp.wad (Water Spirit by Manbou) is built incorrectly IF specific combination of options is used (advanced visplane reduction + output is extended or compressed nodes format). Specifically, invisible stairs are erroneously created towards the end of map02, posing an impassable blockade. I'm currently investigating the issue.
 - New feature: an option to remove non-collideable lines from blockmap, disabled by default. Takes care not to destroy self-referencing sector effects, but still needs a lot of testing from users targeting non-Doom games or advanced engines
 - Fixed bug: Guardian of Steel, map05 of Hexen, had broken polyobject when rebuilt using default partitioner 
 - Sped up multi-tree just a bit 

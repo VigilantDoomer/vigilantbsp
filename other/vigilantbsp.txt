@@ -61,7 +61,7 @@ Partial support for RMB effects is already implemented since
 version 0.74a. Eventually, most RMB effects are going to be
 supported.
 
-Since 0.75, VigilantBSP can output non-GL nodes in Zdoom 
+Since 0.75a, VigilantBSP can output non-GL nodes in Zdoom 
 extended and compressed nodes format besides vanilla and
 DeeP format. 
 
@@ -247,7 +247,7 @@ opt-in or opt-out) to increase the chance that blockmaps will work
 under either vanilla or limit-removing port, when blockmap is closer
 to limit. 
 
-From v0.75 onwards, in vanilla nodes format, VigilantBSP can move 
+From v0.75a onwards, in vanilla nodes format, VigilantBSP can move 
 segs corresponding to the largest subsector towards the end of SEGS
 lump to prevent a specific type of overflow in the format (or
 vanilla engine): the index of FIRST seg belonging to subsector 
@@ -1203,11 +1203,11 @@ this if it uses non-GL nodes at all. Some ports will treat certain
 fields in vanilla format as unsigned integer values instead of signed,
 this is considered by VigilantBSP to constitute the same format.
 
-From v0.75 onwards, VigilantBSP prints warning if certain limits
+From v0.75a onwards, VigilantBSP prints warning if certain limits
 for vanilla target (where integer values are treated as signed) are
 exceeded but map can still work in advanced source ports. 
 
-Also, from v0.75 onwards, VigilantBSP will attempt to segs of the 
+Also, from v0.75a onwards, VigilantBSP will attempt to segs of the 
 largest subsector to the end of the SEGS lump, if overflow can 
 be avoided this way. Subsector in this format is represented by 
 two 16-bit integer values (signed in vanilla, unsigned in some

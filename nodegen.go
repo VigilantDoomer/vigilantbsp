@@ -898,6 +898,8 @@ func restoreSegOrder(segs []*NodeSeg) {
 	for i, x := range segs {
 		if i < len(segs)-1 {
 			x.next = segs[i+1]
+		} else {
+			x.next = nil
 		}
 	}
 	// For safety, this should be already guaranteed! If/when GL nodes
