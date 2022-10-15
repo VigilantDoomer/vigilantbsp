@@ -1,5 +1,10 @@
 Changelog for VigilantBSP
 
+v0.78a (working name)
+- Fixed errors in Zdoom extended/compressed nodebuilding, including the ones observed in map02 of watrsp.wad
+- Increased precision of vanilla/deep nodes as well to avoid bugs in areas with a lot of detail
+- Nodebuilder no longer adds vertices that are duplicate of existing ones (although these occurences were seldom before), which may lead to smaller VERTEXES lump 
+
 v0.75a
 - New feature: option to generate nodes in Zdoom non-GL extended and compressed formats
     Known bug: a section near the end of map02 of watrsp.wad (Water Spirit by Manbou) is built incorrectly IF specific combination of options is used (advanced visplane reduction + output is extended or compressed nodes format). Specifically, invisible stairs are erroneously created towards the end of map02, posing an impassable blockade. I'm currently investigating the issue.

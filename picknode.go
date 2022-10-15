@@ -54,7 +54,8 @@ const ONESIDED_MULTIPLY = 20
 // count on both sides
 const SEG_FAST_THRESHHOLD = 200
 
-// TODO port "passing through a vertex of precious linedef" check from AJ-BSP
+// TODO port "passing through a vertex of precious linedef BUT I am not alongside
+// another linedef from the same sector as precious one" check from ZDBSP
 
 // secondary metric to balance costs
 type MinorCosts struct {
@@ -284,6 +285,9 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, minors) {
+					return true
+				}
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
 				// Distance from start of intersection
@@ -614,6 +618,9 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 		mask := uint8(2)
 		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, minors) {
+					return true
+				}
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
 				// Distance from start of intersection
@@ -724,7 +731,9 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 // are currently not exposed to user, though.
 func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeSeg {
-	best := ts                        // make sure always got something to return
+	best := ts // make sure always got something to return
+	var bestFallback *NodeSeg
+	executed := false
 	bestcost := int(INITIAL_BIG_COST) //
 	bestMinors := MinorCosts{
 		PreciousSplit: int(INITIAL_BIG_COST),
@@ -796,6 +805,10 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			&cost, bestcost, &slen, &hasLeft, &minors)
 		if prune { // Early exit and skip past the tests below
 			continue
+		}
+
+		if bestFallback == nil {
+			bestFallback = part
 		}
 
 		// Take absolute value. diff is being used to obtain the
@@ -974,6 +987,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		bestcost = cost
 		bestMinors = minors
 		best = part // Remember which Seg
+		executed = true
 	}
 	w.incidental = w.incidental[:0]
 	if len(parts) > 1 {
@@ -1007,6 +1021,12 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 				Log.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
 			}
 		}
+	}
+	if !executed && bestFallback != nil {
+		// if can only choose a partition that has everything to one side of it,
+		// choose one that was not turned down by eval (by PassingTooClose,
+		// for example)
+		best = bestFallback
 	}
 	return best // All finished, return best Seg
 }
@@ -1048,6 +1068,9 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, minors) {
+					return true
+				}
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
 				// Distance from start of intersection
@@ -1081,8 +1104,10 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 					(*tot)++
 					minors.SegsSplit++
 					mask = uint8(4)
-				} else if checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
-					leftside = true
+				} else {
+					if checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
+						leftside = true
+					}
 				}
 			} else {
 				// TODO review, possibly find another way to solve this
@@ -1534,6 +1559,9 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		if DiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, nil) {
+					return true
+				}
 				// Line is split; a,b nonzero, opposite sign
 				l := check.len
 				// Distance from start of intersection
@@ -1598,6 +1626,14 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 	}
 
 	// no "bad seg" was found
+	return false
+}
+
+// PassingTooClose is a stub replaced by a real penalty-applying function
+// for extended nodes. If it returns true, partition should not be chosen.
+// It may modify cost and minors as well.
+func (w *NodesWork) PassingTooClose(part, check *NodeSeg, cost *int,
+	minors *MinorCosts) bool {
 	return false
 }
 

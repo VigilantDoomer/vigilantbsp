@@ -54,7 +54,7 @@ import (
 // segs in subsectors matching the numerical order of linedefs. Prior to
 // VigilantBSP v0.75, there was a definitive source of disruption - when "cull
 // invisible segs" is used: when segs that could have been invisible determined
-// to be NOT so, they are inserted at the END of the seg array, write before
+// to be NOT so, they are inserted at the END of the seg array, right before
 // a single node is created. In VigilantBSP 0.75, this disruption no longer
 // occurs in this case (again, this change leads to a different BSP generated
 // for "cull invisible segs" modes compared to previous versions, because when
@@ -158,17 +158,24 @@ type NodesWork struct {
 	multipart       bool // whether multiple partition with same primary costs are considered (for depth evaluation)
 	depthArtifacts  bool
 	nodeType        int
+	vertexCache     map[SimpleVertex]int // for nodes without extra precision
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
+	vertexMap         *VertexMap
 }
 
 type NodeVertex struct {
 	X   Number
 	Y   Number
 	idx uint32
+}
+
+type SimpleVertex struct {
+	X int
+	Y int
 }
 
 type NodeBounds struct {
@@ -225,6 +232,30 @@ const ( // BAMAction "enum"
 type BAMEffect struct {
 	Action int   // BAMAction "enum"
 	Value  int16 // value related to action
+}
+
+const FRACBITS = 16
+
+const VMAP_BLOCK_SHIFT = 8 + FRACBITS
+
+const VMAP_BLOCK_SIZE = 1 << VMAP_BLOCK_SHIFT
+
+// VertexMap is a ZDBSP thingy. Allows to lookup close-enough vertices among
+// existing ones to the one created as the result of intersection. I am not sure
+// as to what the exact consequences of choosing a very slightly different
+// vertex instead of exact match are. More investigation needed
+type VertexMap struct {
+	Grid       [][]*VMapVertex
+	BlocksWide int
+	BlocksTall int
+	MinX, MinY float64
+	MaxX, MaxY float64
+}
+
+type VMapVertex struct {
+	Id int
+	X  float64
+	Y  float64
 }
 
 const (
@@ -343,6 +374,12 @@ func NodesGenerator(input *NodesInput) {
 		workData.zdoomVertexHeader = &ZdoomNode_VertexHeader{
 			ReusedOriginalVertices: uint32(input.lines.GetVerticesCount()),
 		}
+		workData.vertexMap = CreateVertexMap(rootBox.Xmin, rootBox.Ymin,
+			rootBox.Xmax, rootBox.Ymax)
+		PopulateVertexMap(workData.vertexMap, allSegs)
+	} else {
+		workData.vertexCache = make(map[SimpleVertex]int)
+		PopulateVertexCache(workData.vertexCache, allSegs)
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
@@ -461,6 +498,10 @@ func (n Number) Abs() Number {
 }
 
 func (n Number) Ceil() int {
+	return int(n)
+}
+
+func (n Number) Floor() int {
 	return int(n)
 }
 
@@ -939,26 +980,26 @@ func FindLimits(ts *NodeSeg) *NodeBounds {
 		tv := ts.EndVertex
 
 		if fv.X < Number(r.Xmin) {
-			r.Xmin = int(fv.X)
+			r.Xmin = fv.X.Floor()
 		}
 		if fv.X > Number(r.Xmax) {
 			r.Xmax = fv.X.Ceil()
 		}
 		if fv.Y < Number(r.Ymin) {
-			r.Ymin = int(fv.Y)
+			r.Ymin = fv.Y.Floor()
 		}
 		if fv.Y > Number(r.Ymax) {
 			r.Ymax = fv.Y.Ceil()
 		}
 
 		if tv.X < Number(r.Xmin) {
-			r.Xmin = int(tv.X)
+			r.Xmin = tv.X.Floor()
 		}
 		if tv.X > Number(r.Xmax) {
 			r.Xmax = tv.X.Ceil()
 		}
 		if tv.Y < Number(r.Ymin) {
-			r.Ymin = int(tv.Y)
+			r.Ymin = tv.Y.Floor()
 		}
 		if tv.Y > Number(r.Ymax) {
 			r.Ymax = tv.Y.Ceil()
@@ -1075,10 +1116,18 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 		if dx2 == 0 && dy2 == 0 {
 			a = 0
 		} else {
+			// NOTE this margin may lead to errors on complex, very detailed
+			// levels (or areas).
+			// Already had to edit the threshold so that I could build
+			// Water Spirit map02 close to correct (but not perfect) in vanilla
+			// nodes format and visplane-reducing partitioners
+			// And for extended nodes, I had to completely replace the check
+			// with more expensive but accurate one from ZDBSP
+			// -- VigilantDoomer
 			l := WideNumber(dx2)*WideNumber(dx2) + WideNumber(dy2)*WideNumber(dy2)
-			if l < WideNumber(4) {
+			if l < WideNumber(2) { // Killough used 4 not 2
 				// If either ends of the split
-				// are smaller than 2 pixs then
+				// are smaller than 1 (was 2) pixs then
 				// assume this starts on part line
 				a = 0
 			}
@@ -1089,7 +1138,7 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 			b = 0
 		} else {
 			l := WideNumber(dx3)*WideNumber(dx3) + WideNumber(dy3)*WideNumber(dy3)
-			if l < WideNumber(4) { // same as start of line
+			if l < WideNumber(2) { // same as start of line
 				b = 0
 			}
 		}
@@ -1267,7 +1316,12 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 // Adds a new vertex at specified position (or might found an existing one and
 // return it).
 func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
-	idx := len(w.vertices)
+	rec := SimpleVertex{int(x), int(y)}
+	idx, exists := w.vertexCache[rec]
+	if exists { // happens rather rarely, and not at all on some maps
+		return &(w.vertices[idx])
+	}
+	idx = len(w.vertices)
 	if w.lines.AddVertex(int(x), int(y)) != idx {
 		panic("Inconsistent state in NodesWork.AddVertex")
 	}
@@ -1276,7 +1330,27 @@ func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
 		Y:   y,
 		idx: uint32(idx),
 	})
+	w.vertexCache[rec] = idx
 	return &(w.vertices[idx])
+}
+
+func (w *NodesWork) SetNodeCoords(part *NodeSeg, bbox *NodeBounds,
+	c *IntersectionContext) {
+	// In node format without extra precision of segs, part may no longer be
+	// alongside the original linedef, so picking linedef coords instead of
+	// seg coords (like some nodebuilders do who also do GL nodes output) is not
+	// a good idea.
+	w.nodeX = int(part.StartVertex.X)
+	w.nodeY = int(part.StartVertex.Y)
+	w.nodeDx = part.EndVertex.X.Ceil() - w.nodeX
+	w.nodeDy = part.EndVertex.Y.Ceil() - w.nodeY
+	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
+		w.nodeDy >= -32768 {
+		return
+	}
+	Log.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from segment of linedef %d) can not be represented correctly. You will likely experience errors in every port.\n",
+		w.nodeDx, w.nodeDy, part.Linedef)
+	// TODO scaling down the vector could help?
 }
 
 // Split a list of segs (ts) into two using the method described at bottom of
@@ -1294,12 +1368,6 @@ func (w *NodesWork) DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg, bbox *No
 		panic("Couldn't pick nodeline!")
 	}
 
-	w.nodeX = int(best.StartVertex.X)
-	w.nodeY = int(best.StartVertex.Y)
-	w.nodeDx = best.EndVertex.X.Ceil() - w.nodeX
-	w.nodeDy = best.EndVertex.Y.Ceil() - w.nodeY
-
-	// Partition line coords
 	c := &IntersectionContext{
 		psx: best.StartVertex.X,
 		psy: best.StartVertex.Y,
@@ -1308,6 +1376,10 @@ func (w *NodesWork) DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg, bbox *No
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
+
+	// Node line coords
+	w.SetNodeCoords(best, bbox, c)
+
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
 }
 
@@ -1722,8 +1794,20 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 		res.RChild = 0
 	}
 
+	//CheckNodeBounds(bbox, leftBox, rightBox)
+
 	return res
 }
+
+/*func CheckNodeBounds(box, leftBox, rightBox *NodeBounds) {
+	good := box.Xmax >= leftBox.Xmax && box.Xmax >= rightBox.Xmax &&
+		box.Xmin <= leftBox.Xmin && box.Xmin <= rightBox.Xmin &&
+		box.Ymax >= leftBox.Ymax && box.Ymax >= rightBox.Ymax &&
+		box.Ymin <= leftBox.Ymin && box.Ymin <= rightBox.Ymin
+	if !good {
+		Log.Printf("Bad node (box doesn't encompass child boxes) found.\n")
+	}
+}*/
 
 func HeightOfNodes(node *NodeInProcess) int {
 	lHeight := 1
@@ -2038,6 +2122,17 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 		newW.vertices[i] = w.vertices[i]
 	}
 
+	if w.vertexCache != nil {
+		newW.vertexCache = make(map[SimpleVertex]int)
+		for k, v := range w.vertexCache {
+			newW.vertexCache[k] = v
+		}
+	}
+
+	if w.vertexMap != nil {
+		newW.vertexMap = w.vertexMap.Clone()
+	}
+
 	newW.segAliasObj = new(SegAliasHolder)
 	newW.segAliasObj.Init()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
@@ -2088,6 +2183,133 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	}
 
 	return newW
+}
+
+func CreateVertexMap(minx, miny, maxx, maxy int) *VertexMap {
+	vm := &VertexMap{
+		MinX: float64(minx),
+		MinY: float64(miny),
+		BlocksWide: int((float64(maxx-minx+1)*
+			FIXED16DOT16_MULTIPLIER + float64(VMAP_BLOCK_SIZE-1)) /
+			float64(VMAP_BLOCK_SIZE)),
+		BlocksTall: int((float64(maxy-miny+1)*
+			FIXED16DOT16_MULTIPLIER + float64(VMAP_BLOCK_SIZE-1)) /
+			float64(VMAP_BLOCK_SIZE)),
+	}
+	vm.MaxX = vm.MinX + float64(vm.BlocksWide*VMAP_BLOCK_SIZE-1)/FIXED16DOT16_MULTIPLIER
+	vm.MaxY = vm.MinY + float64(vm.BlocksTall*VMAP_BLOCK_SIZE-1)/FIXED16DOT16_MULTIPLIER
+	vm.Grid = make([][]*VMapVertex, vm.BlocksWide*vm.BlocksTall)
+	return vm
+}
+
+func (vm *VertexMap) Clone() *VertexMap {
+	if vm == nil {
+		return nil
+	}
+	newVm := &VertexMap{}
+	*newVm = *vm
+	newVm.Grid = make([][]*VMapVertex, 0, len(vm.Grid))
+	for _, it := range vm.Grid {
+		cpit := make([]*VMapVertex, 0, len(it))
+		for _, it2 := range it {
+			nv := &VMapVertex{}
+			*nv = *it2
+			cpit = append(cpit, nv)
+		}
+		newVm.Grid = append(newVm.Grid, cpit)
+	}
+	return newVm
+}
+
+func (vm *VertexMap) GetBlock(x, y float64) int {
+	// assert x >= MinX
+	// assert y >= MinY
+	// assert x <= MaxX
+	// assert y <= MaxY
+	return int(uint((x-vm.MinX)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT +
+		(uint((y-vm.MinY)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT)*
+			uint(vm.BlocksWide))
+}
+
+func (vm *VertexMap) SelectVertexExact(x, y float64, id int) *VMapVertex {
+	block := &(vm.Grid[vm.GetBlock(x, y)])
+	for _, it := range *block {
+		if it.X == x && it.Y == y {
+			return it
+		}
+	}
+	return vm.insertVertex(x, y, id)
+}
+
+func (vm *VertexMap) SelectVertexClose(x, y float64) *VMapVertex {
+	block := &(vm.Grid[vm.GetBlock(x, y)])
+	for _, it := range *block {
+		if math.Abs(it.X-x) < VERTEX_EPSILON &&
+			math.Abs(it.Y-y) < VERTEX_EPSILON {
+			return it
+		}
+	}
+	return vm.insertVertex(x, y, -1)
+}
+
+func (vm *VertexMap) insertVertex(x, y float64, id int) *VMapVertex {
+	// If a vertex is near a block boundary, then it will be inserted on
+	// both sides of the boundary so that SelectVertexClose can find
+	// it by checking in only one block.
+	ret := &VMapVertex{
+		X:  x,
+		Y:  y,
+		Id: id,
+	}
+	minx := vm.MinX
+	if minx < (x - VERTEX_EPSILON) {
+		minx = x - VERTEX_EPSILON
+	}
+	maxx := vm.MaxX
+	if maxx > (x + VERTEX_EPSILON) {
+		maxx = x + VERTEX_EPSILON
+	}
+	miny := vm.MinY
+	if miny < (y - VERTEX_EPSILON) {
+		miny = y - VERTEX_EPSILON
+	}
+	maxy := vm.MaxY
+	if maxy > (y + VERTEX_EPSILON) {
+		maxy = y + VERTEX_EPSILON
+	}
+	blk := [4]int{vm.GetBlock(minx, miny),
+		vm.GetBlock(maxx, miny),
+		vm.GetBlock(minx, maxy),
+		vm.GetBlock(maxx, maxy)}
+	blcount := [4]int{
+		len(vm.Grid[blk[0]]),
+		len(vm.Grid[blk[1]]),
+		len(vm.Grid[blk[2]]),
+		len(vm.Grid[blk[3]])}
+	for i := 0; i < 4; i++ {
+		if len(vm.Grid[blk[i]]) == blcount[i] {
+			vm.Grid[blk[i]] = append(vm.Grid[blk[i]], ret)
+		}
+	}
+	return ret
+}
+
+func PopulateVertexMap(vm *VertexMap, allSegs []*NodeSeg) {
+	for _, seg := range allSegs {
+		vm.SelectVertexExact(float64(seg.psx), float64(seg.psy),
+			int(seg.StartVertex.idx))
+		vm.SelectVertexExact(float64(seg.pex), float64(seg.pey),
+			int(seg.EndVertex.idx))
+	}
+}
+
+func PopulateVertexCache(cache map[SimpleVertex]int, allSegs []*NodeSeg) {
+	for _, it := range allSegs {
+		rec := SimpleVertex{int(it.StartVertex.X), int(it.StartVertex.Y)}
+		cache[rec] = int(it.StartVertex.idx)
+		rec = SimpleVertex{int(it.EndVertex.X), int(it.EndVertex.Y)}
+		cache[rec] = int(it.EndVertex.idx)
+	}
 }
 
 /*---------------------------------------------------------------------------*

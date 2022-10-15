@@ -90,6 +90,8 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.RChild = 0
 	}
 
+	// CheckNodeBounds(bbox, leftBox, rightBox)
+
 	return res
 }
 
@@ -104,12 +106,6 @@ func (w *NodesWork) DivideSegsForSingleSector(ts *NodeSeg, rs **NodeSeg,
 		panic("Couldn't pick nodeline!")
 	}
 
-	w.nodeX = int(best.StartVertex.X)
-	w.nodeY = int(best.StartVertex.Y)
-	w.nodeDx = int(best.EndVertex.X) - w.nodeX
-	w.nodeDy = int(best.EndVertex.Y) - w.nodeY
-
-	// Partition line coords
 	c := &IntersectionContext{
 		psx: best.StartVertex.X,
 		psy: best.StartVertex.Y,
@@ -118,6 +114,10 @@ func (w *NodesWork) DivideSegsForSingleSector(ts *NodeSeg, rs **NodeSeg,
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
+
+	// Node line coords
+	w.SetNodeCoords(best, bbox, c)
+
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
 }
 

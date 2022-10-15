@@ -68,11 +68,13 @@ type ZExt_NodesWork struct {
 	multipart       bool
 	depthArtifacts  bool
 	nodeType        int
+	vertexCache     map[SimpleVertex]int
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
+	vertexMap         *VertexMap
 }
 
 type ZExt_NodeVertex struct {
@@ -210,6 +212,12 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.zdoomVertexHeader = &ZdoomNode_VertexHeader{
 			ReusedOriginalVertices: uint32(input.lines.GetVerticesCount()),
 		}
+		workData.vertexMap = CreateVertexMap(rootBox.Xmin, rootBox.Ymin,
+			rootBox.Xmax, rootBox.Ymax)
+		ZExt_PopulateVertexMap(workData.vertexMap, allSegs)
+	} else {
+		workData.vertexCache = make(map[SimpleVertex]int)
+		ZExt_PopulateVertexCache(workData.vertexCache, allSegs)
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
@@ -657,26 +665,26 @@ func ZExt_FindLimits(ts *ZExt_NodeSeg) *NodeBounds {
 		tv := ts.EndVertex
 
 		if fv.X < ZNumber(r.Xmin) {
-			r.Xmin = int(fv.X)
+			r.Xmin = fv.X.Floor()
 		}
 		if fv.X > ZNumber(r.Xmax) {
 			r.Xmax = fv.X.Ceil()
 		}
 		if fv.Y < ZNumber(r.Ymin) {
-			r.Ymin = int(fv.Y)
+			r.Ymin = fv.Y.Floor()
 		}
 		if fv.Y > ZNumber(r.Ymax) {
 			r.Ymax = fv.Y.Ceil()
 		}
 
 		if tv.X < ZNumber(r.Xmin) {
-			r.Xmin = int(tv.X)
+			r.Xmin = tv.X.Floor()
 		}
 		if tv.X > ZNumber(r.Xmax) {
 			r.Xmax = tv.X.Ceil()
 		}
 		if tv.Y < ZNumber(r.Ymin) {
-			r.Ymin = int(tv.Y)
+			r.Ymin = tv.Y.Floor()
 		}
 		if tv.Y > ZNumber(r.Ymax) {
 			r.Ymax = tv.Y.Ceil()
@@ -715,95 +723,6 @@ func ZExt_splitDist(lines AbstractLines, seg *ZExt_NodeSeg) int {
 	}
 	t := math.Sqrt((dx * dx) + (dy * dy))
 	return int(t)
-}
-
-func (c *ZExt_IntersectionContext) computeIntersection() (ZNumber, ZNumber) {
-	dx := c.pex - c.psx
-	dy := c.pey - c.psy
-	dx2 := c.lex - c.lsx
-	dy2 := c.ley - c.lsy
-
-	if dx == 0 && dy == 0 {
-
-		Log.Printf("Trouble in computeIntersection dx,dy\n")
-	}
-	if dx2 == 0 && dy2 == 0 {
-
-		Log.Printf("Trouble in computeIntersection dx2,dy2\n")
-	}
-
-	l2 := dx2.Trunc(math.Sqrt(float64(dx2)*float64(dx2) + float64(dy2)*float64(dy2)))
-
-	a := float64(dx)
-	b := float64(dy)
-	a2 := float64(dx2) / l2
-	b2 := float64(dy2) / l2
-	d := b*a2 - a*b2
-	if d != 0 {
-		w := ((a * float64(c.lsy-c.psy)) + (b * float64(c.psx-c.lsx))) / d
-
-		a = float64(c.lsx) + (a2 * w)
-		b = float64(c.lsy) + (b2 * w)
-		return ZRoundToPrecision(a), ZRoundToPrecision(b)
-	} else {
-
-		return c.lsx, c.lsy
-	}
-}
-
-func (c *ZExt_IntersectionContext) doLinesIntersect() uint8 {
-	dx2 := c.psx - c.lsx
-	dy2 := c.psy - c.lsy
-	dx3 := c.psx - c.lex
-	dy3 := c.psy - c.ley
-
-	a := c.pdy*dx2 - c.pdx*dy2
-	b := c.pdy*dx3 - c.pdx*dy3
-	if ZDiffSign(a, b) && (a != 0) && (b != 0) {
-
-		x, y := c.computeIntersection()
-		dx2 = c.lsx - x
-		dy2 = c.lsy - y
-		if dx2 == 0 && dy2 == 0 {
-			a = 0
-		} else {
-			l := ZWideNumber(dx2)*ZWideNumber(dx2) + ZWideNumber(dy2)*ZWideNumber(dy2)
-			if l < ZWideNumber(4) {
-
-				a = 0
-			}
-		}
-		dx3 = c.lex - x
-		dy3 = c.ley - y
-		if dx3 == 0 && dy3 == 0 {
-			b = 0
-		} else {
-			l := ZWideNumber(dx3)*ZWideNumber(dx3) + ZWideNumber(dy3)*ZWideNumber(dy3)
-			if l < ZWideNumber(4) {
-				b = 0
-			}
-		}
-	}
-
-	var val uint8
-
-	if a == 0 {
-		val = val | 16
-	} else if a < 0 {
-		val = val | 32
-	} else {
-		val = val | 64
-	}
-
-	if b == 0 {
-		val = val | 1
-	} else if b < 0 {
-		val = val | 2
-	} else {
-		val = val | 4
-	}
-
-	return val
 }
 
 func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
@@ -878,11 +797,6 @@ func (w *ZExt_NodesWork) DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZE
 		panic("Couldn't pick nodeline!")
 	}
 
-	w.nodeX = int(best.StartVertex.X)
-	w.nodeY = int(best.StartVertex.Y)
-	w.nodeDx = best.EndVertex.X.Ceil() - w.nodeX
-	w.nodeDy = best.EndVertex.Y.Ceil() - w.nodeY
-
 	c := &ZExt_IntersectionContext{
 		psx: best.StartVertex.X,
 		psy: best.StartVertex.Y,
@@ -891,6 +805,9 @@ func (w *ZExt_NodesWork) DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZE
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
+
+	w.SetNodeCoords(best, bbox, c)
+
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
 }
 
@@ -1435,6 +1352,17 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 		newW.vertices[i] = w.vertices[i]
 	}
 
+	if w.vertexCache != nil {
+		newW.vertexCache = make(map[SimpleVertex]int)
+		for k, v := range w.vertexCache {
+			newW.vertexCache[k] = v
+		}
+	}
+
+	if w.vertexMap != nil {
+		newW.vertexMap = w.vertexMap.Clone()
+	}
+
 	newW.segAliasObj = new(SegAliasHolder)
 	newW.segAliasObj.Init()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
@@ -1479,6 +1407,24 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	}
 
 	return newW
+}
+
+func ZExt_PopulateVertexMap(vm *VertexMap, allSegs []*ZExt_NodeSeg) {
+	for _, seg := range allSegs {
+		vm.SelectVertexExact(float64(seg.psx), float64(seg.psy),
+			int(seg.StartVertex.idx))
+		vm.SelectVertexExact(float64(seg.pex), float64(seg.pey),
+			int(seg.EndVertex.idx))
+	}
+}
+
+func ZExt_PopulateVertexCache(cache map[SimpleVertex]int, allSegs []*ZExt_NodeSeg) {
+	for _, it := range allSegs {
+		rec := SimpleVertex{int(it.StartVertex.X), int(it.StartVertex.Y)}
+		cache[rec] = int(it.StartVertex.idx)
+		rec = SimpleVertex{int(it.EndVertex.X), int(it.EndVertex.Y)}
+		cache[rec] = int(it.EndVertex.idx)
+	}
 }
 
 type ZExt_SegMinorBundle struct {
@@ -1576,6 +1522,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock,
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		if ZDiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, minors) {
+					return true
+				}
 
 				l := check.len
 
@@ -1799,6 +1748,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 		mask := uint8(2)
 		if ZDiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, minors) {
+					return true
+				}
 
 				l := check.len
 
@@ -1873,6 +1825,8 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 	super *ZExt_Superblock) *ZExt_NodeSeg {
 	best := ts
+	var bestFallback *ZExt_NodeSeg
+	executed := false
 	bestcost := int(INITIAL_BIG_COST)
 	bestMinors := MinorCosts{
 		PreciousSplit: int(INITIAL_BIG_COST),
@@ -1935,6 +1889,10 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 			&cost, bestcost, &slen, &hasLeft, &minors)
 		if prune {
 			continue
+		}
+
+		if bestFallback == nil {
+			bestFallback = part
 		}
 
 		diff -= tot
@@ -2056,6 +2014,7 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		bestcost = cost
 		bestMinors = minors
 		best = part
+		executed = true
 	}
 	w.incidental = w.incidental[:0]
 	if len(parts) > 1 {
@@ -2086,6 +2045,10 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 				Log.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
 			}
 		}
+	}
+	if !executed && bestFallback != nil {
+
+		best = bestFallback
 	}
 	return best
 }
@@ -2120,6 +2083,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		if ZDiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, minors) {
+					return true
+				}
 
 				l := check.len
 
@@ -2144,8 +2110,10 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 					(*tot)++
 					minors.SegsSplit++
 					mask = uint8(4)
-				} else if ZExt_checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
-					leftside = true
+				} else {
+					if ZExt_checkPorn1(l, d, check.pdx, part.pdx, check.pdy, part.pdy, b) {
+						leftside = true
+					}
 				}
 			} else {
 
@@ -2527,6 +2495,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 		b := part.pdy*check.pex - part.pdx*check.pey + part.perp
 		if ZDiffSign(a, b) {
 			if (a != 0) && (b != 0) {
+				if w.PassingTooClose(part, check, cost, nil) {
+					return true
+				}
 
 				l := check.len
 
@@ -3223,11 +3194,6 @@ func (w *ZExt_NodesWork) DivideSegsForSingleSector(ts *ZExt_NodeSeg, rs **ZExt_N
 		panic("Couldn't pick nodeline!")
 	}
 
-	w.nodeX = int(best.StartVertex.X)
-	w.nodeY = int(best.StartVertex.Y)
-	w.nodeDx = int(best.EndVertex.X) - w.nodeX
-	w.nodeDy = int(best.EndVertex.Y) - w.nodeY
-
 	c := &ZExt_IntersectionContext{
 		psx: best.StartVertex.X,
 		psy: best.StartVertex.Y,
@@ -3236,6 +3202,9 @@ func (w *ZExt_NodesWork) DivideSegsForSingleSector(ts *ZExt_NodeSeg, rs **ZExt_N
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
+
+	w.SetNodeCoords(best, bbox, c)
+
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, super, rightsSuper, leftsSuper)
 }
 
@@ -3686,11 +3655,17 @@ func (w *ZExt_NodesWork) MTP_DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls 
 }
 
 func (w *ZExt_NodesWork) AddVertex(x, y ZNumber) *ZExt_NodeVertex {
+	v := w.vertexMap.SelectVertexClose(float64(x), float64(y))
+	if v.Id != -1 {
+		return &(w.vertices[v.Id])
+	}
+
 	idx := len(w.vertices)
+	v.Id = idx
 
 	w.vertices = append(w.vertices, ZExt_NodeVertex{
-		X:   x,
-		Y:   y,
+		X:   ZNumber(v.X),
+		Y:   ZNumber(v.Y),
 		idx: uint32(idx),
 	})
 	return &(w.vertices[idx])
@@ -3754,6 +3729,182 @@ func (log *MyLogger) ZExt_DumpSegs(ts *ZExt_NodeSeg) {
 		} else {
 			log.segs.WriteString("\n")
 		}
+	}
+}
+
+func (w *ZExt_NodesWork) PassingTooClose(part, check *ZExt_NodeSeg, cost *int,
+	minors *MinorCosts) bool {
+	frac := ZExt_InterceptVector(part, check)
+	if frac < 0.001 || frac > 0.999 {
+		x := float64(check.psx)
+		y := float64(check.psy)
+		x = math.FMA(frac, float64(check.pex)-x, x)
+		y = math.FMA(frac, float64(check.pey)-y, y)
+		if math.Abs(x-float64(check.psx)) <= VERTEX_EPSILON &&
+			math.Abs(y-float64(check.psy)) <= VERTEX_EPSILON {
+			return true
+		}
+		if math.Abs(x-float64(check.pex)) <= VERTEX_EPSILON &&
+			math.Abs(y-float64(check.pey)) <= VERTEX_EPSILON {
+			return true
+		}
+
+	}
+	return false
+}
+
+func ZExt_InterceptVector(part, check *ZExt_NodeSeg) float64 {
+	return InterceptVectorCoord(float64(part.psx), float64(part.psy),
+		float64(part.pdx), float64(part.pdy),
+		float64(check.psx), float64(check.psy), float64(check.pdx),
+		float64(check.pdy))
+}
+
+func (c *ZExt_IntersectionContext) computeIntersection() (ZNumber, ZNumber) {
+	frac := InterceptVectorCoord(float64(c.psx), float64(c.psy), float64(c.pdx),
+		float64(c.pdy), float64(c.lsx), float64(c.lsy), float64(c.lex-c.lsx),
+		float64(c.ley-c.lsy))
+
+	newx := float64(c.lsx)
+	newy := float64(c.lsy)
+	newx = math.FMA(frac, float64(c.lex)-newx, newx)
+	newy = math.FMA(frac, float64(c.ley)-newy, newy)
+
+	return ZNumber(newx), ZNumber(newy)
+}
+
+func (c *ZExt_IntersectionContext) doLinesIntersect() uint8 {
+	dx2 := c.psx - c.lsx
+	dy2 := c.psy - c.lsy
+	dx3 := c.psx - c.lex
+	dy3 := c.psy - c.ley
+
+	a := c.pdy*dx2 - c.pdx*dy2
+	b := c.pdy*dx3 - c.pdx*dy3
+	if ZDiffSign(a, b) && (a != 0) && (b != 0) {
+		x, y := c.computeIntersection()
+		dx2 = c.lsx - x
+		dy2 = c.lsy - y
+		if dx2 == 0 && dy2 == 0 {
+			a = 0
+		} else {
+
+			cmp := float64(a) * float64(a) / float64(c.pdx*c.pdx+c.pdy*c.pdy)
+			if cmp < SIDE_EPSILON*SIDE_EPSILON {
+				a = 0
+			}
+		}
+		dx3 = c.lex - x
+		dy3 = c.ley - y
+		if dx3 == 0 && dy3 == 0 {
+			b = 0
+		} else {
+
+			cmp := float64(b) * float64(b) / float64(c.pdx*c.pdx+c.pdy*c.pdy)
+			if cmp < SIDE_EPSILON*SIDE_EPSILON {
+				b = 0
+			}
+		}
+
+	}
+
+	var val uint8
+
+	if a == 0 {
+		val = val | 16
+	} else if a < 0 {
+		val = val | 32
+	} else {
+		val = val | 64
+	}
+
+	if b == 0 {
+		val = val | 1
+	} else if b < 0 {
+		val = val | 2
+	} else {
+		val = val | 4
+	}
+
+	return val
+}
+
+func (w *ZExt_NodesWork) SetNodeCoords(part *ZExt_NodeSeg, bbox *NodeBounds,
+	c *ZExt_IntersectionContext) {
+
+	x1, y1, x2, y2 := w.lines.GetAllXY(part.Linedef)
+	if part.Flip != 0 {
+		w.nodeX = x2
+		w.nodeY = y2
+		w.nodeDx = x1 - x2
+		w.nodeDy = y1 - y2
+	} else {
+		w.nodeX = x1
+		w.nodeY = y1
+		w.nodeDx = x2 - x1
+		w.nodeDy = y2 - y1
+	}
+	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
+		w.nodeDy >= -32768 {
+		return
+	}
+	Log.Verbose(1, "Level contains very big line %d, and it was chosen as a partition line. I will try to avoid overflow by computing node values using only part of it\n",
+		part.Linedef)
+
+	psx, psy := part.StartVertex.X, part.StartVertex.Y
+	pex, pey := part.EndVertex.X, part.EndVertex.Y
+	pexc, peyc := pex.Ceil(), pey.Ceil()
+	w.nodeX = int(psx)
+	w.nodeY = int(psy)
+	w.nodeDx = pexc - w.nodeX
+	w.nodeDy = peyc - w.nodeY
+
+	if float64(w.nodeX) == float64(psx) && float64(w.nodeY) == float64(psy) &&
+		float64(pexc) == float64(pex) && float64(peyc) == float64(pey) {
+		if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
+			w.nodeDy >= -32768 {
+			Log.Verbose(1, "I've chosen seg coords instead of line coords for partition, but they still overflow node values. Source linedef: %d\n",
+				part.Linedef)
+		}
+
+		return
+	}
+
+	ov1, ov2 := ZExt_PartitionInBoundary(part, c, bbox.Xmax, bbox.Ymax, bbox.Xmin,
+		bbox.Ymin, part.toVertexPairC())
+	if ov1 == nil && ov2 == nil {
+		Log.Printf("Very bad - PartitionInBoundary failed to correct extended nodes coords when it was needed.\n")
+	}
+	dx := ov2.v.X - ov1.v.X
+	dy := ov2.v.Y - ov1.v.Y
+	oldDx := pex - psx
+	oldDy := pey - psy
+	if dx != 0 {
+		if (dx > 0 && oldDx < 0) || (dx < 0 && oldDx > 0) {
+			ov1, ov2 = ov2, ov1
+		}
+		if oldDx == 0 {
+			Log.Verbose(1, "what? segDx == 0 but scaledDx != 0\n")
+			return
+		}
+	} else {
+		if (dy > 0 && oldDy < 0) || (dy < 0 && oldDy > 0) {
+			ov1, ov2 = ov2, ov1
+		}
+		if oldDy == 0 && dy != 0 {
+			Log.Verbose(1, "what? segDy == 0 but scaledDy != 0\n")
+			return
+		}
+	}
+
+	w.nodeX = int(ov1.v.X)
+	w.nodeY = int(ov1.v.Y)
+	w.nodeDx = int(ov2.v.X) - w.nodeX
+	w.nodeDy = int(ov2.v.Y) - w.nodeY
+	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
+		w.nodeDy >= -32768 {
+		Log.Verbose(1, "I've scaled seg coords to the bounding box to use as partition line definition in node structure, but they overflow node values. Source linedef: %d\n",
+			part.Linedef)
 	}
 }
 
