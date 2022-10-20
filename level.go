@@ -16,7 +16,7 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go"
+//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go"
 
 import (
 	"bytes"

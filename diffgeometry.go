@@ -15,18 +15,31 @@
 // You should have received a copy of the GNU General Public License
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 
-// diffgeometry
+// diffgeometry.go
 package main
 
 import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // picknode.go grew very big after I implemented partition length evaluation
 // without void segments, so I had to split all the gory differential geometry
 // (and the like) from there into this file.
+
+// Major rewrite: now uses floating point even for vanilla nodes generator
+// Some legacy stuff retained in intgeometry.go
+
+const (
+	SIDE_LEFT_VERTICAL     = 0
+	SIDE_RIGHT_VERTICAL    = 1
+	SIDE_TOP_HORIZONTAL    = 2
+	SIDE_BOTTOM_HORIZONTAL = 3
+)
+
+const MOVE_SAFE_MARGIN = 10
 
 func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	// Chapter I
@@ -41,8 +54,8 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	blYMax := w.solidMap.YMax
 
 	// Let's see if we can use simple cases for orthogonal partition
-	partSegCoords := part.toVertexPairC()
-	var c IntersectionContext
+	partSegCoords := w.SegOrLineToVertexPairC(part)
+	var c FloatIntersectionContext
 	c.psx = partSegCoords.StartVertex.X
 	c.psy = partSegCoords.StartVertex.Y
 	c.pex = partSegCoords.EndVertex.X
@@ -50,8 +63,8 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
 
-	partStart, partEnd := PartitionInBoundary(part, &c, blXMax, blYMax, blXMin,
-		blYMin, partSegCoords)
+	partStart, partEnd, bside := PartitionInBoundary(part, &c, blXMax,
+		blYMax, blXMin, blYMin, partSegCoords)
 	if partStart == nil || partEnd == nil {
 		// Damnation!
 		return NonVoidPerAlias{
@@ -59,38 +72,37 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		}
 	}
 
-	partStart.left = true // as if was a solid line looking left (to the right is void; beyond map boundaries)
-	partEnd.left = false  // as if was a solid line looking right (to the left is void; beyond map boundaries)
+	w.dgVertexMap.RestoreOrBeginSnapshot()
+	ipsx := int(math.Round(partStart.X))
+	ipsy := int(math.Round(partStart.Y))
+	ipex := int(math.Round(partEnd.X))
+	ipey := int(math.Round(partEnd.Y))
+	// Some intersection points may be close to these. In such cases, they
+	// should get identical values, otherwise (and this did happen when I
+	// tested) they may be seen as being outside the interval and the projected
+	// direction may be computed wrong.
+	// Since vertex map will check against earliest "close enough" match,
+	// I need to allow these points to be altered to such a match if it exists
+	partStart = w.dgVertexMap.SelectVertexClose(partStart.X, partStart.Y)
+	partEnd = w.dgVertexMap.SelectVertexClose(partEnd.X, partEnd.Y)
 
-	// --------------
-	// Test case: #1
-	// linedef to test on: 2861
-	// Comments: seems I didn't even get line correctly
-	// Reason: wrong computation of solid space (we got VOID intervals instead of SOLID intervals!!!)
-	// Error output:
-	// More dropouts! -1 -1 ; [(4416;5392)-(4424;5395)]; [(4472;5416)-(4488;5424)]; [(4992;5648)-(5126;5707)]; [(6306;6232)-(6312;6234)]; [(6544;6337)-(6704;6408)]; [(7064;6568)-(7340;6691)]; [(7696;6849)-(7800;6896)] [RIGHT(3616,5036)-RIGHT(4128,5264)]
-	// --------------
-	// Test case: #2
-	// linedef to test on: 98
-	// Comments: axis-aligned line (horizontal), I've got every vertice value correctly
-	// Reason: fluger wrong
-	// Error output:
-	// Sanity check failed! Evaluated partition line (5112,6704)-(5008,6704) doesn't consistently go in/out of the void when crossing solid lines. We may have missed some solid line or the level contains problems. [,LEFT(32,6704),LEFT(3832,6704),RIGHT(3888,6704),LEFT(4000,6704),RIGHT(4376,6704),LEFT(4388,6704),RIGHT(4388,6704),LEFT(4400,6704),RIGHT(4496,6704),LEFT(4528,6704),RIGHT(4624,6704),LEFT(4656,6704),RIGHT(4656,6704),LEFT(4784,6704),RIGHT(4888,6704),LEFT(4904,6704),RIGHT(5008,6704),LEFT(5112,6704),RIGHT(5112,6704),LEFT(5152,6704),RIGHT(5152,6704),LEFT(5600,6704),RIGHT(5600,6704),LEFT(5640,6704),RIGHT(5640,6704),LEFT(5664,6704),RIGHT(5664,6704),LEFT(5792,6704),RIGHT(5792,6704),LEFT(5832,6704),RIGHT(5832,6704),LEFT(5836,6704),RIGHT(5876,6704),LEFT(5876,6704),RIGHT(5880,6704),LEFT(5880,6704),LEFT(5920,6704),LEFT(6064,6704),RIGHT(6544,6704),LEFT(6576,6704),RIGHT(6576,6704),LEFT(6672,6704),RIGHT(6672,6704),LEFT(6688,6704),RIGHT(7056,6704),LEFT(7328,6704),RIGHT(7456,6704),LEFT(7456,6704),RIGHT(7496,6704),LEFT(7496,6704),LEFT(7500,6704),RIGHT(7540,6704),LEFT(7540,6704),RIGHT(7544,6704),LEFT(7544,6704),LEFT(7584,6704),RIGHT(9512,6704)]
-	// --------------
-	// Test case: #3
-	// linedef to test on: 82
-	// Comments: diagonal line, got every vertice value correctly, but wrong direction of vertices
-	// Comments: intersects line 716 ~ (48,11856)-(48,12368) must yield RIGHT (not LEFT)
-	// Reason: fluger wrong
-	// Error output:
-	// Sanity check failed! Evaluated partition line (6496,5252)-(6504,5244) doesn't consistently go in/out of the void when crossing solid lines. We may have missed some solid line or the level contains problems. [,LEFT(32,11716),LEFT(48,11700),LEFT(116,11632),RIGHT(3572,8176),RIGHT(3656,8092),RIGHT(3668,8080),RIGHT(3672,8076),LEFT(4144,7604),RIGHT(4368,7380),LEFT(4400,7348),RIGHT(4624,7124),LEFT(4656,7092),LEFT(5044,6704),RIGHT(5207,6540),RIGHT(5904,5844),RIGHT(6228,5520),LEFT(6512,5236),RIGHT(6522,5226),LEFT(9292,2456),RIGHT(9444,2304)]
-	// --------------
+	// I have to use a vertex that WOULD occur even earlier alongside the
+	// line (according to the direction identified by partStart -> partEnd)
+	// than partStart vertex to be able to perform IsClockwiseTriangle
+	// when the intersection point (p1 or p2) is EXACTLY on partStart.
+	setContextFromBlockSide(&c, bside, blXMax, blYMax, blXMin, blYMin,
+		MOVE_SAFE_MARGIN)
+	partOrient := c.getIntersectionPoint_InfiniteLines()
+	if partOrient == nil {
+		Log.Verbose(2, "Failed to compute a special vertex for clockwise-triangle checking.\n")
+	}
 
 	// Chapter II
 	// We use a blockmap to reduce the number of solid lines we need to check for
 	// intersecting our partition
-	pts := CollinearOrientedVertices(make([]OrientedVertex, 1))
-	pts[0] = *partStart
+	// We also use vertex map to help identify identical vertices among products
+	// of intersection (or incidence)
+	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
 	if w.blockity == nil {
 		w.blockity = GetBlockityLines(w.solidMap)
 	}
@@ -98,22 +110,27 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	// Note: the coords start at bounding box edges - we need to follow the line
 	// through entire map to know for sure when it is in the void and when it
 	// is not
-	iter.SetContext(int(partStart.v.X), int(partStart.v.Y), int(partEnd.v.X), int(partEnd.v.Y))
+	iter.SetContext(ipsx, ipsy, ipex, ipey)
+	cntIncident := 0
 	for iter.NextLine() {
 		aline := iter.GetLine()
 		lsx, lsy, lex, ley := w.lines.GetAllXY(aline)
-		c.lsx = Number(lsx)
-		c.lsy = Number(lsy)
-		c.lex = Number(lex)
-		c.ley = Number(ley)
-		if c.lsx == c.lex && c.lsy == c.ley { // skip zero-length lines
+		if lsx == lex && lsy == ley { // skip zero-length lines
 			continue
 		}
+		c.lsx = float64(lsx)
+		c.lsy = float64(lsy)
+		c.lex = float64(lex)
+		c.ley = float64(ley)
 		pt1, pt2 := c.getIntersectionOrIndicence()
 		if pt1 != nil {
+			RoundToFixed1616(pt1)
+			pt1 = w.dgVertexMap.SelectVertexClose(pt1.X, pt1.Y)
 			if pt2 != nil {
 				// Incidence - need to add two points looking at each other,
 				// between them we have non-void 1-D space
+				RoundToFixed1616(pt2)
+				pt2 = w.dgVertexMap.SelectVertexClose(pt2.X, pt2.Y)
 				var ov1, ov2 OrientedVertex
 				if VertexPairCOrdering(pt1, pt2, false) {
 					ov1.v = pt1
@@ -128,53 +145,100 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 				}
 				pts = append(pts, ov1)
 				pts = append(pts, ov2)
+				cntIncident++
 			} else { // pt2 == nil
 				// Intersection
 				ov := OrientedVertex{
 					v: pt1,
-					left: IsClockwiseTriangle(&NodeVertex{X: c.lsx, Y: c.lsy},
-						&NodeVertex{X: c.lex, Y: c.ley}, partStart.v),
+					left: IsClockwiseTriangle(&FloatVertex{X: c.lsx, Y: c.lsy},
+						&FloatVertex{X: c.lex, Y: c.ley}, partOrient),
 				}
 				pts = append(pts, ov)
 			}
 		}
+		// Was a case of the same linedef but differing segs in EXTENDED mode
+		// not getting an intersection with the line PASSING through the same
+		// vertex as the linedef! Solved by using linedef coords instead of
+		// seg coords in extended mode
+		/*if aline == 2819 && part.Linedef == 2820 {
+			Log.Printf("part %d aline %d part_alias %d part_coords %s-%s pt1 = %s, pt2 = %s\n .......... ic (%f,%f)-(%f,%f)",
+				part.Linedef, aline, part.alias, partStart.toString(), partEnd.toString(), pt1.toString(), pt2.toString(),
+				c.psx, c.psy, c.pex, c.pey)
+		}*/
 	}
-
-	pts = append(pts, *partEnd)
 
 	// Chapter III
 	// Sort all these things, so the vertexes indicate where partition line
 	// candidate enters the map and where it goes to the void outside
-	sort.Stable(pts)
-	if pts[0] != *partStart || pts[len(pts)-1] != *partEnd {
-		Log.Verbose(2, "Failed to produce a solid hits array %t %t (%v, %v) != (%v, %v).\n",
-			pts[0] != *partStart, pts[len(pts)-1] != *partEnd,
-			pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
-			partEnd.v.X, partEnd.v.Y)
+	if len(pts) < 2 {
+		// Need at least two points: one where map is entered, another one
+		// where it is exited
+		Log.Verbose(2, "Failed to produce a solid hits array: %d items (need at least two)\n",
+			len(pts))
+		return NonVoidPerAlias{
+			success: false,
+		}
+	}
+	sort.Sort(pts)
+	startBound := VertexPairCOrdering(partStart, pts[0].v, false)
+	endBound := VertexPairCOrdering(pts[len(pts)-1].v, partEnd, false)
+	if !startBound || !endBound {
+		tailStr := ""
+		if !startBound {
+			tailStr = fmt.Sprintf("(%f, %f) != (%f, %f)",
+				pts[0].v.X, pts[0].v.Y,
+				partStart.X, partStart.Y)
+		}
+		if !endBound {
+			if tailStr != "" {
+				tailStr = "s " + tailStr + " e "
+			}
+			tailStr += fmt.Sprintf("(%f, %f) != (%f, %f)",
+				pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
+				partEnd.X, partEnd.Y)
+		}
+		Log.Verbose(2, "Failed to produce a solid hits array for partition line %d: %t %t %s.\n",
+			part.Linedef, startBound, endBound, tailStr)
 		// Bail out, damn it
 		return NonVoidPerAlias{
 			success: false,
 		}
 	}
-
-	// Now we deal with having multiple directions (from different lines)
-	// specified for a single map vertex. This is still not doing its best,
-	// but I will have to release it in this state, as I wasted enough days
-	// (weeks?!) trying to figure out the infallible approach
-	ptsOld := append(CollinearOrientedVertices([]OrientedVertex{}), pts...)
-	if !pts.Coalesce() {
-		// Doesn't happen anymore
-		Log.Verbose(2, "Coalesce fail at %s\n", ptsOld.toString())
-		return NonVoidPerAlias{
-			success: false,
-		}
+	// Not rewriting Coalesce now, and that damn thing relies on borders being
+	// included in this cursed array
+	ovStart := OrientedVertex{
+		v:    partStart,
+		left: true,
 	}
+	ovEnd := OrientedVertex{
+		v:    partEnd,
+		left: false,
+	}
+	ptsOld := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	for _, it := range pts {
+		ptsOld = append(ptsOld, OrientedVertex{
+			v:    it.v,
+			left: it.left,
+		})
+	}
+
+	pts_fix := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	pts_fix = append(pts_fix, ovStart)
+	for _, it := range pts {
+		pts_fix = append(pts_fix, OrientedVertex{
+			v:    it.v,
+			left: it.left,
+		})
+	}
+	pts_fix = append(pts_fix, ovEnd)
+	pts = pts_fix
+	pts.Coalesce() // Resolve differing directions at identical points
 
 	// Sanity check: every vertex flips the direction, with the exception
 	// of bordering vertexes, they might be next to vertexes of the same
 	// direction, because solid level usually starts some distance away (that is,
 	// we have void near borders)
-	fluger := true // pts[0].left
+	fluger := true
 	for i := 2; i < len(pts)-2; i++ {
 		fluger = fluger && (pts[i].left != pts[i-1].left)
 	}
@@ -183,8 +247,16 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		// PersistThroughInsanity was set to false
 		// Log.Verbose(2, "Sanity check failed! Evaluated partition line (%d,%d)-(%d,%d) doesn't consistently go in/out of the void when crossing solid lines. %s\nOld content: %s",
 		// part.psx, part.psy, part.pex, part.pey, pts.toString(), ptsOld.toString())
-		Log.Verbose(2, "Sanity check failed! Evaluated partition line (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines. %s\n",
-			part.psx, part.psy, part.pex, part.pey, pts.toString())
+		Log.Verbose(2, "... for the next line - old content: %s",
+			ptsOld.toString())
+		Log.Verbose(2, "Sanity check failed! Evaluated partition line %d (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines (incidence count: %d). %s\n",
+			part.Linedef, part.psx, part.psy, part.pex, part.pey, cntIncident, pts.toString()) //pts[1:len(pts)-1].toString())
+		/*if part.Linedef == 13993 && len(pts) >= 6 {
+			Log.Printf("%s=%s: %t %t %t (%3.10f,%3.10f)-(%3.10f,%3.10f)\n", pts[3].toString(), pts[4].toString(), pts[3].v == pts[4].v,
+				pts[3].v.X == pts[4].v.X, pts[3].v.Y == pts[4].v.Y,
+				pts[3].v.X, pts[3].v.Y, pts[4].v.X, pts[4].v.Y)
+		}*/ // see parameters for building Water Spirit in valuesEqual
+
 		if !config.PersistThroughInsanity { // reference to global: config
 			return NonVoidPerAlias{
 				success: false,
@@ -206,13 +278,18 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		if pts[i-1].left || !pts[i].left {
 			continue
 		}
-		dx := float64(pts[i].v.X - pts[i-1].v.X)
-		dy := float64(pts[i].v.Y - pts[i-1].v.Y)
+		dx := pts[i].v.X - pts[i-1].v.X
+		dy := pts[i].v.Y - pts[i-1].v.Y
 		nonVoid = append(nonVoid, VertexPairC{
 			StartVertex: pts[i-1].v,
 			EndVertex:   pts[i].v,
 			len:         Number(math.Sqrt(dx*dx + dy*dy)),
 		})
+	}
+
+	if len(nonVoid) == 0 {
+		Log.Verbose(2, "part %d trace produced ZERO non-void intervals\n",
+			part.Linedef)
 	}
 
 	return NonVoidPerAlias{
@@ -227,95 +304,64 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	}
 }
 
-func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
-	blXMax, blYMax, blXMin, blYMin int, partSegCoords VertexPairC) (*OrientedVertex, *OrientedVertex) {
+func RoundToFixed1616(v *FloatVertex) {
+	// see valuesEqual - somehow VertexMap can return different pointers with
+	// equal-valued vertices, but how? this reduces such occurences, but one
+	// last one in Water Spirit required to implement value check instead of
+	// reference check in valuesEqual
+	v.X = float64(int(v.X*FIXED16DOT16_MULTIPLIER)) / FIXED16DOT16_MULTIPLIER
+	v.Y = float64(int(v.Y*FIXED16DOT16_MULTIPLIER)) / FIXED16DOT16_MULTIPLIER
+}
 
-	var partStart, partEnd OrientedVertex
-	partStart.v = new(NodeVertex)
-	partEnd.v = new(NodeVertex)
+// Future_PartitionInBoundary returns two points of intersection between partition
+// line and a bounding box represented by blXMax, blYMax, blXMin, blYMin.
+// Argument part is only used for log output (linedef index etc.), the values
+// are computed using c (IntersectionContext) and partSegCoords instead
+func PartitionInBoundary(part *NodeSeg, c *FloatIntersectionContext,
+	blXMax, blYMax, blXMin, blYMin int, partSegCoords VertexPairC) (*FloatVertex, *FloatVertex, int) {
+
+	partStart := new(FloatVertex)
+	partEnd := new(FloatVertex)
+	var side [2]int
 	if part.pdx == 0 { // vertical line
 		// Y coords: starts at the top, ends at the bottom of blockmap box
 		// X coord is taken from partition line
-		partStart.v.Y = Number(blYMax)
-		partStart.v.X = partSegCoords.StartVertex.X
-		partEnd.v.Y = Number(blYMin)
-		partEnd.v.X = partStart.v.X // should be == part.psx
+		partStart.Y = float64(blYMax)
+		partStart.X = partSegCoords.StartVertex.X
+		partEnd.Y = float64(blYMin)
+		partEnd.X = partStart.X // should be == part.psx
+		side[0] = SIDE_TOP_HORIZONTAL
+		side[1] = SIDE_BOTTOM_HORIZONTAL
 	} else if part.pdy == 0 { // horizontal line
 		// X coords: starts at the left, ends at the right of blockmap box
 		// Y coord is taken from partition line
-		partStart.v.X = Number(blXMin)
-		partStart.v.Y = partSegCoords.StartVertex.Y
-		partEnd.v.X = Number(blXMax)
-		partEnd.v.Y = partStart.v.Y // should be == part.psy
+		partStart.X = float64(blXMin)
+		partStart.Y = partSegCoords.StartVertex.Y
+		partEnd.X = float64(blXMax)
+		partEnd.Y = partStart.Y // should be == part.psy
+		side[0] = SIDE_LEFT_VERTICAL
+		side[1] = SIDE_RIGHT_VERTICAL
 	} else { // diagonal line (the worst)
 		// Ok, I suck at this geometry thingy, but have to do it nonetheless
 		linesTried := 0
-		intersectPoints := make([]OrientedVertex, 0)
+		intersectPoints := make([]*FloatVertex, 0)
 		for len(intersectPoints) < 2 && linesTried < 4 {
-			switch linesTried {
-			case 0:
-				{
-					// Left vertical blockmap boundary
-					c.lsx = Number(blXMin)
-					c.lsy = Number(blYMax)
-					c.lex = c.lsx
-					c.ley = Number(blYMin)
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = appendNoDuplicates(intersectPoints,
-							OrientedVertex{
-								v: v,
-							})
-					}
-				}
-			case 1:
-				{
-					// Right vertical blockmap boundary
-					c.lsx = Number(blXMax)
-					c.lsy = Number(blYMax)
-					c.lex = c.lsx
-					c.ley = Number(blYMin)
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = appendNoDuplicates(intersectPoints,
-							OrientedVertex{
-								v: v,
-							})
-					}
-				}
-			case 2:
-				{
-					// Top horizontal blockmap boundary
-					c.lsx = Number(blXMin)
-					c.lsy = Number(blYMax)
-					c.lex = Number(blXMax)
-					c.ley = c.lsy
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = appendNoDuplicates(intersectPoints,
-							OrientedVertex{
-								v: v,
-							})
-					}
-				}
-			case 3:
-				{
-					// Bottom horizontal blockmap boundary
-					c.lsx = Number(blXMin)
-					c.lsy = Number(blYMin)
-					c.lex = Number(blXMax)
-					c.ley = c.lsy
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = appendNoDuplicates(intersectPoints,
-							OrientedVertex{
-								v: v,
-							})
-					}
+			added := false
+			setContextFromBlockSide(c, linesTried, blXMax, blYMax, blXMin,
+				blYMin, 0)
+			v := c.getIntersectionPoint_InfiniteLines()
+			if v != nil && CheckBoundsForIntersectPoint(v, blXMax, blYMax, blXMin,
+				blYMin) {
+				intersectPoints, added = appendNoDuplicates(intersectPoints,
+					v)
+			}
+			if added {
+				sideIdx := len(intersectPoints) - 1
+				if sideIdx < 2 {
+					side[sideIdx] = linesTried
+				} else {
+					Log.Verbose(2, "More than 2 intersection points between line and a box - error.\n")
+					return nil, nil, 0
 				}
 			}
 			linesTried++
@@ -334,31 +380,35 @@ func PartitionInBoundary(part *NodeSeg, c *IntersectionContext,
 				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
-				Log.Verbose(2, "Intersection#%d: %s",
-					i, intersectPoints[i].toString())
+				Log.Verbose(2, "Intersection#%d: (%v, %v)",
+					i, intersectPoints[i].X, intersectPoints[i].Y)
 			}
 			// Bail out
-			return nil, nil
+			return nil, nil, 0
 		}
-		if VertexPairCOrdering(intersectPoints[0].v, intersectPoints[1].v,
+		if VertexPairCOrdering(intersectPoints[0], intersectPoints[1],
 			false) {
 			partStart, partEnd = intersectPoints[0], intersectPoints[1]
 		} else {
 			partStart, partEnd = intersectPoints[1], intersectPoints[0]
+			side[0], side[1] = side[1], side[0]
 		}
 	}
-	return &partStart, &partEnd
+	return partStart, partEnd, side[0]
 }
 
-// Checks only first element, cause it is a lazy wrapper over append
+// future_appendNoDuplicates adds v to x if it is not already present, and
+// returns new value of x and true if that happened. If x was not changed,
+// the second return value is false
+// Caveat: checks only first element, cause it is a lazy wrapper over append
 // in PartitionInBoundary specifically. So that lines that go through a node box
 // corner don't get the same intersection point reported twice instead of
 // finding two distinct intersection points
-func appendNoDuplicates(x []OrientedVertex, v OrientedVertex) []OrientedVertex {
-	if len(x) == 0 || !x[0].equalTo(&v) {
-		return append(x, v)
+func appendNoDuplicates(x []*FloatVertex, v *FloatVertex) ([]*FloatVertex, bool) {
+	if len(x) == 0 || !x[0].equalToWithEpsilon(v) {
+		return append(x, v), true
 	}
-	return x
+	return x, false
 }
 
 // VigilantDoomer: my experience with doLinesIntersect/computeIntersection was
@@ -367,44 +417,86 @@ func appendNoDuplicates(x []OrientedVertex, v OrientedVertex) []OrientedVertex {
 // out my own implementation, which has a caveat - it doesn't intersect partition
 // line against a line segment, but it intersects two infinite lines against
 // each other. Thus another function: tskCheckBounds, is found below
-func (c *IntersectionContext) getIntersectionPoint_InfiniteLines() *NodeVertex {
-	ldx := float64(c.lex - c.lsx)
-	ldy := float64(c.ley - c.lsy)
-	d := float64(c.pdy)*ldx - ldy*float64(c.pdx)
+func (c *FloatIntersectionContext) getIntersectionPoint_InfiniteLines() *FloatVertex {
+	ldx := c.lex - c.lsx
+	ldy := c.ley - c.lsy
+	d := c.pdy*ldx - ldy*c.pdx
 	if d == 0.0 {
 		return nil
 	}
-	c1 := float64(c.pdy)*float64(c.psx) - float64(c.pdx)*float64(c.psy)
-	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
+	c1 := c.pdy*c.psx - c.pdx*c.psy
+	c2 := ldy*c.lsx - ldx*c.lsy
 	id := 1 / d
-	return &NodeVertex{
-		X: Number(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
-		Y: Number(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
+	return &FloatVertex{
+		X: (ldx*c1 - c.pdx*c2) * id,
+		Y: (ldy*c1 - c.pdy*c2) * id,
 	}
 }
 
-// This checks whether a vertex is within the box
-func tskCheckBounds(v *NodeVertex, blXMax, blYMax, blXMin, blYMin int) bool {
-	return v.X <= Number(blXMax) && v.X >= Number(blXMin) &&
-		v.Y <= Number(blYMax) && v.Y >= Number(blYMin)
+// tskCheckBounds checks whether a vertex is within the box
+// Only used in conjunction with getIntersectionPoint_InfiniteLines()
+func CheckBoundsForIntersectPoint(v *FloatVertex, blXMax, blYMax, blXMin, blYMin int) bool {
+	x := int(math.Round(v.X))
+	y := int(math.Round(v.Y))
+	return x <= blXMax && x >= blXMin &&
+		y <= blYMax && y >= blYMin
 }
 
-// This finds the intersection between a partition line and a line segment,
-// also handling the case of line segment being coincident with partition line.
-func (c *IntersectionContext) getIntersectionOrIndicence() (*NodeVertex, *NodeVertex) {
-	ldx := float64(c.lex - c.lsx)
-	ldy := float64(c.ley - c.lsy)
-	d := float64(c.pdy)*ldx - ldy*float64(c.pdx)
+// setContextFromBlockSide assigns c.lsx, c.lsy, c.lex, c.ley with coords of
+// the line that represents a specified side of the box blXMax, blYMax, blXmin,
+// blYMin. If margin is non-zero, this side is also moved parallel to its
+// original coords by margin px alongside respective axis, in a manner that
+// would make the box bigger
+func setContextFromBlockSide(c *FloatIntersectionContext, side int,
+	blXMax, blYMax, blXMin, blYMin int, margin int) {
+	switch side {
+	case SIDE_LEFT_VERTICAL:
+		// Left vertical blockmap boundary
+		c.lsx = float64(blXMin - margin)
+		c.lsy = float64(blYMax)
+		c.lex = c.lsx
+		c.ley = float64(blYMin)
+	case SIDE_RIGHT_VERTICAL:
+		// Right vertical blockmap boundary
+		c.lsx = float64(blXMax + margin)
+		c.lsy = float64(blYMax)
+		c.lex = c.lsx
+		c.ley = float64(blYMin)
+	case SIDE_TOP_HORIZONTAL:
+		// Top horizontal blockmap boundary
+		c.lsx = float64(blXMin)
+		c.lsy = float64(blYMax + margin)
+		c.lex = float64(blXMax)
+		c.ley = c.lsy
+	case SIDE_BOTTOM_HORIZONTAL:
+		// Bottom horizontal blockmap boundary
+		c.lsx = float64(blXMin)
+		c.lsy = float64(blYMin - margin)
+		c.lex = float64(blXMax)
+		c.ley = c.lsy
+	default:
+		Log.Panic("Unknown side\n")
+	}
+}
+
+// getIntersectionOrIndicence finds the intersection between a partition line
+// and a line segment, also handling the case of line segment being coincident
+// with partition line. In case of intersection, returned values should be
+// monotonous alongside partition line
+func (c *FloatIntersectionContext) getIntersectionOrIndicence() (*FloatVertex, *FloatVertex) {
+	ldx := c.lex - c.lsx
+	ldy := c.ley - c.lsy
+	d := c.pdy*ldx - ldy*c.pdx
 	if d == 0.0 { // parallel
 		ptmp := c.pdx*c.psy - c.psx*c.pdy
 		a := c.pdy*c.lsx - c.pdx*c.lsy + ptmp
 		b := c.pdy*c.lex - c.pdx*c.ley + ptmp
 		if a == 0 && b == 0 {
 			// incidence
-			return &NodeVertex{
+			return &FloatVertex{
 					X: c.lsx,
 					Y: c.lsy,
-				}, &NodeVertex{
+				}, &FloatVertex{
 					X: c.lex,
 					Y: c.ley,
 				}
@@ -413,46 +505,88 @@ func (c *IntersectionContext) getIntersectionOrIndicence() (*NodeVertex, *NodeVe
 			return nil, nil
 		}
 	}
-	c1 := float64(c.pdy)*float64(c.psx) - float64(c.pdx)*float64(c.psy)
-	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
-	id := 1 / d
-	v := &NodeVertex{
-		X: Number(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
-		Y: Number(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
+	// TODO compare performance now and before
+	cx := c.psx - c.lsx
+	cy := c.lsy - c.psy
+	num := cx*c.pdy + cy*c.pdx
+	frac := num / d
+	if frac > 1 || frac < 0 {
+		// intersection point was outside of segment defined by c.l**
+		// (valid intersection between infinite lines, but not between a line
+		// and a line segment)
+		return nil, nil
 	}
 
-	// See if intersection lies within the line segment of the other
-	// (non-partition) line - cause we were supposed to be intersecting a
-	// segment and not the entirety of that line
-	if v != nil {
-		var blXmax, blXmin, blYmax, blYmin int
-		if c.lsx < c.lex {
-			blXmax = int(c.lex)
-			blXmin = int(c.lsx)
-		} else {
-			blXmax = int(c.lsx)
-			blXmin = int(c.lex)
-		}
-		if c.lsy < c.ley {
-			blYmax = int(c.ley)
-			blYmin = int(c.lsy)
-		} else {
-			blYmax = int(c.lsy)
-			blYmin = int(c.ley)
-		}
-		if tskCheckBounds(v, blXmax, blYmax, blXmin, blYmin) {
-			return v, nil
-		}
+	// I need return values to be monotonous alongside partition line
+	num2 := cx*ldy + cy*ldx
+	// no multiplication of num2 by (-1) is necessary,
+	// cause the d in the following formula also would have been (-d)
+	// i.e. -num2 / -d = num2 / d
+	frac2 := num2 / d
+
+	x := c.psx
+	y := c.psy
+	x = math.FMA(frac2, c.pex-x, x)
+	y = math.FMA(frac2, c.pey-y, y)
+	v := &FloatVertex{
+		X: x,
+		Y: y,
 	}
-	// Nothing of those two options
-	return nil, nil
+	return v, nil
+}
+
+type FloatIntersectionContext struct {
+	psx, psy, pex, pey float64 // start, end of partition coordinates
+	pdx, pdy           float64 // used in intersection calculations
+	lex, lsx, ley, lsy float64 // - same for checking line
+}
+
+// A cached record of useful things related to quickly finding the segments of
+// partition line that are inside the level (which allow to quickly compute the
+// length of partition line made solely of such segments), stored for alias of
+// partition line
+type NonVoidPerAlias struct {
+	data          []VertexPairC
+	success       bool
+	c             FloatIntersectionContext
+	partSegCoords VertexPairC
+	original      CollinearOrientedVertices
+}
+
+func IsClockwiseTriangle(p1, p2, p3 *FloatVertex) bool {
+	sgn := (p2.X-p1.X)*(p3.Y-p1.Y) - (p2.Y-p1.Y)*(p3.X-p1.X)
+	return sgn < 0
+}
+
+func (v *NodeVertex) toFloatVertex() *FloatVertex {
+	return &FloatVertex{
+		Id: int(v.idx),
+		X:  float64(v.X),
+		Y:  float64(v.Y),
+	}
+}
+
+func (v1 *FloatVertex) equalTo(v2 *FloatVertex) bool {
+	if v1 == nil || v2 == nil {
+		return false
+	}
+	return v1.X == v2.X && v1.Y == v2.Y
+}
+
+func (v1 *FloatVertex) equalToWithEpsilon(v2 *FloatVertex) bool {
+	if v1 == nil || v2 == nil {
+		return false
+	}
+	// same precision as VertexMap
+	return math.Abs(v1.X-v2.X) < VERTEX_EPSILON &&
+		math.Abs(v1.Y-v2.Y) < VERTEX_EPSILON
 }
 
 // Prefab for consistent ordering of collinear lines. "C" doesn't stand for
 // anything in particular
 type VertexPairC struct {
-	StartVertex *NodeVertex
-	EndVertex   *NodeVertex
+	StartVertex *FloatVertex
+	EndVertex   *FloatVertex
 	len         Number
 }
 
@@ -462,19 +596,28 @@ func (s *NodeSeg) toVertexPairC() VertexPairC {
 	// 2. dx = 0 then dy < 0
 	// minx -> maxx (dx > 0) (horizontal projection, high priority)
 	// maxy -> miny (dy < 0) (vertical projection, lower priority)
-	if VertexPairCOrdering(s.StartVertex, s.EndVertex, false) {
+	sv := s.StartVertex.toFloatVertex()
+	ev := s.EndVertex.toFloatVertex()
+	if VertexPairCOrdering(sv, ev, false) {
 		return VertexPairC{
-			StartVertex: s.StartVertex,
-			EndVertex:   s.EndVertex,
+			StartVertex: sv,
+			EndVertex:   ev,
 			len:         s.len,
 		}
 	} else { // swap
 		return VertexPairC{
-			StartVertex: s.EndVertex,
-			EndVertex:   s.StartVertex,
+			StartVertex: ev,
+			EndVertex:   sv,
 			len:         s.len,
 		}
 	}
+}
+
+// SegOrLineToFutureVertexPairC is replaced for extended nodes, see zdefs.go
+func (w *NodesWork) SegOrLineToVertexPairC(part *NodeSeg) VertexPairC {
+	// in nodes without extra precision, current coordinates is all one can
+	// rely on
+	return part.toVertexPairC()
 }
 
 // Establishes consistent way of sorting a set of vertices all lying on the same
@@ -486,7 +629,7 @@ func (s *NodeSeg) toVertexPairC() VertexPairC {
 // If strictLess is true, establishes strict ordering (returns true if a < b
 // instead of a <= b). This latter option is used when implementing Less() for
 // sort.Sort() or sort.Stable()
-func VertexPairCOrdering(a, b *NodeVertex, strictLess bool) bool {
+func VertexPairCOrdering(a, b *FloatVertex, strictLess bool) bool {
 	// a -> b is in correct "COrder" if either of the following is true
 	// 1. dx != 0 then dx > 0
 	// 2. dx = 0 then dy <= 0
@@ -505,82 +648,6 @@ func VertexPairCOrdering(a, b *NodeVertex, strictLess bool) bool {
 	}
 }
 
-func ProjectsLeftToVPCOrdering(a, b *NodeVertex) bool {
-	if a.X == b.X {
-		if a.Y < b.Y {
-			return false
-		} else {
-			return true
-		}
-	} else if a.X < b.X {
-		return false
-	} else {
-		return true
-	}
-}
-
-type CollinearVertexPairCByCoord []VertexPairC
-
-func (x CollinearVertexPairCByCoord) Len() int { return len(x) }
-func (x CollinearVertexPairCByCoord) Less(i, j int) bool {
-	// So we know all segs are collinear
-	// Now put their starting vertices in the same uniform order we put
-	// each vertice pair
-	return VertexPairCOrdering(x[i].StartVertex, x[j].StartVertex, true)
-}
-func (x CollinearVertexPairCByCoord) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
-
-// Returns the sum of all overlaps length
-// Return value only valid if sorted beforehand
-// I am not sure if it is better to remove overlaps or just count a new length
-// without all the overlaps - I will figure out the way to optimize later xD
-func (x CollinearVertexPairCByCoord) GetOverlapsLength() Number {
-	// With the ordering set to VertexPairCOrdering and lines known to be colinear,
-	// the two lines overlap if and only if: current line start vertex is
-	// between previous line start vertex (inclusive) and end vertex (not inclusive).
-	// That's all
-	overlapLength := Number(0)
-	for i := 1; i < len(x); i++ {
-		prevStart := x[i-1].StartVertex
-		prevEnd := x[i-1].EndVertex
-		curStart := x[i].StartVertex
-		if VertexPairCOrdering(curStart, prevEnd, true) &&
-			VertexPairCOrdering(prevStart, curStart, false) {
-			// Calculate dx and dy of overlap
-			dx := prevEnd.X - curStart.X
-			dy := prevEnd.Y - curStart.Y
-			overlapLength += Number(math.Sqrt(float64(dx*dx) + float64(dy*dy)))
-		}
-	}
-	return overlapLength
-}
-
-// And this function, unlike the GetOverlapsLength(), checks for a generic
-// case of whether two line segments are overlapping or not, without any
-// pre-existing knowledge
-func AreOverlapping(seg1Start, seg1End, seg2Start, seg2End *NodeVertex) bool {
-	return (VertexPairCOrdering(seg1Start, seg2Start, false) &&
-		VertexPairCOrdering(seg2Start, seg1End, false)) ||
-		(VertexPairCOrdering(seg1Start, seg2End, false) &&
-			VertexPairCOrdering(seg2End, seg1End, false)) ||
-		(VertexPairCOrdering(seg2Start, seg1Start, false) &&
-			VertexPairCOrdering(seg1Start, seg2End, false) &&
-			VertexPairCOrdering(seg2Start, seg1End, false) &&
-			VertexPairCOrdering(seg1End, seg2End, false))
-}
-
-func (x CollinearVertexPairCByCoord) toString() string {
-	if len(x) == 0 {
-		return "{EMPTY!}"
-	}
-	s := ""
-	for i := 0; i < len(x); i++ {
-		s += fmt.Sprintf("; [(%v;%v)-(%v;%v)]", x[i].StartVertex.X, x[i].StartVertex.Y,
-			x[i].EndVertex.X, x[i].EndVertex.Y)
-	}
-	return s
-}
-
 // Vertex plus a sign. Sign indicates the direction of vector aligned with the
 // partition line which vector is the result of projection of solid line ort
 // vector (which describes which direction solid line faces) onto the partition
@@ -594,18 +661,8 @@ func (x CollinearVertexPairCByCoord) toString() string {
 // void, whereas if two neighbor vertexes face towards each other the segment
 // is inside the level.
 type OrientedVertex struct {
-	v    *NodeVertex
+	v    *FloatVertex
 	left bool // true == points towards -dx (non-vertical partition line) or +dy (vertical partition line) (towards "lesser" vertex on a VertexPairCOrdering)
-}
-
-func (ov1 *OrientedVertex) equalTo(ov2 *OrientedVertex) bool {
-	if ov1 == nil || ov2 == nil {
-		return false
-	}
-	if ov1.v == nil || ov2.v == nil {
-		return false
-	}
-	return ov1.v.X == ov2.v.X && ov1.v.Y == ov2.v.Y && ov1.left == ov2.left
 }
 
 // An array of OrientedVertex instances
@@ -615,12 +672,10 @@ func (x CollinearOrientedVertices) Len() int { return len(x) }
 func (x CollinearOrientedVertices) Less(i, j int) bool {
 	// All vertices in this set lie on the same line, which allows us to perform
 	// an ordering
-	if x[i].v.X == x[j].v.X && x[i].v.Y == x[j].v.Y {
-		if i == len(x)-1 {
-			// don't put the last one before anything, unless we had something
-			// with different coords coming later
-			return false
-		}
+	// Additionally all vertices MUST have been filtered through
+	// VertexMap.SelectVertexClose, meaning vertices with identical coords have
+	// identical pointers
+	if x[i].v == x[j].v {
 		return x[i].left && !x[j].left
 	}
 	return VertexPairCOrdering(x[i].v, x[j].v, true)
@@ -638,6 +693,17 @@ func (x CollinearOrientedVertices) toString() string {
 	return s + "]"
 }
 
+func (x *OrientedVertex) toString() string {
+	if x == nil {
+		return "nil"
+	}
+	str := "RIGHT"
+	if x.left {
+		str = "LEFT"
+	}
+	return fmt.Sprintf("%s%s", str, x.v.toString())
+}
+
 // When some vertex occurs multiple times with different (or maybe same)
 // directions, this recognises which of these vertex occurencies should remain
 // so that it is possible to infer when line states changes from going through
@@ -645,33 +711,25 @@ func (x CollinearOrientedVertices) toString() string {
 func (x *CollinearOrientedVertices) Coalesce() bool {
 	allOk := true
 	l := len(*x)
-	for i := 1; i < l; i++ {
+	for i := 2; i < l-1; i++ {
 		// If values are equal, or roughly equal (due to rounding problems,
 		// have sometimes values that are very near on one axis, but are clearly
 		// meant to be same point)
-		if (*x)[i].valuesEqualWithEpsilon(&((*x)[i-1])) {
+		if (*x)[i].valuesEqual(&((*x)[i-1])) {
 			p, hasDominant, dominantDir := x.seekPastEqualsAndNoteSign(&((*x)[i-1]), i)
 			dropLen := p - i + 1
 			dropStart := i
-			// If dominant direction concides with the direction BEFORE this
-			// sequence of equal vertices, either of the two happened:
-			// 1. We have an error
-			// 2. State of line didn't change at the current coords just as if
-			// there was no dominant direction
-			hasDominant = hasDominant && !x.matchToPrev(i, p, dominantDir)
 			if hasDominant {
-				// State of line changed, as defined by the new dominant
-				// direction. Only dominant direction needs to be kept, and thus
-				// only one vertex. The start of the sequence inherits dominant
-				// direction, and survives
+				// State of line should have changed. Only dominant direction
+				// needs to be kept, and thus only one vertex. The start of the
+				// sequence inherits dominant direction, and survives
 				(*x)[i-1].left = dominantDir
 			} else {
-				// The state of line doesn't change at these coords - if it was
+				// The state of line didn't change at these coords - if it was
 				// going through the void, it continues through the void, if it
 				// was going through the level, it continues through the level.
 				// Thus omit in entirety. Except the #0 and #last vertices of
-				// entire array are not to be removed even in this case,
-				// although their direction can change.
+				// entire array are not to be removed even in this case
 				if (i > 1) && (p < l-1) {
 					dropLen++
 					dropStart--
@@ -683,6 +741,7 @@ func (x *CollinearOrientedVertices) Coalesce() bool {
 			}
 			i = dropStart - 1 // so that next iteration starts on i = dropStart of current
 			*x = (*x)[:l]
+			// Log.Printf("iter: %s\n", x.toString())
 		}
 	}
 	a := (*x)[:l]
@@ -690,39 +749,23 @@ func (x *CollinearOrientedVertices) Coalesce() bool {
 	return allOk
 }
 
-// When dominant direction of sequence of equal vertices matches the direction
-// of distinct vertex preceeding that sequence, but non-dominant direction
-// existed, we don't have an error but the state of line didn't really change
-// here
-// Returns true if this condition was detected, false otherwise
-func (x *CollinearOrientedVertices) matchToPrev(i, p int, dominantDir bool) bool {
-	// Does preceeding vertex exist?
-	if i-2 > 0 {
-		prevDir := (*x)[i-2].left
-		if prevDir == dominantDir {
-			// To make sure the condition is not result of an error, we check
-			// if there were both directions present
-			for j := i - 1; j <= p; j++ {
-				if (*x)[j].left != dominantDir {
-					return true // yes, one of vertices in the equal sequence is in the opposite direction
-					break
-				}
-			}
-		}
-	}
-	return false
-}
-
-func (ov1 *OrientedVertex) valuesEqualWithEpsilon(ov2 *OrientedVertex) bool {
+// valuesEqual is only valid if both vertices where returned through
+// VertexMap.SelectVertexClose and so it is enough to compare references
+func (ov1 *OrientedVertex) valuesEqual(ov2 *OrientedVertex) bool {
 	if ov1 == nil || ov2 == nil {
 		return false
 	}
 	if ov1.v == nil || ov2.v == nil {
 		return false
 	}
-	XequalWithEpsilon := Abs(int(ov1.v.X-ov2.v.X)) <= 1
-	YequalWithEpsilon := Abs(int(ov1.v.Y-ov2.v.Y)) <= 1
-	return XequalWithEpsilon && YequalWithEpsilon
+	// FIXME must be able to compare by reference only
+	// somehow VertexMap can return distinct pointers to same vertices in
+	// SelectVertexClose, what the hell
+	// check vigilantbsp -na=2p=1i=2c=z -b- -r- -d watrsp.wad -o watrsp_test.wad -vvv > watrsplog.txt
+	// 1-4 Sanity checks due to fluger stumbling on runs of equal-valued vertices
+	// with same direction
+	return ov1.v.X == ov2.v.X && ov1.v.Y == ov2.v.Y // NO!!!
+	//return ov1.v == ov2.v // this is what it should be instead: pointer test
 }
 
 // Returns last position where x[i] == ov since i>startPos, and also whether
@@ -738,8 +781,8 @@ func (x *CollinearOrientedVertices) seekPastEqualsAndNoteSign(ov *OrientedVertex
 	} else {
 		rightCnt++
 	}
-	for i := startPos; i < l; i++ {
-		if !((*x)[i].valuesEqualWithEpsilon(ov)) {
+	for i := startPos; i < l-1; i++ {
+		if !((*x)[i].valuesEqual(ov)) {
 			break
 		}
 		if (*x)[i].left {
@@ -748,35 +791,47 @@ func (x *CollinearOrientedVertices) seekPastEqualsAndNoteSign(ov *OrientedVertex
 			rightCnt++
 		}
 	}
+	a += leftCnt + rightCnt - 2
 	hasDominant := leftCnt != rightCnt
 	dominantDir := hasDominant && (leftCnt > rightCnt) // true means left, right otherwise
+	// Log.Printf("v = %s, len = %d, l: %d, r: %d, d? %t, d=%t\n", ov.toString(), a-startPos+1, leftCnt, rightCnt, hasDominant, dominantDir)
 	return a, hasDominant, dominantDir
 }
 
-func (x *OrientedVertex) toString() string {
+// And this function, unlike the GetOverlapsLength(), checks for a generic
+// case of whether two line segments are overlapping or not, without any
+// pre-existing knowledge
+func AreOverlapping(seg1Start, seg1End, seg2Start, seg2End *FloatVertex) bool {
+	return (VertexPairCOrdering(seg1Start, seg2Start, false) &&
+		VertexPairCOrdering(seg2Start, seg1End, false)) ||
+		(VertexPairCOrdering(seg1Start, seg2End, false) &&
+			VertexPairCOrdering(seg2End, seg1End, false)) ||
+		(VertexPairCOrdering(seg2Start, seg1Start, false) &&
+			VertexPairCOrdering(seg1Start, seg2End, false) &&
+			VertexPairCOrdering(seg2Start, seg1End, false) &&
+			VertexPairCOrdering(seg1End, seg2End, false))
+}
+
+type CollinearVertexPairCByCoord []VertexPairC
+
+func (x CollinearVertexPairCByCoord) toString() string {
+	if len(x) == 0 {
+		return "{EMPTY!}"
+	}
+	s := ""
+	for i := 0; i < len(x); i++ {
+		s += fmt.Sprintf("; [%s-%s]", x[i].StartVertex.toString(), x[i].EndVertex.toString())
+	}
+	return s
+}
+
+func (x *FloatVertex) toString() string {
 	if x == nil {
 		return "nil"
 	}
-	str := "RIGHT"
-	if x.left {
-		str = "LEFT"
-	}
-	return fmt.Sprintf("%s(%v,%v)", str, x.v.X, x.v.Y)
+	return replaceAfterDotZeros(fmt.Sprintf("(%f,%f)", x.X, x.Y))
 }
 
-// A cached record of useful things related to quickly finding the segments of
-// partition line that are inside the level (which allow to quickly compute the
-// length of partition line made solely of such segments), stored for alias of
-// partition line
-type NonVoidPerAlias struct {
-	data          []VertexPairC
-	success       bool
-	c             IntersectionContext
-	partSegCoords VertexPairC
-	original      CollinearOrientedVertices
-}
-
-func IsClockwiseTriangle(p1, p2, p3 *NodeVertex) bool {
-	sgn := (p2.X-p1.X)*(p3.Y-p1.Y) - (p2.Y-p1.Y)*(p3.X-p1.X)
-	return sgn < 0
+func replaceAfterDotZeros(s string) string {
+	return strings.ReplaceAll(s, ".000000", ".")
 }

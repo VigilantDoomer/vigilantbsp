@@ -561,7 +561,7 @@ func (r *RejectWork) setupLines() bool {
 			linesToIgnore:   r.linesToIgnore,
 		})
 		it = GetBlockityLines(bm)
-		lineTraces := make(map[[2]OrientedVertex]CollinearOrientedVertices)
+		lineTraces := make(map[[2]IntOrientedVertex]IntCollinearOrientedVertices)
 		blXMin = int(bm.header.XMin)
 		blXMax = bm.XMax
 		blYMin = int(bm.header.YMin)
@@ -619,7 +619,7 @@ func (r *RejectWork) setupLines() bool {
 // line by mistake. Looks like there are things to improve...
 func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 	perimeter []uint16, it *BlockityLines,
-	lineTraces map[[2]OrientedVertex]CollinearOrientedVertices,
+	lineTraces map[[2]IntOrientedVertex]IntCollinearOrientedVertices,
 	blXMin, blXMax, blYMin, blYMax int, vertices []IntVertex) int {
 	// Ok, let's see if we failed miserably for this sector on some other
 	// perimeter (couldn't trace) and so already using the fallback to
@@ -690,7 +690,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		srLine.pey = Number(Y2)
 		srLine.pdx = Number(X2 - X1)
 		srLine.pdy = Number(Y2 - Y1)
-		partSegCoords := srLine.toVertexPairC()
+		partSegCoords := srLine.toIntVertexPairC()
 		var c IntersectionContext
 		c.psx = partSegCoords.StartVertex.X
 		c.psy = partSegCoords.StartVertex.Y
@@ -698,7 +698,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		c.pey = partSegCoords.EndVertex.Y
 		c.pdx = c.pex - c.psx
 		c.pdy = c.pey - c.psy
-		ov1, ov2 := PartitionInBoundary(&srLine, &c, blXMax, blYMax, blXMin,
+		ov1, ov2 := IntPartitionInBoundary(&srLine, &c, blXMax, blYMax, blXMin,
 			blYMin, partSegCoords)
 		if ov1 == nil || ov2 == nil {
 			Log.Verbose(2, "Reject: PartitionInBoundary failed for line %d.",
@@ -706,10 +706,10 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			// Try next line
 			continue
 		}
-		traceKey := [2]OrientedVertex{*ov1, *ov2}
+		traceKey := [2]IntOrientedVertex{*ov1, *ov2}
 		trace, ok := lineTraces[traceKey]
 		if !ok {
-			trace = CollinearOrientedVertices(make([]OrientedVertex, 1))
+			trace = IntCollinearOrientedVertices(make([]IntOrientedVertex, 1))
 			trace[0] = *ov1
 			it.SetContext(int(ov1.v.X), int(ov1.v.Y), int(ov2.v.X), int(ov2.v.Y))
 			for it.NextLine() {
@@ -722,16 +722,16 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 				if c.lsx == c.lex && c.lsy == c.ley { // skip zero-length lines
 					continue
 				}
-				pt1, pt2 := c.getIntersectionOrIndicence()
+				pt1, pt2 := c.intGetIntersectionOrIndicence()
 				if pt1 != nil {
 					if pt2 != nil {
 						// Incidence of no use to us
 					} else { // pt2 == nil
 						// Intersection
-						left := IsClockwiseTriangle(&NodeVertex{X: c.lsx, Y: c.lsy},
+						left := IntIsClockwiseTriangle(&NodeVertex{X: c.lsx, Y: c.lsy},
 							&NodeVertex{X: c.lex, Y: c.ley}, ov1.v)
 						pt1.idx = uint32(aline)
-						ov := OrientedVertex{
+						ov := IntOrientedVertex{
 							v:    pt1,
 							left: left,
 						}
@@ -758,7 +758,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 
 		leftStart := -1
 		for i := 0; i < len(trace); i++ {
-			if VertexPairCOrdering(trace[i].v, partSegCoords.StartVertex, true) {
+			if IntVertexPairCOrdering(trace[i].v, partSegCoords.StartVertex, true) {
 				leftStart = i
 			} else {
 				break
@@ -766,7 +766,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		}
 		rightStart := len(trace)
 		for i := len(trace) - 1; i >= 0; i-- {
-			if VertexPairCOrdering(partSegCoords.EndVertex, trace[i].v, true) {
+			if IntVertexPairCOrdering(partSegCoords.EndVertex, trace[i].v, true) {
 				rightStart = i
 			} else {
 				break
@@ -835,7 +835,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 				// 207 assigned to the interior 2-sided lines
 				nv1, nv2 = nv2, nv1
 			}
-			isLeft := !IsClockwiseTriangle(nv1, nv2, nv3)
+			isLeft := !IntIsClockwiseTriangle(nv1, nv2, nv3)
 			Log.Verbose(3, "Reject: sector %d traced line %d hit line %d, left = %t, traceLeft = %t.\n",
 				sector, lineThatWasTraced, aline, isLeft, trace[i].left)
 			// Compare where the point is to where the intersecting line looks
@@ -1399,7 +1399,7 @@ func (r *RejectWork) divideRegion(src, tgt *TransLine) bool {
 
 	// See if we ran into an integer truncation problem (shortcut if we did)
 	if (crossPoint == *(src.start)) || (crossPoint == *(src.end)) {
-		Log.Verbose(3, "Debug: integer truncation detected in divideRegion for lines %d & %d\n", src.index, tgt.index)
+		Log.Verbose(3, "Reject: integer truncation detected in divideRegion for lines %d & %d\n", src.index, tgt.index)
 		return r.checkLOS(src, tgt)
 	}
 

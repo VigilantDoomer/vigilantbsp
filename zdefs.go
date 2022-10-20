@@ -75,6 +75,8 @@ import (
 // #pragma replace_prototype *IntersectionContext.computeIntersection with *IntersectionContext.ZcomputeIntersection_Proto
 // #pragma replace_prototype *IntersectionContext.doLinesIntersect with *IntersectionContext.ZdoLinesIntersect_Proto
 // #pragma replace_prototype *NodesWork.SetNodeCoords with *NodesWork.ZSetNodeCoords_Proto
+// #pragma replace_prototype *NodesWork.updateSegLenBetter with *NodesWork.ZupdateSegLenBetter_Proto
+// #pragma replace_prototype *NodesWork.SegOrLineToVertexPairC with *NodesWork.ZSegOrLineToVertexPairC_Proto
 
 // Finally, we need to assign the core function - which will include all other
 // generated stuff in its calltree - to a predefined callback. The generated
@@ -218,7 +220,7 @@ func (log *MyLogger) ZDumpSegs_Proto(ts *NodeSeg) {
 	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
 	for tmps := ts; tmps != nil; tmps = tmps.next {
 		log.segs.WriteString(fmt.Sprintf(
-			"  Linedef: %d Flip: %d (%f,%f) - (%f, %f)",
+			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
 			tmps.Linedef, tmps.Flip, tmps.StartVertex.X, tmps.StartVertex.Y,
 			tmps.EndVertex.X, tmps.EndVertex.Y))
 		if tmps.sector != allSector {
@@ -429,13 +431,25 @@ func (w *NodesWork) ZSetNodeCoords_Proto(part *NodeSeg, bbox *NodeBounds,
 	// functionality and was not designed to be used here
 	// TODO downscale would also be acceptable for source ports? Downscale could
 	// be used in vanilla nodes format too, btw
-	ov1, ov2 := PartitionInBoundary(part, c, bbox.Xmax, bbox.Ymax, bbox.Xmin,
+	newc := &FloatIntersectionContext{
+		psx: float64(c.psx),
+		psy: float64(c.psy),
+		pex: float64(c.pex),
+		pey: float64(c.pey),
+		pdx: float64(c.pdx),
+		pdy: float64(c.pdy),
+	}
+	ov1, ov2, _ := PartitionInBoundary(part, newc, bbox.Xmax, bbox.Ymax, bbox.Xmin,
 		bbox.Ymin, part.toVertexPairC())
 	if ov1 == nil && ov2 == nil {
 		Log.Printf("Very bad - PartitionInBoundary failed to correct extended nodes coords when it was needed.\n")
 	}
-	dx := ov2.v.X - ov1.v.X
-	dy := ov2.v.Y - ov1.v.Y
+	ov1.X = math.Round(ov1.X)
+	ov2.X = math.Round(ov2.X)
+	ov1.Y = math.Round(ov1.Y)
+	ov2.Y = math.Round(ov2.Y)
+	dx := ov2.X - ov1.X
+	dy := ov2.Y - ov1.Y
 	oldDx := pex - psx
 	oldDy := pey - psy
 	if dx != 0 {
@@ -455,14 +469,56 @@ func (w *NodesWork) ZSetNodeCoords_Proto(part *NodeSeg, bbox *NodeBounds,
 			return
 		}
 	}
-	// Should be always rounded
-	w.nodeX = int(ov1.v.X)
-	w.nodeY = int(ov1.v.Y)
-	w.nodeDx = int(ov2.v.X) - w.nodeX
-	w.nodeDy = int(ov2.v.Y) - w.nodeY
+	// Should already be rounded
+	w.nodeX = int(ov1.X)
+	w.nodeY = int(ov1.Y)
+	w.nodeDx = int(ov2.X) - w.nodeX
+	w.nodeDy = int(ov2.Y) - w.nodeY
 	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 		w.nodeDy >= -32768 {
 		Log.Verbose(1, "I've scaled seg coords to the bounding box to use as partition line definition in node structure, but they overflow node values. Source linedef: %d\n",
 			part.Linedef)
+	}
+}
+
+// Override for updateSegLenBetter, which updates seg len field for each seg
+// creates as a result of the split.
+func (w *NodesWork) ZupdateSegLenBetter_Proto(s *NodeSeg) {
+	dy := float64(s.pey - s.psy)
+	dx := float64(s.pex - s.psx)
+	s.len = Number(math.Sqrt(dx*dx + dy*dy))
+}
+
+// Override for SegOrLineToFutureVertexPairC, it so happens that slight changes
+// to partition seg coords occuring during line splitting in extended nodes can
+// break line tracing (even though it is a rather rare occurence). Nonetheless,
+// the precision of extended nodes was intended to keep lines angle almost
+// unchanged, so let's use original linedef coords for tracing line through void
+// and non-void
+func (w *NodesWork) ZSegOrLineToVertexPairC_Proto(part *NodeSeg) VertexPairC {
+	x1, y1, x2, y2 := w.lines.GetAllXY(part.Linedef)
+	sv := &FloatVertex{
+		X: float64(x1),
+		Y: float64(y1),
+	}
+	ev := &FloatVertex{
+		X: float64(x2),
+		Y: float64(y2),
+	}
+	dx := float64(x2 - x1)
+	dy := float64(y2 - y1)
+	l := Number(math.Sqrt(dx*dx + dy*dy))
+	if VertexPairCOrdering(sv, ev, false) {
+		return VertexPairC{
+			StartVertex: sv,
+			EndVertex:   ev,
+			len:         l,
+		}
+	} else { // swap
+		return VertexPairC{
+			StartVertex: ev,
+			EndVertex:   sv,
+			len:         l,
+		}
 	}
 }

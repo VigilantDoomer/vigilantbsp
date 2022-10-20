@@ -911,7 +911,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			}
 
 			// part II - Remove overlaps from slen
-			collinearSegs := CollinearVertexPairCByCoord(w.incidental) // type cast
+			collinearSegs := IntCollinearVertexPairCByCoord(w.incidental) // type cast
 			// must sort before GetOverlapsLength() can work
 			sort.Sort(collinearSegs)
 			// and now overlap length finally goes poof
@@ -1124,7 +1124,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 				*slen += check.len
 				// add to incidental list. Will be used to correct slen
 				// contribution above
-				w.incidental = append(w.incidental, check.toVertexPairC())
+				w.incidental = append(w.incidental, check.toIntVertexPairC())
 				if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
 					leftside = true
 				}
@@ -1272,7 +1272,7 @@ func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) Number {
 	} else if part.pdy == 0 { // horizontal line
 		l = Number(bbox.Xmax - bbox.Xmin)
 	} else { // diagonal line
-		var c IntersectionContext
+		var c FloatIntersectionContext
 		partSegCoords := part.toVertexPairC()
 		c.psx = partSegCoords.StartVertex.X
 		c.psy = partSegCoords.StartVertex.Y
@@ -1280,14 +1280,14 @@ func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) Number {
 		c.pey = partSegCoords.EndVertex.Y
 		c.pdx = c.pex - c.psx
 		c.pdy = c.pey - c.psy
-		contextStart, contextEnd := PartitionInBoundary(part, &c, bbox.Xmax,
+		contextStart, contextEnd, _ := PartitionInBoundary(part, &c, bbox.Xmax,
 			bbox.Ymax, bbox.Xmin, bbox.Ymin, partSegCoords)
 		if contextStart == nil {
 			// Backup
 			return GetPartitionLength_LegacyWay(part, bbox)
 		}
-		fullXDiff := float64(contextStart.v.X) - float64(contextEnd.v.X)
-		fullYDiff := float64(contextEnd.v.Y) - float64(contextStart.v.Y)
+		fullXDiff := contextStart.X - contextEnd.X
+		fullYDiff := contextEnd.Y - contextStart.Y
 		l = Number(math.Round(math.Sqrt(fullXDiff*fullXDiff + fullYDiff*fullYDiff)))
 	}
 	return l
@@ -1314,12 +1314,15 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		w.nonVoidCache[part.alias] = nonVoidStruc
 	}
 	if !nonVoidStruc.success {
+		//Log.Verbose(2, "Computing old value...\n")
 		return GetFullPartitionLength(part, bbox)
 	}
 
+	//Log.Verbose(2, "Computing NEW value...\n")
 	// Apply bbox boundaries now. Damn, this means messing with OrientedVertex's
 	// again. Fuck.
-	contextStart, contextEnd := PartitionInBoundary(part, &(nonVoidStruc.c), bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
+	contextStart, contextEnd, _ := PartitionInBoundary(part,
+		&(nonVoidStruc.c), bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 		nonVoidStruc.partSegCoords)
 	if contextStart == nil || contextEnd == nil {
 		// No worry, this error shouldn't happen anymore
@@ -1327,11 +1330,11 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		return GetFullPartitionLength(part, bbox)
 	}
 
-	if contextStart.equalTo(contextEnd) {
+	if contextStart.equalToWithEpsilon(contextEnd) {
 		Log.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
 			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
-			contextStart.v.X, contextStart.v.Y, contextEnd.v.X, contextEnd.v.Y)
+			contextStart.X, contextStart.Y, contextEnd.X, contextEnd.Y)
 		return 0
 	}
 
@@ -1346,7 +1349,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 
 	for i := 0; i < len(nonVoid); i++ {
 		// forward!
-		if AreOverlapping(contextStart.v, contextEnd.v, nonVoid[i].StartVertex,
+		if AreOverlapping(contextStart, contextEnd, nonVoid[i].StartVertex,
 			nonVoid[i].EndVertex) {
 			hitStart = i
 			break
@@ -1354,7 +1357,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 	}
 	for i := len(nonVoid) - 1; i >= 0; i-- {
 		// backward
-		if AreOverlapping(contextStart.v, contextEnd.v, nonVoid[i].StartVertex,
+		if AreOverlapping(contextStart, contextEnd, nonVoid[i].StartVertex,
 			nonVoid[i].EndVertex) {
 			hitStop = i
 			break
@@ -1363,13 +1366,20 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 	if hitStart < 0 || hitStop < 0 {
 		// Really, how can this be? We had this seg within our bounds, but my
 		// deconstruction didn't see it there
-		Log.Verbose(2, nonVoidStruc.original.toString())
-		Log.Verbose(2, "More dropouts! %v %v %s [%s-%s]\n", hitStart, hitStop,
-			CollinearVertexPairCByCoord(nonVoid).toString(), contextStart.toString(),
-			contextEnd.toString())
+		Log.Verbose(2, "to below: %s", nonVoidStruc.original.toString())
+		Log.Verbose(2, "More dropouts! %v %v %s\n  ...... %d [%s-%s]\n",
+			hitStart, hitStop,
+			CollinearVertexPairCByCoord(nonVoid).toString(), part.Linedef,
+			contextStart.toString(), contextEnd.toString())
 		return GetFullPartitionLength(part, bbox)
 	}
 
+	/* // Doesn't actually happen. But length is yielded zero. How?
+	if hitStart > hitStop {
+		Log.Verbose(2, "Partition %d in  (%v,%v,%v,%v) hitStart > hitStop, really? : %d > %d\n",
+			part.Linedef, bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin, hitStart,
+			hitStop)
+	}*/
 	// At least it is possible to get here
 	L := Number(0)
 	for i := hitStart; i <= hitStop; i++ {
@@ -1379,24 +1389,49 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		// execute then
 		precomputedInvalid := false
 		if i == hitStart {
-			if !VertexPairCOrdering(contextStart.v, nonVoid[i].StartVertex, false) {
-				thisStart = contextStart.v
+			if !VertexPairCOrdering(contextStart, nonVoid[i].StartVertex, false) {
+				thisStart = contextStart
 			}
 			precomputedInvalid = true
 		}
 		if i == hitStop {
-			if VertexPairCOrdering(contextEnd.v, nonVoid[i].EndVertex, false) {
-				thisEnd = contextEnd.v
+			if VertexPairCOrdering(contextEnd, nonVoid[i].EndVertex, false) {
+				thisEnd = contextEnd
 			}
 			precomputedInvalid = true
 		}
 		if !precomputedInvalid { // whole of current interval goes in
 			L = L + nonVoid[i].len
+			if nonVoid[i].len == 0 {
+				Log.Verbose(2, "non-void interval computed with zero length (precomputed)\n")
+			} else if nonVoid[i].len < 0 {
+				Log.Verbose(2, "what? non-void interval computed with NEGATIVE length (precomputed)\n")
+			}
 		} else { // only part of current interval goes in
-			dx := float64(thisEnd.X - thisStart.X)
-			dy := float64(thisEnd.Y - thisStart.Y)
-			L = L + Number(math.Sqrt(dx*dx+dy*dy))
+			dx := thisEnd.X - thisStart.X
+			dy := thisEnd.Y - thisStart.Y
+			/*if part.Linedef == 1897 && hitStart == 3 && hitStop == 3 {
+				Log.Printf("debug %v %v %s-%s context:%s-%s\n", dx, dy, thisStart.toString(), thisEnd.toString(),
+					contextStart.toString(), contextEnd.toString())
+			}*/
+			l0 := Number(math.Sqrt(dx*dx + dy*dy))
+			L = L + l0
+			if l0 == 0 {
+				// ok, this is a normal occurence, actually. Range can cut the
+				// interval right at the end point
+				/*Log.Verbose(2, "part of non-void interval REcomputed with zero length against current nodebox %s - %s (%d)\n ....... %s ............... range (%d,%d)-(%d,%d)\n",
+				thisStart.toString(), thisEnd.toString(), part.Linedef, Future_CollinearVertexPairCByCoord(nonVoid).toString(),
+				bbox.Xmin, bbox.Ymin, bbox.Xmax, bbox.Ymax)*/
+			} else if l0 < 0 {
+				Log.Verbose(2, "what? sqrt yieled NEGATIVE value after cast?\n")
+			}
 		}
+	}
+	if L == 0 {
+		Log.Verbose(2, "returning 0 (sad)\n ........... %d %s ........ range (%d,%d) - (%d, %d) hit: %d,%d \n",
+			part.Linedef, CollinearVertexPairCByCoord(nonVoid).toString(),
+			bbox.Xmin, bbox.Ymin, bbox.Xmax, bbox.Ymax,
+			hitStart, hitStop)
 	}
 	return L
 }

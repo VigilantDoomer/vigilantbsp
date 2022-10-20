@@ -143,9 +143,10 @@ type NodesWork struct {
 	pickNode        PickNodeFunc
 	createNodeSS    CreateNodeSSFunc // SS stands for "single sector". In case you worried.
 	sectorHits      []uint8          // used by PickNode_Visplane* variants, keeps track of sectors on both sides
-	incidental      []VertexPairC    // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
+	incidental      []IntVertexPairC // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
 	solidMap        *Blockmap
 	nonVoidCache    map[int]NonVoidPerAlias
+	dgVertexMap     *VertexMap // vertex map for computing void parts
 	blockity        *BlockityLines
 	deepNodes       []DeepNode // also used for Zdoom (extended/compressed) nodes while in production
 	deepSubsectors  []DeepSubSector
@@ -241,19 +242,23 @@ const VMAP_BLOCK_SHIFT = 8 + FRACBITS
 
 const VMAP_BLOCK_SIZE = 1 << VMAP_BLOCK_SHIFT
 
+const VMAP_SAFE_MARGIN = 2.0 // Floating point garbage
+
 // VertexMap is a ZDBSP thingy. Allows to lookup close-enough vertices among
 // existing ones to the one created as the result of intersection. I am not sure
 // as to what the exact consequences of choosing a very slightly different
 // vertex instead of exact match are. More investigation needed
 type VertexMap struct {
-	Grid       [][]*VMapVertex
+	Grid       [][]*FloatVertex
+	Snapshot   []int
 	BlocksWide int
 	BlocksTall int
 	MinX, MinY float64
 	MaxX, MaxY float64
 }
 
-type VMapVertex struct {
+// FloatVertex is a vertex with floating point coordinates and associated id
+type FloatVertex struct {
 	Id int
 	X  float64
 	Y  float64
@@ -358,7 +363,7 @@ func NodesGenerator(input *NodesInput) {
 		pickNode:        PickNodeFuncFromOption(input.pickNodeUser),
 		createNodeSS:    CreateNodeSSFromOption(input.pickNodeUser),
 		sectorHits:      make([]byte, whichLen),
-		incidental:      make([]VertexPairC, 0),
+		incidental:      make([]IntVertexPairC, 0),
 		solidMap:        solidMap,
 		nonVoidCache:    make(map[int]NonVoidPerAlias),
 		SsectorMask:     ssectorMask,
@@ -382,6 +387,18 @@ func NodesGenerator(input *NodesInput) {
 	} else {
 		workData.vertexCache = make(map[SimpleVertex]int)
 		PopulateVertexCache(workData.vertexCache, allSegs)
+
+	}
+	if workData.solidMap != nil {
+		// Need to initialize dgVertexMap - the new line tracing algo for
+		// advanced visplane reduction partitioner uses it, and it is distinct
+		// from the regular vertex map (which gets used for extended nodes) in
+		// many aspects.
+		lineBox := GetLineBounds(workData.lines)
+		dgVertexMap := CreateVertexMap(lineBox.Xmin, lineBox.Ymin,
+			lineBox.Xmax, lineBox.Ymax)
+		PopulateVertexMapFromLines(dgVertexMap, workData.lines)
+		workData.dgVertexMap = dgVertexMap
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
@@ -1033,6 +1050,69 @@ func FindLimits(ts *NodeSeg) *NodeBounds {
 			break
 		}
 		ts = ts.next
+	}
+	return &r
+}
+
+func UnionNodeBounds(b1, b2 *NodeBounds) *NodeBounds {
+	bu := &NodeBounds{
+		Xmin: b1.Xmin,
+		Xmax: b1.Xmax,
+		Ymin: b1.Ymin,
+		Ymax: b1.Ymax,
+	}
+	if b2.Xmin < bu.Xmin {
+		bu.Xmin = b2.Xmin
+	}
+	if b2.Xmax > bu.Xmax {
+		bu.Xmax = b2.Xmax
+	}
+	if b2.Ymin < bu.Ymin {
+		bu.Ymin = b2.Ymin
+	}
+	if b2.Ymax > bu.Ymax {
+		bu.Ymax = b2.Ymax
+	}
+	return bu
+}
+
+func GetLineBounds(lines AbstractLines) *NodeBounds {
+	var r NodeBounds
+	// using 32-bit signed min/max values as initial, even though most engines
+	// don't have coords this big
+	r.Xmax = -2147483648
+	r.Ymax = -2147483648
+	r.Xmin = 2147483647
+	r.Ymin = 2147483647
+	l := lines.Len()
+	for i := uint16(0); i < l; i++ {
+		x1, x2, y1, y2 := lines.GetAllXY(i)
+
+		if x1 < r.Xmin {
+			r.Xmin = x1
+		}
+		if x1 > r.Xmax {
+			r.Xmax = x1
+		}
+		if y1 < r.Ymin {
+			r.Ymin = y1
+		}
+		if y1 > r.Ymax {
+			r.Ymax = y1
+		}
+
+		if x2 < r.Xmin {
+			r.Xmin = x2
+		}
+		if x2 > r.Xmax {
+			r.Xmax = x2
+		}
+		if y2 < r.Ymin {
+			r.Ymin = y2
+		}
+		if y2 > r.Ymax {
+			r.Ymax = y2
+		}
 	}
 	return &r
 }
@@ -1730,6 +1810,10 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 func (w *NodesWork) recomputeSegs(originSeg, newSeg *NodeSeg) {
 	// originSeg is the one that existed before split on this iteration,
 	// newSeg is the one that was created because of the split on this iteration
+
+	// NOTE length computation here not good enough for extended nodes, due to
+	// Offset being integer. Instead for extended nodes, will recompute length
+	// in recomputeOneSeg
 	originNewLen := int(newSeg.Offset) - int(originSeg.Offset)
 	originSeg.len = Number(originNewLen)
 	newSeg.len = newSeg.len - Number(originNewLen)
@@ -1752,6 +1836,7 @@ func (w *NodesWork) recomputeOneSeg(s *NodeSeg) {
 	s.psy = s.StartVertex.Y
 	s.pdy = s.pey - s.psy
 	s.perp = s.pdx*s.psy - s.psx*s.pdy
+	w.updateSegLenBetter(s) // anchor to inject precise len computation for extended nodes
 	bamEffect := w.lines.GetBAMEffect(s.Linedef)
 	if bamEffect.Action == BAM_REPLACE { // zokumbsp actions 1081, 1083
 		s.Angle = bamEffect.Value
@@ -1771,6 +1856,15 @@ func (w *NodesWork) recomputeOneSeg(s *NodeSeg) {
 		sdef := w.lines.GetSidedefIndex(s.Linedef, isFront)
 		s.Angle += int16(float64(w.sides[sdef].XOffset) * float64(65536.0/360.0))
 	}
+}
+
+// Placeholder that will be overridden for extended nodes when code generator
+// is used
+func (w *NodesWork) updateSegLenBetter(s *NodeSeg) {
+	// does nothing for normal nodes. For normal nodes, seg length is already
+	// computed "good enough" using integer offset, but for extended nodes,
+	// this won't fly and so you'll find an override defined in zdefs.go for
+	// code generator to parse and generate znodegen.go
 }
 
 func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess {
@@ -2162,10 +2256,14 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 		newW.vertexMap = w.vertexMap.Clone()
 	}
 
+	if w.dgVertexMap != nil {
+		newW.dgVertexMap = w.dgVertexMap.Clone()
+	}
+
 	newW.segAliasObj = new(SegAliasHolder)
 	newW.segAliasObj.Init()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
-	newW.incidental = make([]VertexPairC, 0)
+	newW.incidental = make([]IntVertexPairC, 0)
 
 	// NOTE newW.solidMap should not be written, only read from. Else we are screwed
 
@@ -2215,6 +2313,16 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 }
 
 func CreateVertexMap(minx, miny, maxx, maxy int) *VertexMap {
+	// Mitigation for a possible crash when producing line traces against solid
+	// lines (void and non-void differentiation) in advanced visplane reduction
+	// for, apparently, bent segs (previously split segs whose angle is
+	// different from angle of the original linedef - in node format that lacks
+	// precision) can produce intersection vertice slightly outside the bounds
+	minx = minx - VMAP_SAFE_MARGIN
+	miny = miny - VMAP_SAFE_MARGIN
+	maxx = maxx + VMAP_SAFE_MARGIN
+	maxy = maxy + VMAP_SAFE_MARGIN
+
 	vm := &VertexMap{
 		MinX: float64(minx),
 		MinY: float64(miny),
@@ -2227,7 +2335,7 @@ func CreateVertexMap(minx, miny, maxx, maxy int) *VertexMap {
 	}
 	vm.MaxX = vm.MinX + float64(vm.BlocksWide*VMAP_BLOCK_SIZE-1)/FIXED16DOT16_MULTIPLIER
 	vm.MaxY = vm.MinY + float64(vm.BlocksTall*VMAP_BLOCK_SIZE-1)/FIXED16DOT16_MULTIPLIER
-	vm.Grid = make([][]*VMapVertex, vm.BlocksWide*vm.BlocksTall)
+	vm.Grid = make([][]*FloatVertex, vm.BlocksWide*vm.BlocksTall)
 	return vm
 }
 
@@ -2237,15 +2345,21 @@ func (vm *VertexMap) Clone() *VertexMap {
 	}
 	newVm := &VertexMap{}
 	*newVm = *vm
-	newVm.Grid = make([][]*VMapVertex, 0, len(vm.Grid))
+	newVm.Grid = make([][]*FloatVertex, 0, len(vm.Grid))
 	for _, it := range vm.Grid {
-		cpit := make([]*VMapVertex, 0, len(it))
+		cpit := make([]*FloatVertex, 0, len(it))
 		for _, it2 := range it {
-			nv := &VMapVertex{}
+			nv := &FloatVertex{}
 			*nv = *it2
 			cpit = append(cpit, nv)
 		}
 		newVm.Grid = append(newVm.Grid, cpit)
+	}
+	if vm.Snapshot != nil {
+		newVm.Snapshot = make([]int, len(vm.Grid))
+		for i, it := range vm.Snapshot {
+			newVm.Snapshot[i] = it
+		}
 	}
 	return newVm
 }
@@ -2255,12 +2369,27 @@ func (vm *VertexMap) GetBlock(x, y float64) int {
 	// assert y >= MinY
 	// assert x <= MaxX
 	// assert y <= MaxY
-	return int(uint((x-vm.MinX)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT +
+	// The above constraints are actually violated sometimes by some epsilon
+	// because floating point is used and not fixed point like in ZDBSP. Such
+	// cases don't produce out of bounds index, though, because of being really
+	// close to the border values. For some runaway cases, see a different
+	// mitigation below
+	ret := int(uint((x-vm.MinX)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT +
 		(uint((y-vm.MinY)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT)*
 			uint(vm.BlocksWide))
+	if ret < 0 || ret >= len(vm.Grid) {
+		Log.Verbose(1, "Vertex map index out of range, source values: x=%f, y=%f xmin,ymin=(%f,%f) xmax,ymax=(%f,%f)\n",
+			x, y, vm.MinX, vm.MinY, vm.MaxX, vm.MaxY)
+		// Allow vertex map to function without panic in such cases, should they
+		// happen
+		// Accumulating such errors (if wrong borders are specified) can cause
+		// slowdown, but not crash, and should not result in malfunction
+		return 0
+	}
+	return ret
 }
 
-func (vm *VertexMap) SelectVertexExact(x, y float64, id int) *VMapVertex {
+func (vm *VertexMap) SelectVertexExact(x, y float64, id int) *FloatVertex {
 	block := &(vm.Grid[vm.GetBlock(x, y)])
 	for _, it := range *block {
 		if it.X == x && it.Y == y {
@@ -2270,7 +2399,7 @@ func (vm *VertexMap) SelectVertexExact(x, y float64, id int) *VMapVertex {
 	return vm.insertVertex(x, y, id)
 }
 
-func (vm *VertexMap) SelectVertexClose(x, y float64) *VMapVertex {
+func (vm *VertexMap) SelectVertexClose(x, y float64) *FloatVertex {
 	block := &(vm.Grid[vm.GetBlock(x, y)])
 	for _, it := range *block {
 		if math.Abs(it.X-x) < VERTEX_EPSILON &&
@@ -2281,11 +2410,11 @@ func (vm *VertexMap) SelectVertexClose(x, y float64) *VMapVertex {
 	return vm.insertVertex(x, y, -1)
 }
 
-func (vm *VertexMap) insertVertex(x, y float64, id int) *VMapVertex {
+func (vm *VertexMap) insertVertex(x, y float64, id int) *FloatVertex {
 	// If a vertex is near a block boundary, then it will be inserted on
 	// both sides of the boundary so that SelectVertexClose can find
 	// it by checking in only one block.
-	ret := &VMapVertex{
+	ret := &FloatVertex{
 		X:  x,
 		Y:  y,
 		Id: id,
@@ -2323,12 +2452,44 @@ func (vm *VertexMap) insertVertex(x, y float64, id int) *VMapVertex {
 	return ret
 }
 
+// RestoreOrBeginSnapshot() removes all vertices from map that were added
+// since previous RestoreOrBeginSnapshot() call. Snapshots are useful to create
+// distinct vertex spaces for line traces in diffgeometry operations (volatile
+// vertices computed there might not end up being vertices actually placed on
+// the map, and have additional restriction of being sortable alongside the
+// line)
+// As with the rest of VertexMap methods, snapshots do NOT provide for
+// concurrent access
+func (vm *VertexMap) RestoreOrBeginSnapshot() {
+	if vm.Snapshot == nil {
+		// begin
+		vm.Snapshot = make([]int, len(vm.Grid))
+		for i, it := range vm.Grid {
+			vm.Snapshot[i] = len(it)
+		}
+	} else {
+		// restore
+		for i, it := range vm.Grid {
+			vm.Grid[i] = it[:vm.Snapshot[i]]
+		}
+	}
+}
+
 func PopulateVertexMap(vm *VertexMap, allSegs []*NodeSeg) {
 	for _, seg := range allSegs {
 		vm.SelectVertexExact(float64(seg.psx), float64(seg.psy),
 			int(seg.StartVertex.idx))
 		vm.SelectVertexExact(float64(seg.pex), float64(seg.pey),
 			int(seg.EndVertex.idx))
+	}
+}
+
+func PopulateVertexMapFromLines(vm *VertexMap, lines AbstractLines) {
+	l := int(lines.Len())
+	for i := 0; i < l; i++ {
+		x1, x2, y1, y2 := lines.GetAllXY(uint16(i))
+		vm.SelectVertexExact(float64(x1), float64(y1), i)
+		vm.SelectVertexExact(float64(x2), float64(y2), i)
 	}
 }
 

@@ -52,9 +52,10 @@ type ZExt_NodesWork struct {
 	pickNode        ZExt_PickNodeFunc
 	createNodeSS    ZExt_CreateNodeSSFunc
 	sectorHits      []uint8
-	incidental      []ZExt_VertexPairC
+	incidental      []ZExt_IntVertexPairC
 	solidMap        *Blockmap
 	nonVoidCache    map[int]ZExt_NonVoidPerAlias
+	dgVertexMap     *VertexMap
 	blockity        *BlockityLines
 	deepNodes       []DeepNode
 	deepSubsectors  []DeepSubSector
@@ -195,7 +196,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		pickNode:        ZExt_PickNodeFuncFromOption(input.pickNodeUser),
 		createNodeSS:    ZExt_CreateNodeSSFromOption(input.pickNodeUser),
 		sectorHits:      make([]byte, whichLen),
-		incidental:      make([]ZExt_VertexPairC, 0),
+		incidental:      make([]ZExt_IntVertexPairC, 0),
 		solidMap:        solidMap,
 		nonVoidCache:    make(map[int]ZExt_NonVoidPerAlias),
 		SsectorMask:     ssectorMask,
@@ -219,6 +220,15 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	} else {
 		workData.vertexCache = make(map[SimpleVertex]int)
 		ZExt_PopulateVertexCache(workData.vertexCache, allSegs)
+
+	}
+	if workData.solidMap != nil {
+
+		lineBox := GetLineBounds(workData.lines)
+		dgVertexMap := CreateVertexMap(lineBox.Xmin, lineBox.Ymin,
+			lineBox.Xmax, lineBox.Ymax)
+		PopulateVertexMapFromLines(dgVertexMap, workData.lines)
+		workData.dgVertexMap = dgVertexMap
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
@@ -1090,6 +1100,7 @@ func (w *ZExt_NodesWork) recomputeOneSeg(s *ZExt_NodeSeg) {
 	s.psy = s.StartVertex.Y
 	s.pdy = s.pey - s.psy
 	s.perp = s.pdx*s.psy - s.psx*s.pdy
+	w.updateSegLenBetter(s)
 	bamEffect := w.lines.GetBAMEffect(s.Linedef)
 	if bamEffect.Action == BAM_REPLACE {
 		s.Angle = bamEffect.Value
@@ -1376,10 +1387,14 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 		newW.vertexMap = w.vertexMap.Clone()
 	}
 
+	if w.dgVertexMap != nil {
+		newW.dgVertexMap = w.dgVertexMap.Clone()
+	}
+
 	newW.segAliasObj = new(SegAliasHolder)
 	newW.segAliasObj.Init()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
-	newW.incidental = make([]ZExt_VertexPairC, 0)
+	newW.incidental = make([]ZExt_IntVertexPairC, 0)
 
 	newW.nonVoidCache = make(map[int]ZExt_NonVoidPerAlias)
 	newW.blocksHit = make([]ZExt_BlocksHit, 0)
@@ -1992,7 +2007,7 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 				Log.Verbose(2, "Recomputing partition length the old way, because I got zero length doing it the new way.\n")
 			}
 
-			collinearSegs := ZExt_CollinearVertexPairCByCoord(w.incidental)
+			collinearSegs := ZExt_IntCollinearVertexPairCByCoord(w.incidental)
 
 			sort.Sort(collinearSegs)
 
@@ -2157,7 +2172,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 				check.alias = part.alias
 				*slen += check.len
 
-				w.incidental = append(w.incidental, check.toVertexPairC())
+				w.incidental = append(w.incidental, check.toIntVertexPairC())
 				if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
 					leftside = true
 				}
@@ -2279,7 +2294,7 @@ func ZExt_GetFullPartitionLength(part *ZExt_NodeSeg, bbox *NodeBounds) ZNumber {
 	} else if part.pdy == 0 {
 		l = ZNumber(bbox.Xmax - bbox.Xmin)
 	} else {
-		var c ZExt_IntersectionContext
+		var c FloatIntersectionContext
 		partSegCoords := part.toVertexPairC()
 		c.psx = partSegCoords.StartVertex.X
 		c.psy = partSegCoords.StartVertex.Y
@@ -2287,14 +2302,14 @@ func ZExt_GetFullPartitionLength(part *ZExt_NodeSeg, bbox *NodeBounds) ZNumber {
 		c.pey = partSegCoords.EndVertex.Y
 		c.pdx = c.pex - c.psx
 		c.pdy = c.pey - c.psy
-		contextStart, contextEnd := ZExt_PartitionInBoundary(part, &c, bbox.Xmax,
+		contextStart, contextEnd, _ := ZExt_PartitionInBoundary(part, &c, bbox.Xmax,
 			bbox.Ymax, bbox.Xmin, bbox.Ymin, partSegCoords)
 		if contextStart == nil {
 
 			return ZExt_GetPartitionLength_LegacyWay(part, bbox)
 		}
-		fullXDiff := float64(contextStart.v.X) - float64(contextEnd.v.X)
-		fullYDiff := float64(contextEnd.v.Y) - float64(contextStart.v.Y)
+		fullXDiff := contextStart.X - contextEnd.X
+		fullYDiff := contextEnd.Y - contextStart.Y
 		l = ZNumber(math.Round(math.Sqrt(fullXDiff*fullXDiff + fullYDiff*fullYDiff)))
 	}
 	return l
@@ -2314,10 +2329,12 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 		w.nonVoidCache[part.alias] = nonVoidStruc
 	}
 	if !nonVoidStruc.success {
+
 		return ZExt_GetFullPartitionLength(part, bbox)
 	}
 
-	contextStart, contextEnd := ZExt_PartitionInBoundary(part, &(nonVoidStruc.c), bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
+	contextStart, contextEnd, _ := ZExt_PartitionInBoundary(part,
+		&(nonVoidStruc.c), bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 		nonVoidStruc.partSegCoords)
 	if contextStart == nil || contextEnd == nil {
 
@@ -2325,11 +2342,11 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 		return ZExt_GetFullPartitionLength(part, bbox)
 	}
 
-	if contextStart.equalTo(contextEnd) {
+	if contextStart.equalToWithEpsilon(contextEnd) {
 		Log.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
 			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
-			contextStart.v.X, contextStart.v.Y, contextEnd.v.X, contextEnd.v.Y)
+			contextStart.X, contextStart.Y, contextEnd.X, contextEnd.Y)
 		return 0
 	}
 
@@ -2340,7 +2357,7 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 
 	for i := 0; i < len(nonVoid); i++ {
 
-		if ZExt_AreOverlapping(contextStart.v, contextEnd.v, nonVoid[i].StartVertex,
+		if AreOverlapping(contextStart, contextEnd, nonVoid[i].StartVertex,
 			nonVoid[i].EndVertex) {
 			hitStart = i
 			break
@@ -2348,7 +2365,7 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 	}
 	for i := len(nonVoid) - 1; i >= 0; i-- {
 
-		if ZExt_AreOverlapping(contextStart.v, contextEnd.v, nonVoid[i].StartVertex,
+		if AreOverlapping(contextStart, contextEnd, nonVoid[i].StartVertex,
 			nonVoid[i].EndVertex) {
 			hitStop = i
 			break
@@ -2356,10 +2373,11 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 	}
 	if hitStart < 0 || hitStop < 0 {
 
-		Log.Verbose(2, nonVoidStruc.original.toString())
-		Log.Verbose(2, "More dropouts! %v %v %s [%s-%s]\n", hitStart, hitStop,
-			ZExt_CollinearVertexPairCByCoord(nonVoid).toString(), contextStart.toString(),
-			contextEnd.toString())
+		Log.Verbose(2, "to below: %s", nonVoidStruc.original.toString())
+		Log.Verbose(2, "More dropouts! %v %v %s\n  ...... %d [%s-%s]\n",
+			hitStart, hitStop,
+			ZExt_CollinearVertexPairCByCoord(nonVoid).toString(), part.Linedef,
+			contextStart.toString(), contextEnd.toString())
 		return ZExt_GetFullPartitionLength(part, bbox)
 	}
 
@@ -2370,24 +2388,42 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 
 		precomputedInvalid := false
 		if i == hitStart {
-			if !ZExt_VertexPairCOrdering(contextStart.v, nonVoid[i].StartVertex, false) {
-				thisStart = contextStart.v
+			if !VertexPairCOrdering(contextStart, nonVoid[i].StartVertex, false) {
+				thisStart = contextStart
 			}
 			precomputedInvalid = true
 		}
 		if i == hitStop {
-			if ZExt_VertexPairCOrdering(contextEnd.v, nonVoid[i].EndVertex, false) {
-				thisEnd = contextEnd.v
+			if VertexPairCOrdering(contextEnd, nonVoid[i].EndVertex, false) {
+				thisEnd = contextEnd
 			}
 			precomputedInvalid = true
 		}
 		if !precomputedInvalid {
 			L = L + nonVoid[i].len
+			if nonVoid[i].len == 0 {
+				Log.Verbose(2, "non-void interval computed with zero length (precomputed)\n")
+			} else if nonVoid[i].len < 0 {
+				Log.Verbose(2, "what? non-void interval computed with NEGATIVE length (precomputed)\n")
+			}
 		} else {
-			dx := float64(thisEnd.X - thisStart.X)
-			dy := float64(thisEnd.Y - thisStart.Y)
-			L = L + ZNumber(math.Sqrt(dx*dx+dy*dy))
+			dx := thisEnd.X - thisStart.X
+			dy := thisEnd.Y - thisStart.Y
+
+			l0 := ZNumber(math.Sqrt(dx*dx + dy*dy))
+			L = L + l0
+			if l0 == 0 {
+
+			} else if l0 < 0 {
+				Log.Verbose(2, "what? sqrt yieled NEGATIVE value after cast?\n")
+			}
 		}
+	}
+	if L == 0 {
+		Log.Verbose(2, "returning 0 (sad)\n ........... %d %s ........ range (%d,%d) - (%d, %d) hit: %d,%d \n",
+			part.Linedef, ZExt_CollinearVertexPairCByCoord(nonVoid).toString(),
+			bbox.Xmin, bbox.Ymin, bbox.Xmax, bbox.Ymax,
+			hitStart, hitStop)
 	}
 	return L
 }
@@ -2614,8 +2650,8 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	blYMin := int(w.solidMap.header.YMin)
 	blYMax := w.solidMap.YMax
 
-	partSegCoords := part.toVertexPairC()
-	var c ZExt_IntersectionContext
+	partSegCoords := w.SegOrLineToVertexPairC(part)
+	var c FloatIntersectionContext
 	c.psx = partSegCoords.StartVertex.X
 	c.psy = partSegCoords.StartVertex.Y
 	c.pex = partSegCoords.EndVertex.X
@@ -2623,8 +2659,8 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
 
-	partStart, partEnd := ZExt_PartitionInBoundary(part, &c, blXMax, blYMax, blXMin,
-		blYMin, partSegCoords)
+	partStart, partEnd, bside := ZExt_PartitionInBoundary(part, &c, blXMax,
+		blYMax, blXMin, blYMin, partSegCoords)
 	if partStart == nil || partEnd == nil {
 
 		return ZExt_NonVoidPerAlias{
@@ -2632,33 +2668,50 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 		}
 	}
 
-	partStart.left = true
-	partEnd.left = false
+	w.dgVertexMap.RestoreOrBeginSnapshot()
+	ipsx := int(math.Round(partStart.X))
+	ipsy := int(math.Round(partStart.Y))
+	ipex := int(math.Round(partEnd.X))
+	ipey := int(math.Round(partEnd.Y))
 
-	pts := ZExt_CollinearOrientedVertices(make([]ZExt_OrientedVertex, 1))
-	pts[0] = *partStart
+	partStart = w.dgVertexMap.SelectVertexClose(partStart.X, partStart.Y)
+	partEnd = w.dgVertexMap.SelectVertexClose(partEnd.X, partEnd.Y)
+
+	setContextFromBlockSide(&c, bside, blXMax, blYMax, blXMin, blYMin,
+		MOVE_SAFE_MARGIN)
+	partOrient := c.getIntersectionPoint_InfiniteLines()
+	if partOrient == nil {
+		Log.Verbose(2, "Failed to compute a special vertex for clockwise-triangle checking.\n")
+	}
+
+	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
 	if w.blockity == nil {
 		w.blockity = GetBlockityLines(w.solidMap)
 	}
 	iter := w.blockity
 
-	iter.SetContext(int(partStart.v.X), int(partStart.v.Y), int(partEnd.v.X), int(partEnd.v.Y))
+	iter.SetContext(ipsx, ipsy, ipex, ipey)
+	cntIncident := 0
 	for iter.NextLine() {
 		aline := iter.GetLine()
 		lsx, lsy, lex, ley := w.lines.GetAllXY(aline)
-		c.lsx = ZNumber(lsx)
-		c.lsy = ZNumber(lsy)
-		c.lex = ZNumber(lex)
-		c.ley = ZNumber(ley)
-		if c.lsx == c.lex && c.lsy == c.ley {
+		if lsx == lex && lsy == ley {
 			continue
 		}
+		c.lsx = float64(lsx)
+		c.lsy = float64(lsy)
+		c.lex = float64(lex)
+		c.ley = float64(ley)
 		pt1, pt2 := c.getIntersectionOrIndicence()
 		if pt1 != nil {
+			RoundToFixed1616(pt1)
+			pt1 = w.dgVertexMap.SelectVertexClose(pt1.X, pt1.Y)
 			if pt2 != nil {
 
-				var ov1, ov2 ZExt_OrientedVertex
-				if ZExt_VertexPairCOrdering(pt1, pt2, false) {
+				RoundToFixed1616(pt2)
+				pt2 = w.dgVertexMap.SelectVertexClose(pt2.X, pt2.Y)
+				var ov1, ov2 OrientedVertex
+				if VertexPairCOrdering(pt1, pt2, false) {
 					ov1.v = pt1
 					ov1.left = false
 					ov2.v = pt2
@@ -2671,40 +2724,81 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 				}
 				pts = append(pts, ov1)
 				pts = append(pts, ov2)
+				cntIncident++
 			} else {
 
-				ov := ZExt_OrientedVertex{
+				ov := OrientedVertex{
 					v: pt1,
-					left: ZExt_IsClockwiseTriangle(&ZExt_NodeVertex{X: c.lsx, Y: c.lsy},
-						&ZExt_NodeVertex{X: c.lex, Y: c.ley}, partStart.v),
+					left: IsClockwiseTriangle(&FloatVertex{X: c.lsx, Y: c.lsy},
+						&FloatVertex{X: c.lex, Y: c.ley}, partOrient),
 				}
 				pts = append(pts, ov)
 			}
 		}
+
 	}
 
-	pts = append(pts, *partEnd)
+	if len(pts) < 2 {
 
-	sort.Stable(pts)
-	if pts[0] != *partStart || pts[len(pts)-1] != *partEnd {
-		Log.Verbose(2, "Failed to produce a solid hits array %t %t (%v, %v) != (%v, %v).\n",
-			pts[0] != *partStart, pts[len(pts)-1] != *partEnd,
-			pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
-			partEnd.v.X, partEnd.v.Y)
+		Log.Verbose(2, "Failed to produce a solid hits array: %d items (need at least two)\n",
+			len(pts))
+		return ZExt_NonVoidPerAlias{
+			success: false,
+		}
+	}
+	sort.Sort(pts)
+	startBound := VertexPairCOrdering(partStart, pts[0].v, false)
+	endBound := VertexPairCOrdering(pts[len(pts)-1].v, partEnd, false)
+	if !startBound || !endBound {
+		tailStr := ""
+		if !startBound {
+			tailStr = fmt.Sprintf("(%f, %f) != (%f, %f)",
+				pts[0].v.X, pts[0].v.Y,
+				partStart.X, partStart.Y)
+		}
+		if !endBound {
+			if tailStr != "" {
+				tailStr = "s " + tailStr + " e "
+			}
+			tailStr += fmt.Sprintf("(%f, %f) != (%f, %f)",
+				pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
+				partEnd.X, partEnd.Y)
+		}
+		Log.Verbose(2, "Failed to produce a solid hits array for partition line %d: %t %t %s.\n",
+			part.Linedef, startBound, endBound, tailStr)
 
 		return ZExt_NonVoidPerAlias{
 			success: false,
 		}
 	}
 
-	ptsOld := append(ZExt_CollinearOrientedVertices([]ZExt_OrientedVertex{}), pts...)
-	if !pts.Coalesce() {
-
-		Log.Verbose(2, "Coalesce fail at %s\n", ptsOld.toString())
-		return ZExt_NonVoidPerAlias{
-			success: false,
-		}
+	ovStart := OrientedVertex{
+		v:    partStart,
+		left: true,
 	}
+	ovEnd := OrientedVertex{
+		v:    partEnd,
+		left: false,
+	}
+	ptsOld := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	for _, it := range pts {
+		ptsOld = append(ptsOld, OrientedVertex{
+			v:    it.v,
+			left: it.left,
+		})
+	}
+
+	pts_fix := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	pts_fix = append(pts_fix, ovStart)
+	for _, it := range pts {
+		pts_fix = append(pts_fix, OrientedVertex{
+			v:    it.v,
+			left: it.left,
+		})
+	}
+	pts_fix = append(pts_fix, ovEnd)
+	pts = pts_fix
+	pts.Coalesce()
 
 	fluger := true
 	for i := 2; i < len(pts)-2; i++ {
@@ -2712,8 +2806,11 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	}
 	if !fluger {
 
-		Log.Verbose(2, "Sanity check failed! Evaluated partition line (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines. %s\n",
-			part.psx, part.psy, part.pex, part.pey, pts.toString())
+		Log.Verbose(2, "... for the next line - old content: %s",
+			ptsOld.toString())
+		Log.Verbose(2, "Sanity check failed! Evaluated partition line %d (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines (incidence count: %d). %s\n",
+			part.Linedef, part.psx, part.psy, part.pex, part.pey, cntIncident, pts.toString())
+
 		if !config.PersistThroughInsanity {
 			return ZExt_NonVoidPerAlias{
 				success: false,
@@ -2726,13 +2823,18 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 		if pts[i-1].left || !pts[i].left {
 			continue
 		}
-		dx := float64(pts[i].v.X - pts[i-1].v.X)
-		dy := float64(pts[i].v.Y - pts[i-1].v.Y)
+		dx := pts[i].v.X - pts[i-1].v.X
+		dy := pts[i].v.Y - pts[i-1].v.Y
 		nonVoid = append(nonVoid, ZExt_VertexPairC{
 			StartVertex: pts[i-1].v,
 			EndVertex:   pts[i].v,
 			len:         ZNumber(math.Sqrt(dx*dx + dy*dy)),
 		})
+	}
+
+	if len(nonVoid) == 0 {
+		Log.Verbose(2, "part %d trace produced ZERO non-void intervals\n",
+			part.Linedef)
 	}
 
 	return ZExt_NonVoidPerAlias{
@@ -2745,92 +2847,49 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	}
 }
 
-func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *ZExt_IntersectionContext, blXMax, blYMax, blXMin, blYMin int, partSegCoords ZExt_VertexPairC) (*ZExt_OrientedVertex, *ZExt_OrientedVertex) {
+func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *FloatIntersectionContext,
+	blXMax, blYMax, blXMin, blYMin int, partSegCoords ZExt_VertexPairC) (*FloatVertex, *FloatVertex, int) {
 
-	var partStart, partEnd ZExt_OrientedVertex
-	partStart.v = new(ZExt_NodeVertex)
-	partEnd.v = new(ZExt_NodeVertex)
+	partStart := new(FloatVertex)
+	partEnd := new(FloatVertex)
+	var side [2]int
 	if part.pdx == 0 {
 
-		partStart.v.Y = ZNumber(blYMax)
-		partStart.v.X = partSegCoords.StartVertex.X
-		partEnd.v.Y = ZNumber(blYMin)
-		partEnd.v.X = partStart.v.X
+		partStart.Y = float64(blYMax)
+		partStart.X = partSegCoords.StartVertex.X
+		partEnd.Y = float64(blYMin)
+		partEnd.X = partStart.X
+		side[0] = SIDE_TOP_HORIZONTAL
+		side[1] = SIDE_BOTTOM_HORIZONTAL
 	} else if part.pdy == 0 {
 
-		partStart.v.X = ZNumber(blXMin)
-		partStart.v.Y = partSegCoords.StartVertex.Y
-		partEnd.v.X = ZNumber(blXMax)
-		partEnd.v.Y = partStart.v.Y
+		partStart.X = float64(blXMin)
+		partStart.Y = partSegCoords.StartVertex.Y
+		partEnd.X = float64(blXMax)
+		partEnd.Y = partStart.Y
+		side[0] = SIDE_LEFT_VERTICAL
+		side[1] = SIDE_RIGHT_VERTICAL
 	} else {
 
 		linesTried := 0
-		intersectPoints := make([]ZExt_OrientedVertex, 0)
+		intersectPoints := make([]*FloatVertex, 0)
 		for len(intersectPoints) < 2 && linesTried < 4 {
-			switch linesTried {
-			case 0:
-				{
-
-					c.lsx = ZNumber(blXMin)
-					c.lsy = ZNumber(blYMax)
-					c.lex = c.lsx
-					c.ley = ZNumber(blYMin)
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && ZExt_tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = ZExt_appendNoDuplicates(intersectPoints,
-							ZExt_OrientedVertex{
-								v: v,
-							})
-					}
-				}
-			case 1:
-				{
-
-					c.lsx = ZNumber(blXMax)
-					c.lsy = ZNumber(blYMax)
-					c.lex = c.lsx
-					c.ley = ZNumber(blYMin)
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && ZExt_tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = ZExt_appendNoDuplicates(intersectPoints,
-							ZExt_OrientedVertex{
-								v: v,
-							})
-					}
-				}
-			case 2:
-				{
-
-					c.lsx = ZNumber(blXMin)
-					c.lsy = ZNumber(blYMax)
-					c.lex = ZNumber(blXMax)
-					c.ley = c.lsy
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && ZExt_tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = ZExt_appendNoDuplicates(intersectPoints,
-							ZExt_OrientedVertex{
-								v: v,
-							})
-					}
-				}
-			case 3:
-				{
-
-					c.lsx = ZNumber(blXMin)
-					c.lsy = ZNumber(blYMin)
-					c.lex = ZNumber(blXMax)
-					c.ley = c.lsy
-					v := c.getIntersectionPoint_InfiniteLines()
-					if v != nil && ZExt_tskCheckBounds(v, blXMax, blYMax, blXMin,
-						blYMin) {
-						intersectPoints = ZExt_appendNoDuplicates(intersectPoints,
-							ZExt_OrientedVertex{
-								v: v,
-							})
-					}
+			added := false
+			setContextFromBlockSide(c, linesTried, blXMax, blYMax, blXMin,
+				blYMin, 0)
+			v := c.getIntersectionPoint_InfiniteLines()
+			if v != nil && CheckBoundsForIntersectPoint(v, blXMax, blYMax, blXMin,
+				blYMin) {
+				intersectPoints, added = appendNoDuplicates(intersectPoints,
+					v)
+			}
+			if added {
+				sideIdx := len(intersectPoints) - 1
+				if sideIdx < 2 {
+					side[sideIdx] = linesTried
+				} else {
+					Log.Verbose(2, "More than 2 intersection points between line and a box - error.\n")
+					return nil, nil, 0
 				}
 			}
 			linesTried++
@@ -2843,193 +2902,65 @@ func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *ZExt_IntersectionContext, b
 				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
-				Log.Verbose(2, "Intersection#%d: %s",
-					i, intersectPoints[i].toString())
+				Log.Verbose(2, "Intersection#%d: (%v, %v)",
+					i, intersectPoints[i].X, intersectPoints[i].Y)
 			}
 
-			return nil, nil
+			return nil, nil, 0
 		}
-		if ZExt_VertexPairCOrdering(intersectPoints[0].v, intersectPoints[1].v,
+		if VertexPairCOrdering(intersectPoints[0], intersectPoints[1],
 			false) {
 			partStart, partEnd = intersectPoints[0], intersectPoints[1]
 		} else {
 			partStart, partEnd = intersectPoints[1], intersectPoints[0]
+			side[0], side[1] = side[1], side[0]
 		}
 	}
-	return &partStart, &partEnd
+	return partStart, partEnd, side[0]
 }
 
-func ZExt_appendNoDuplicates(x []ZExt_OrientedVertex, v ZExt_OrientedVertex) []ZExt_OrientedVertex {
-	if len(x) == 0 || !x[0].equalTo(&v) {
-		return append(x, v)
-	}
-	return x
+type ZExt_NonVoidPerAlias struct {
+	data          []ZExt_VertexPairC
+	success       bool
+	c             FloatIntersectionContext
+	partSegCoords ZExt_VertexPairC
+	original      CollinearOrientedVertices
 }
 
-func (c *ZExt_IntersectionContext) getIntersectionPoint_InfiniteLines() *ZExt_NodeVertex {
-	ldx := float64(c.lex - c.lsx)
-	ldy := float64(c.ley - c.lsy)
-	d := float64(c.pdy)*ldx - ldy*float64(c.pdx)
-	if d == 0.0 {
-		return nil
+func (v *ZExt_NodeVertex) toFloatVertex() *FloatVertex {
+	return &FloatVertex{
+		Id: int(v.idx),
+		X:  float64(v.X),
+		Y:  float64(v.Y),
 	}
-	c1 := float64(c.pdy)*float64(c.psx) - float64(c.pdx)*float64(c.psy)
-	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
-	id := 1 / d
-	return &ZExt_NodeVertex{
-		X: ZNumber(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
-		Y: ZNumber(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
-	}
-}
-
-func ZExt_tskCheckBounds(v *ZExt_NodeVertex, blXMax, blYMax, blXMin, blYMin int) bool {
-	return v.X <= ZNumber(blXMax) && v.X >= ZNumber(blXMin) &&
-		v.Y <= ZNumber(blYMax) && v.Y >= ZNumber(blYMin)
-}
-
-func (c *ZExt_IntersectionContext) getIntersectionOrIndicence() (*ZExt_NodeVertex, *ZExt_NodeVertex) {
-	ldx := float64(c.lex - c.lsx)
-	ldy := float64(c.ley - c.lsy)
-	d := float64(c.pdy)*ldx - ldy*float64(c.pdx)
-	if d == 0.0 {
-		ptmp := c.pdx*c.psy - c.psx*c.pdy
-		a := c.pdy*c.lsx - c.pdx*c.lsy + ptmp
-		b := c.pdy*c.lex - c.pdx*c.ley + ptmp
-		if a == 0 && b == 0 {
-
-			return &ZExt_NodeVertex{
-					X: c.lsx,
-					Y: c.lsy,
-				}, &ZExt_NodeVertex{
-					X: c.lex,
-					Y: c.ley,
-				}
-		} else {
-
-			return nil, nil
-		}
-	}
-	c1 := float64(c.pdy)*float64(c.psx) - float64(c.pdx)*float64(c.psy)
-	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
-	id := 1 / d
-	v := &ZExt_NodeVertex{
-		X: ZNumber(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
-		Y: ZNumber(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
-	}
-
-	if v != nil {
-		var blXmax, blXmin, blYmax, blYmin int
-		if c.lsx < c.lex {
-			blXmax = int(c.lex)
-			blXmin = int(c.lsx)
-		} else {
-			blXmax = int(c.lsx)
-			blXmin = int(c.lex)
-		}
-		if c.lsy < c.ley {
-			blYmax = int(c.ley)
-			blYmin = int(c.lsy)
-		} else {
-			blYmax = int(c.lsy)
-			blYmin = int(c.ley)
-		}
-		if ZExt_tskCheckBounds(v, blXmax, blYmax, blXmin, blYmin) {
-			return v, nil
-		}
-	}
-
-	return nil, nil
 }
 
 type ZExt_VertexPairC struct {
-	StartVertex *ZExt_NodeVertex
-	EndVertex   *ZExt_NodeVertex
+	StartVertex *FloatVertex
+	EndVertex   *FloatVertex
 	len         ZNumber
 }
 
 func (s *ZExt_NodeSeg) toVertexPairC() ZExt_VertexPairC {
 
-	if ZExt_VertexPairCOrdering(s.StartVertex, s.EndVertex, false) {
+	sv := s.StartVertex.toFloatVertex()
+	ev := s.EndVertex.toFloatVertex()
+	if VertexPairCOrdering(sv, ev, false) {
 		return ZExt_VertexPairC{
-			StartVertex: s.StartVertex,
-			EndVertex:   s.EndVertex,
+			StartVertex: sv,
+			EndVertex:   ev,
 			len:         s.len,
 		}
 	} else {
 		return ZExt_VertexPairC{
-			StartVertex: s.EndVertex,
-			EndVertex:   s.StartVertex,
+			StartVertex: ev,
+			EndVertex:   sv,
 			len:         s.len,
 		}
-	}
-}
-
-func ZExt_VertexPairCOrdering(a, b *ZExt_NodeVertex, strictLess bool) bool {
-
-	if a.X == b.X {
-		if a.Y < b.Y {
-			return false
-		} else {
-			return !strictLess || a.Y > b.Y
-		}
-	} else if a.X < b.X {
-		return true
-	} else {
-		return false
-	}
-}
-
-func ZExt_ProjectsLeftToVPCOrdering(a, b *ZExt_NodeVertex) bool {
-	if a.X == b.X {
-		if a.Y < b.Y {
-			return false
-		} else {
-			return true
-		}
-	} else if a.X < b.X {
-		return false
-	} else {
-		return true
 	}
 }
 
 type ZExt_CollinearVertexPairCByCoord []ZExt_VertexPairC
-
-func (x ZExt_CollinearVertexPairCByCoord) Len() int { return len(x) }
-func (x ZExt_CollinearVertexPairCByCoord) Less(i, j int) bool {
-
-	return ZExt_VertexPairCOrdering(x[i].StartVertex, x[j].StartVertex, true)
-}
-func (x ZExt_CollinearVertexPairCByCoord) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
-
-func (x ZExt_CollinearVertexPairCByCoord) GetOverlapsLength() ZNumber {
-
-	overlapLength := ZNumber(0)
-	for i := 1; i < len(x); i++ {
-		prevStart := x[i-1].StartVertex
-		prevEnd := x[i-1].EndVertex
-		curStart := x[i].StartVertex
-		if ZExt_VertexPairCOrdering(curStart, prevEnd, true) &&
-			ZExt_VertexPairCOrdering(prevStart, curStart, false) {
-
-			dx := prevEnd.X - curStart.X
-			dy := prevEnd.Y - curStart.Y
-			overlapLength += ZNumber(math.Sqrt(float64(dx*dx) + float64(dy*dy)))
-		}
-	}
-	return overlapLength
-}
-
-func ZExt_AreOverlapping(seg1Start, seg1End, seg2Start, seg2End *ZExt_NodeVertex) bool {
-	return (ZExt_VertexPairCOrdering(seg1Start, seg2Start, false) &&
-		ZExt_VertexPairCOrdering(seg2Start, seg1End, false)) ||
-		(ZExt_VertexPairCOrdering(seg1Start, seg2End, false) &&
-			ZExt_VertexPairCOrdering(seg2End, seg1End, false)) ||
-		(ZExt_VertexPairCOrdering(seg2Start, seg1Start, false) &&
-			ZExt_VertexPairCOrdering(seg1Start, seg2End, false) &&
-			ZExt_VertexPairCOrdering(seg2Start, seg1End, false) &&
-			ZExt_VertexPairCOrdering(seg1End, seg2End, false))
-}
 
 func (x ZExt_CollinearVertexPairCByCoord) toString() string {
 	if len(x) == 0 {
@@ -3037,164 +2968,9 @@ func (x ZExt_CollinearVertexPairCByCoord) toString() string {
 	}
 	s := ""
 	for i := 0; i < len(x); i++ {
-		s += fmt.Sprintf("; [(%v;%v)-(%v;%v)]", x[i].StartVertex.X, x[i].StartVertex.Y,
-			x[i].EndVertex.X, x[i].EndVertex.Y)
+		s += fmt.Sprintf("; [%s-%s]", x[i].StartVertex.toString(), x[i].EndVertex.toString())
 	}
 	return s
-}
-
-type ZExt_OrientedVertex struct {
-	v    *ZExt_NodeVertex
-	left bool
-}
-
-func (ov1 *ZExt_OrientedVertex) equalTo(ov2 *ZExt_OrientedVertex) bool {
-	if ov1 == nil || ov2 == nil {
-		return false
-	}
-	if ov1.v == nil || ov2.v == nil {
-		return false
-	}
-	return ov1.v.X == ov2.v.X && ov1.v.Y == ov2.v.Y && ov1.left == ov2.left
-}
-
-type ZExt_CollinearOrientedVertices []ZExt_OrientedVertex
-
-func (x ZExt_CollinearOrientedVertices) Len() int { return len(x) }
-func (x ZExt_CollinearOrientedVertices) Less(i, j int) bool {
-
-	if x[i].v.X == x[j].v.X && x[i].v.Y == x[j].v.Y {
-		if i == len(x)-1 {
-
-			return false
-		}
-		return x[i].left && !x[j].left
-	}
-	return ZExt_VertexPairCOrdering(x[i].v, x[j].v, true)
-}
-func (x ZExt_CollinearOrientedVertices) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
-
-func (x ZExt_CollinearOrientedVertices) toString() string {
-	s := "["
-	for i := 0; i < len(x); i++ {
-		s = s + fmt.Sprintf(",%s", x[i].toString())
-	}
-	if len(s) > 1 {
-		s = "[" + s[2:]
-	}
-	return s + "]"
-}
-
-func (x *ZExt_CollinearOrientedVertices) Coalesce() bool {
-	allOk := true
-	l := len(*x)
-	for i := 1; i < l; i++ {
-
-		if (*x)[i].valuesEqualWithEpsilon(&((*x)[i-1])) {
-			p, hasDominant, dominantDir := x.seekPastEqualsAndNoteSign(&((*x)[i-1]), i)
-			dropLen := p - i + 1
-			dropStart := i
-
-			hasDominant = hasDominant && !x.matchToPrev(i, p, dominantDir)
-			if hasDominant {
-
-				(*x)[i-1].left = dominantDir
-			} else {
-
-				if (i > 1) && (p < l-1) {
-					dropLen++
-					dropStart--
-				}
-			}
-			l = l - dropLen
-			for j := dropStart; j < l; j++ {
-				(*x)[j] = (*x)[j+dropLen]
-			}
-			i = dropStart - 1
-			*x = (*x)[:l]
-		}
-	}
-	a := (*x)[:l]
-	*x = a
-	return allOk
-}
-
-func (x *ZExt_CollinearOrientedVertices) matchToPrev(i, p int, dominantDir bool) bool {
-
-	if i-2 > 0 {
-		prevDir := (*x)[i-2].left
-		if prevDir == dominantDir {
-
-			for j := i - 1; j <= p; j++ {
-				if (*x)[j].left != dominantDir {
-					return true
-					break
-				}
-			}
-		}
-	}
-	return false
-}
-
-func (ov1 *ZExt_OrientedVertex) valuesEqualWithEpsilon(ov2 *ZExt_OrientedVertex) bool {
-	if ov1 == nil || ov2 == nil {
-		return false
-	}
-	if ov1.v == nil || ov2.v == nil {
-		return false
-	}
-	XequalWithEpsilon := Abs(int(ov1.v.X-ov2.v.X)) <= 1
-	YequalWithEpsilon := Abs(int(ov1.v.Y-ov2.v.Y)) <= 1
-	return XequalWithEpsilon && YequalWithEpsilon
-}
-
-func (x *ZExt_CollinearOrientedVertices) seekPastEqualsAndNoteSign(ov *ZExt_OrientedVertex, startPos int) (int, bool, bool) {
-	l := len(*x)
-	a := startPos
-	leftCnt := 0
-	rightCnt := 0
-	if ov.left {
-		leftCnt++
-	} else {
-		rightCnt++
-	}
-	for i := startPos; i < l; i++ {
-		if !((*x)[i].valuesEqualWithEpsilon(ov)) {
-			break
-		}
-		if (*x)[i].left {
-			leftCnt++
-		} else {
-			rightCnt++
-		}
-	}
-	hasDominant := leftCnt != rightCnt
-	dominantDir := hasDominant && (leftCnt > rightCnt)
-	return a, hasDominant, dominantDir
-}
-
-func (x *ZExt_OrientedVertex) toString() string {
-	if x == nil {
-		return "nil"
-	}
-	str := "RIGHT"
-	if x.left {
-		str = "LEFT"
-	}
-	return fmt.Sprintf("%s(%v,%v)", str, x.v.X, x.v.Y)
-}
-
-type ZExt_NonVoidPerAlias struct {
-	data          []ZExt_VertexPairC
-	success       bool
-	c             ZExt_IntersectionContext
-	partSegCoords ZExt_VertexPairC
-	original      ZExt_CollinearOrientedVertices
-}
-
-func ZExt_IsClockwiseTriangle(p1, p2, p3 *ZExt_NodeVertex) bool {
-	sgn := (p2.X-p1.X)*(p3.Y-p1.Y) - (p2.Y-p1.Y)*(p3.X-p1.X)
-	return sgn < 0
 }
 
 func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
@@ -3785,7 +3561,7 @@ func (log *MyLogger) ZExt_DumpSegs(ts *ZExt_NodeSeg) {
 	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
 	for tmps := ts; tmps != nil; tmps = tmps.next {
 		log.segs.WriteString(fmt.Sprintf(
-			"  Linedef: %d Flip: %d (%f,%f) - (%f, %f)",
+			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
 			tmps.Linedef, tmps.Flip, tmps.StartVertex.X, tmps.StartVertex.Y,
 			tmps.EndVertex.X, tmps.EndVertex.Y))
 		if tmps.sector != allSector {
@@ -3935,13 +3711,25 @@ func (w *ZExt_NodesWork) SetNodeCoords(part *ZExt_NodeSeg, bbox *NodeBounds,
 		return
 	}
 
-	ov1, ov2 := ZExt_PartitionInBoundary(part, c, bbox.Xmax, bbox.Ymax, bbox.Xmin,
+	newc := &FloatIntersectionContext{
+		psx: float64(c.psx),
+		psy: float64(c.psy),
+		pex: float64(c.pex),
+		pey: float64(c.pey),
+		pdx: float64(c.pdx),
+		pdy: float64(c.pdy),
+	}
+	ov1, ov2, _ := ZExt_PartitionInBoundary(part, newc, bbox.Xmax, bbox.Ymax, bbox.Xmin,
 		bbox.Ymin, part.toVertexPairC())
 	if ov1 == nil && ov2 == nil {
 		Log.Printf("Very bad - PartitionInBoundary failed to correct extended nodes coords when it was needed.\n")
 	}
-	dx := ov2.v.X - ov1.v.X
-	dy := ov2.v.Y - ov1.v.Y
+	ov1.X = math.Round(ov1.X)
+	ov2.X = math.Round(ov2.X)
+	ov1.Y = math.Round(ov1.Y)
+	ov2.Y = math.Round(ov2.Y)
+	dx := ov2.X - ov1.X
+	dy := ov2.Y - ov1.Y
 	oldDx := pex - psx
 	oldDy := pey - psy
 	if dx != 0 {
@@ -3962,14 +3750,48 @@ func (w *ZExt_NodesWork) SetNodeCoords(part *ZExt_NodeSeg, bbox *NodeBounds,
 		}
 	}
 
-	w.nodeX = int(ov1.v.X)
-	w.nodeY = int(ov1.v.Y)
-	w.nodeDx = int(ov2.v.X) - w.nodeX
-	w.nodeDy = int(ov2.v.Y) - w.nodeY
+	w.nodeX = int(ov1.X)
+	w.nodeY = int(ov1.Y)
+	w.nodeDx = int(ov2.X) - w.nodeX
+	w.nodeDy = int(ov2.Y) - w.nodeY
 	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 		w.nodeDy >= -32768 {
 		Log.Verbose(1, "I've scaled seg coords to the bounding box to use as partition line definition in node structure, but they overflow node values. Source linedef: %d\n",
 			part.Linedef)
+	}
+}
+
+func (w *ZExt_NodesWork) updateSegLenBetter(s *ZExt_NodeSeg) {
+	dy := float64(s.pey - s.psy)
+	dx := float64(s.pex - s.psx)
+	s.len = ZNumber(math.Sqrt(dx*dx + dy*dy))
+}
+
+func (w *ZExt_NodesWork) SegOrLineToVertexPairC(part *ZExt_NodeSeg) ZExt_VertexPairC {
+	x1, y1, x2, y2 := w.lines.GetAllXY(part.Linedef)
+	sv := &FloatVertex{
+		X: float64(x1),
+		Y: float64(y1),
+	}
+	ev := &FloatVertex{
+		X: float64(x2),
+		Y: float64(y2),
+	}
+	dx := float64(x2 - x1)
+	dy := float64(y2 - y1)
+	l := ZNumber(math.Sqrt(dx*dx + dy*dy))
+	if VertexPairCOrdering(sv, ev, false) {
+		return ZExt_VertexPairC{
+			StartVertex: sv,
+			EndVertex:   ev,
+			len:         l,
+		}
+	} else {
+		return ZExt_VertexPairC{
+			StartVertex: ev,
+			EndVertex:   sv,
+			len:         l,
+		}
 	}
 }
 
@@ -4516,6 +4338,336 @@ func ZExt_ZenSegMinorToDepthScores(input []ZExt_SegMinorBundle) []ZExt_DepthScor
 	return res
 }
 
+func ZExt_IntPartitionInBoundary(part *ZExt_NodeSeg, c *ZExt_IntersectionContext, blXMax, blYMax, blXMin, blYMin int, partSegCoords ZExt_IntVertexPairC) (*ZExt_IntOrientedVertex, *ZExt_IntOrientedVertex) {
+
+	var partStart, partEnd ZExt_IntOrientedVertex
+	partStart.v = new(ZExt_NodeVertex)
+	partEnd.v = new(ZExt_NodeVertex)
+	if part.pdx == 0 {
+
+		partStart.v.Y = ZNumber(blYMax)
+		partStart.v.X = partSegCoords.StartVertex.X
+		partEnd.v.Y = ZNumber(blYMin)
+		partEnd.v.X = partStart.v.X
+	} else if part.pdy == 0 {
+
+		partStart.v.X = ZNumber(blXMin)
+		partStart.v.Y = partSegCoords.StartVertex.Y
+		partEnd.v.X = ZNumber(blXMax)
+		partEnd.v.Y = partStart.v.Y
+	} else {
+
+		linesTried := 0
+		intersectPoints := make([]ZExt_IntOrientedVertex, 0)
+		for len(intersectPoints) < 2 && linesTried < 4 {
+			switch linesTried {
+			case 0:
+				{
+
+					c.lsx = ZNumber(blXMin)
+					c.lsy = ZNumber(blYMax)
+					c.lex = c.lsx
+					c.ley = ZNumber(blYMin)
+					v := c.intGetIntersectionPoint_InfiniteLines()
+					if v != nil && ZExt_intTskCheckBounds(v, blXMax, blYMax, blXMin,
+						blYMin) {
+						intersectPoints = ZExt_intAppendNoDuplicates(intersectPoints,
+							ZExt_IntOrientedVertex{
+								v: v,
+							})
+					}
+				}
+			case 1:
+				{
+
+					c.lsx = ZNumber(blXMax)
+					c.lsy = ZNumber(blYMax)
+					c.lex = c.lsx
+					c.ley = ZNumber(blYMin)
+					v := c.intGetIntersectionPoint_InfiniteLines()
+					if v != nil && ZExt_intTskCheckBounds(v, blXMax, blYMax, blXMin,
+						blYMin) {
+						intersectPoints = ZExt_intAppendNoDuplicates(intersectPoints,
+							ZExt_IntOrientedVertex{
+								v: v,
+							})
+					}
+				}
+			case 2:
+				{
+
+					c.lsx = ZNumber(blXMin)
+					c.lsy = ZNumber(blYMax)
+					c.lex = ZNumber(blXMax)
+					c.ley = c.lsy
+					v := c.intGetIntersectionPoint_InfiniteLines()
+					if v != nil && ZExt_intTskCheckBounds(v, blXMax, blYMax, blXMin,
+						blYMin) {
+						intersectPoints = ZExt_intAppendNoDuplicates(intersectPoints,
+							ZExt_IntOrientedVertex{
+								v: v,
+							})
+					}
+				}
+			case 3:
+				{
+
+					c.lsx = ZNumber(blXMin)
+					c.lsy = ZNumber(blYMin)
+					c.lex = ZNumber(blXMax)
+					c.ley = c.lsy
+					v := c.intGetIntersectionPoint_InfiniteLines()
+					if v != nil && ZExt_intTskCheckBounds(v, blXMax, blYMax, blXMin,
+						blYMin) {
+						intersectPoints = ZExt_intAppendNoDuplicates(intersectPoints,
+							ZExt_IntOrientedVertex{
+								v: v,
+							})
+					}
+				}
+			}
+			linesTried++
+		}
+		if len(intersectPoints) < 2 {
+
+			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
+				len(intersectPoints), linesTried)
+			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
+				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
+				c.pey, blXMin, blYMax, blXMax, blYMin)
+			for i := 0; i < len(intersectPoints); i++ {
+				Log.Verbose(2, "Intersection#%d: %s",
+					i, intersectPoints[i].toString())
+			}
+
+			return nil, nil
+		}
+		if ZExt_IntVertexPairCOrdering(intersectPoints[0].v, intersectPoints[1].v,
+			false) {
+			partStart, partEnd = intersectPoints[0], intersectPoints[1]
+		} else {
+			partStart, partEnd = intersectPoints[1], intersectPoints[0]
+		}
+	}
+	return &partStart, &partEnd
+}
+
+func ZExt_intAppendNoDuplicates(x []ZExt_IntOrientedVertex, v ZExt_IntOrientedVertex) []ZExt_IntOrientedVertex {
+	if len(x) == 0 || !x[0].equalTo(&v) {
+		return append(x, v)
+	}
+	return x
+}
+
+func (c *ZExt_IntersectionContext) intGetIntersectionPoint_InfiniteLines() *ZExt_NodeVertex {
+	ldx := float64(c.lex - c.lsx)
+	ldy := float64(c.ley - c.lsy)
+	d := float64(c.pdy)*ldx - ldy*float64(c.pdx)
+	if d == 0.0 {
+		return nil
+	}
+	c1 := float64(c.pdy)*float64(c.psx) - float64(c.pdx)*float64(c.psy)
+	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
+	id := 1 / d
+	return &ZExt_NodeVertex{
+		X: ZNumber(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
+		Y: ZNumber(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
+	}
+}
+
+func ZExt_intTskCheckBounds(v *ZExt_NodeVertex, blXMax, blYMax, blXMin, blYMin int) bool {
+	return v.X <= ZNumber(blXMax) && v.X >= ZNumber(blXMin) &&
+		v.Y <= ZNumber(blYMax) && v.Y >= ZNumber(blYMin)
+}
+
+func (c *ZExt_IntersectionContext) intGetIntersectionOrIndicence() (*ZExt_NodeVertex, *ZExt_NodeVertex) {
+	ldx := float64(c.lex - c.lsx)
+	ldy := float64(c.ley - c.lsy)
+	d := float64(c.pdy)*ldx - ldy*float64(c.pdx)
+	if d == 0.0 {
+		ptmp := c.pdx*c.psy - c.psx*c.pdy
+		a := c.pdy*c.lsx - c.pdx*c.lsy + ptmp
+		b := c.pdy*c.lex - c.pdx*c.ley + ptmp
+		if a == 0 && b == 0 {
+
+			return &ZExt_NodeVertex{
+					X: c.lsx,
+					Y: c.lsy,
+				}, &ZExt_NodeVertex{
+					X: c.lex,
+					Y: c.ley,
+				}
+		} else {
+
+			return nil, nil
+		}
+	}
+	c1 := float64(c.pdy)*float64(c.psx) - float64(c.pdx)*float64(c.psy)
+	c2 := ldy*float64(c.lsx) - ldx*float64(c.lsy)
+	id := 1 / d
+	v := &ZExt_NodeVertex{
+		X: ZNumber(int(math.Round((ldx*c1 - float64(c.pdx)*c2) * id))),
+		Y: ZNumber(int(math.Round((ldy*c1 - float64(c.pdy)*c2) * id))),
+	}
+
+	if v != nil {
+		var blXmax, blXmin, blYmax, blYmin int
+		if c.lsx < c.lex {
+			blXmax = int(c.lex)
+			blXmin = int(c.lsx)
+		} else {
+			blXmax = int(c.lsx)
+			blXmin = int(c.lex)
+		}
+		if c.lsy < c.ley {
+			blYmax = int(c.ley)
+			blYmin = int(c.lsy)
+		} else {
+			blYmax = int(c.lsy)
+			blYmin = int(c.ley)
+		}
+		if ZExt_intTskCheckBounds(v, blXmax, blYmax, blXmin, blYmin) {
+			return v, nil
+		}
+	}
+
+	return nil, nil
+}
+
+type ZExt_IntVertexPairC struct {
+	StartVertex *ZExt_NodeVertex
+	EndVertex   *ZExt_NodeVertex
+	len         ZNumber
+}
+
+func (s *ZExt_NodeSeg) toIntVertexPairC() ZExt_IntVertexPairC {
+
+	if ZExt_IntVertexPairCOrdering(s.StartVertex, s.EndVertex, false) {
+		return ZExt_IntVertexPairC{
+			StartVertex: s.StartVertex,
+			EndVertex:   s.EndVertex,
+			len:         s.len,
+		}
+	} else {
+		return ZExt_IntVertexPairC{
+			StartVertex: s.EndVertex,
+			EndVertex:   s.StartVertex,
+			len:         s.len,
+		}
+	}
+}
+
+func ZExt_IntVertexPairCOrdering(a, b *ZExt_NodeVertex, strictLess bool) bool {
+
+	if a.X == b.X {
+		if a.Y < b.Y {
+			return false
+		} else {
+			return !strictLess || a.Y > b.Y
+		}
+	} else if a.X < b.X {
+		return true
+	} else {
+		return false
+	}
+}
+
+type ZExt_IntCollinearVertexPairCByCoord []ZExt_IntVertexPairC
+
+func (x ZExt_IntCollinearVertexPairCByCoord) Len() int { return len(x) }
+func (x ZExt_IntCollinearVertexPairCByCoord) Less(i, j int) bool {
+
+	return ZExt_IntVertexPairCOrdering(x[i].StartVertex, x[j].StartVertex, true)
+}
+func (x ZExt_IntCollinearVertexPairCByCoord) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+func (x ZExt_IntCollinearVertexPairCByCoord) GetOverlapsLength() ZNumber {
+
+	overlapLength := ZNumber(0)
+	for i := 1; i < len(x); i++ {
+		prevStart := x[i-1].StartVertex
+		prevEnd := x[i-1].EndVertex
+		curStart := x[i].StartVertex
+		if ZExt_IntVertexPairCOrdering(curStart, prevEnd, true) &&
+			ZExt_IntVertexPairCOrdering(prevStart, curStart, false) {
+
+			dx := prevEnd.X - curStart.X
+			dy := prevEnd.Y - curStart.Y
+			overlapLength += ZNumber(math.Sqrt(float64(dx*dx) + float64(dy*dy)))
+		}
+	}
+	return overlapLength
+}
+
+func (x ZExt_IntCollinearVertexPairCByCoord) toString() string {
+	if len(x) == 0 {
+		return "{EMPTY!}"
+	}
+	s := ""
+	for i := 0; i < len(x); i++ {
+		s += fmt.Sprintf("; [(%v;%v)-(%v;%v)]", x[i].StartVertex.X, x[i].StartVertex.Y,
+			x[i].EndVertex.X, x[i].EndVertex.Y)
+	}
+	return s
+}
+
+type ZExt_IntOrientedVertex struct {
+	v    *ZExt_NodeVertex
+	left bool
+}
+
+func (ov1 *ZExt_IntOrientedVertex) equalTo(ov2 *ZExt_IntOrientedVertex) bool {
+	if ov1 == nil || ov2 == nil {
+		return false
+	}
+	if ov1.v == nil || ov2.v == nil {
+		return false
+	}
+	return ov1.v.X == ov2.v.X && ov1.v.Y == ov2.v.Y && ov1.left == ov2.left
+}
+
+type ZExt_IntCollinearOrientedVertices []ZExt_IntOrientedVertex
+
+func (x ZExt_IntCollinearOrientedVertices) Len() int { return len(x) }
+func (x ZExt_IntCollinearOrientedVertices) Less(i, j int) bool {
+
+	if x[i].v.X == x[j].v.X && x[i].v.Y == x[j].v.Y {
+		if i == len(x)-1 {
+
+			return false
+		}
+		return x[i].left && !x[j].left
+	}
+	return ZExt_IntVertexPairCOrdering(x[i].v, x[j].v, true)
+}
+func (x ZExt_IntCollinearOrientedVertices) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+func (x ZExt_IntCollinearOrientedVertices) toString() string {
+	s := "["
+	for i := 0; i < len(x); i++ {
+		s = s + fmt.Sprintf(",%s", x[i].toString())
+	}
+	if len(s) > 1 {
+		s = "[" + s[2:]
+	}
+	return s + "]"
+}
+
+func (x *ZExt_IntOrientedVertex) toString() string {
+	if x == nil {
+		return "nil"
+	}
+	str := "RIGHT"
+	if x.left {
+		str = "LEFT"
+	}
+	return fmt.Sprintf("%s(%v,%v)", str, x.v.X, x.v.Y)
+}
+
+func ZExt_IntIsClockwiseTriangle(p1, p2, p3 *ZExt_NodeVertex) bool {
+	sgn := (p2.X-p1.X)*(p3.Y-p1.Y) - (p2.Y-p1.Y)*(p3.X-p1.X)
+	return sgn < 0
+}
 func init() {
 	ZNodesGenerator = ZExt_NodesGenerator
 }

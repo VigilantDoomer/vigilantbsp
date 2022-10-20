@@ -87,7 +87,7 @@ func TestPartitionInBoundary(t *testing.T) {
 	s.psy = s.StartVertex.Y
 	s.pdy = s.pey - s.psy
 	s.perp = s.pdx*s.psy - s.psx*s.pdy
-	partSegCoords := part.toVertexPairC()
+	partSegCoords := part.toIntVertexPairC()
 	var c IntersectionContext
 	c.psx = s.psx
 	c.psy = s.psy
@@ -95,61 +95,17 @@ func TestPartitionInBoundary(t *testing.T) {
 	c.pey = s.pey
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
-	ov1, ov2 := PartitionInBoundary(part, &c, blXMax, blYMax, blXMin, blYMin, partSegCoords)
+	ov1, ov2 := IntPartitionInBoundary(part, &c, blXMax, blYMax, blXMin, blYMin, partSegCoords)
 	if ov1 == nil || ov2 == nil {
 		t.Errorf("ov1 = %s, ov2 = %s wanted non-nil both", ov1.toString(), ov2.toString())
 	} else {
-		if !tskCheckBounds(ov1.v, blXMax, blYMax, blXMin, blYMin) ||
-			!tskCheckBounds(ov2.v, blXMax, blYMax, blXMin, blYMin) {
+		if !intTskCheckBounds(ov1.v, blXMax, blYMax, blXMin, blYMin) ||
+			!intTskCheckBounds(ov2.v, blXMax, blYMax, blXMin, blYMin) {
 			t.Errorf("ov1 or ov2 are out of bounds")
 			fmt.Printf("Info: ov1 = %s, ov2 = %s\n", ov1.toString(), ov2.toString())
 		} else {
 			fmt.Printf("Good ov1 = %s, ov2 = %s\n", ov1.toString(), ov2.toString())
 		}
-	}
-}
-
-func TestRemoveDuplicatesInCOV(t *testing.T) {
-	// Fuck's sake, this was a bitch
-	pts := CollinearOrientedVertices(make([]OrientedVertex, 5))
-	pts[0] = OrientedVertex{
-		v: &NodeVertex{
-			X: 1168,
-			Y: 12368,
-		},
-		left: true,
-	}
-	pts[1] = OrientedVertex{
-		v: &NodeVertex{
-			X: 1168,
-			Y: 12368,
-		},
-		left: false,
-	}
-	pts[2] = OrientedVertex{
-		v: &NodeVertex{
-			X: 1168,
-			Y: 12368,
-		},
-		left: false,
-	}
-	pts[3] = OrientedVertex{
-		v: &NodeVertex{
-			X: 1168,
-			Y: 11856,
-		},
-		left: true,
-	}
-	pts[4] = OrientedVertex{
-		v: &NodeVertex{
-			X: 1168,
-			Y: 2304,
-		},
-		left: false,
-	}
-	pts.Coalesce()
-	if len(pts) != 3 {
-		t.Errorf("Coalesce failed to remove duplicates, remains: %s", pts.toString())
 	}
 }
 
@@ -168,7 +124,7 @@ func TestGetIntersectionOrIndicence(t *testing.T) {
 	}
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
-	v1, v2 := c.getIntersectionOrIndicence()
+	v1, v2 := c.intGetIntersectionOrIndicence()
 	if v1 != nil || v2 != nil {
 		t.Errorf("Got %s, expected v1: nil; v2: nil\n", printV1V2(v1, v2))
 	}
@@ -187,7 +143,7 @@ func TestGetIntersectionOrIndicence(t *testing.T) {
 	}
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
-	v1, v2 = c.getIntersectionOrIndicence()
+	v1, v2 = c.intGetIntersectionOrIndicence()
 	if v1 != nil || v2 != nil {
 		t.Errorf("Got %s, expected v1: nil; v2: nil\n", printV1V2(v1, v2))
 	}
@@ -206,47 +162,9 @@ func TestGetIntersectionOrIndicence(t *testing.T) {
 	}
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
-	v1, v2 = c.getIntersectionOrIndicence()
+	v1, v2 = c.intGetIntersectionOrIndicence()
 	if v1 != nil || v2 != nil {
 		t.Errorf("Got %s, expected v1: nil; v2: nil\n", printV1V2(v1, v2))
-	}
-}
-
-func TestOverlapping(t *testing.T) {
-	contextStart := &OrientedVertex{
-		v: &NodeVertex{
-			X: 2540,
-			Y: 8301,
-		},
-		left: false,
-	}
-	contextEnd := &OrientedVertex{
-		v: &NodeVertex{
-			X: 2601,
-			Y: 7852,
-		},
-		left: false,
-	}
-
-	nonVoid := []VertexPairC{
-		VertexPairC{StartVertex: &NodeVertex{
-			X: 2493,
-			Y: 8646,
-		},
-			EndVertex: &NodeVertex{
-				X: 2667,
-				Y: 7370,
-			},
-		},
-	}
-
-	good := false
-	if AreOverlapping(contextStart.v, contextEnd.v, nonVoid[0].StartVertex,
-		nonVoid[0].EndVertex) {
-		good = true
-	}
-	if !good {
-		t.Errorf("Not good.\n")
 	}
 }
 
@@ -262,87 +180,82 @@ func printV1V2(v1, v2 *NodeVertex) string {
 	return strV1 + strV2
 }
 
-// Common error in version up to and including v0.72 seems to be dropping first
-// interval
-// Currenty this test fails. It seems that diffgeometry.go needs quite a quality
-// rewrite to deal with errors. Coalesce/fluger needs probably to go, the
-// thing is how to construct intervals from the set directly
 func TestCoalesce1(t *testing.T) {
 	// [,LEFT(-768,-3497),RIGHT(-768,-3497),LEFT(64,-3648),LEFT(64,-3648),RIGHT(2105,-4019),LEFT(2406,-4074),RIGHT(2704,-4128),LEFT(2849,-4154),RIGHT(2880,-4160),LEFT(3328,-4241),RIGHT(3808,-4329)]
 	// More dropouts! -1 -1 ; [(2105;-4019)-(2406;-4074)]; [(2704;-4128)-(2849;-4154)]; [(2880;-4160)-(3328;-4241)] [RIGHT(-640,-3520)-RIGHT(64,-3648)]
 	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
 	pts = append(pts, OrientedVertex{
-		v: &NodeVertex{
+		v: &FloatVertex{
 			X: -768,
 			Y: -3497,
 		},
 		left: true,
 	},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: -768,
 				Y: -3497,
 			},
 			left: false,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 64,
 				Y: -3648,
 			},
 			left: true,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 64,
 				Y: -3648,
 			},
 			left: true,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 2105,
 				Y: -4019,
 			},
 			left: false,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 2406,
 				Y: -4704,
 			},
 			left: true,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 2704,
 				Y: -4128,
 			},
 			left: false,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 2849,
 				Y: -4154,
 			},
 			left: true,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 2880,
 				Y: -4160,
 			},
 			left: false,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 3328,
 				Y: -4241,
 			},
 			left: true,
 		},
 		OrientedVertex{
-			v: &NodeVertex{
+			v: &FloatVertex{
 				X: 3808,
 				Y: -4329,
 			},
@@ -350,7 +263,217 @@ func TestCoalesce1(t *testing.T) {
 		})
 	pts.Coalesce()
 	fmt.Println(pts.toString())
-	if pts[0].left != false || pts[0].v.X != -768 || pts[0].v.Y != -3497 {
-		t.Errorf("Wrong #0 point\n")
+	if pts[1].left != false || pts[0].v.X != -768 || pts[0].v.Y != -3497 {
+		t.Errorf("Wrong #1 point\n")
+	}
+}
+
+func TestCoalesce2(t *testing.T) {
+	// [RIGHT(-1536.,5120.),LEFT(-1360.,5120.),RIGHT(-1344.,5120.),LEFT(-1168.,5120.),RIGHT(-1168.,5120.),LEFT(-1152.,5120.),RIGHT(-1152.,5120.),LEFT(-784.,5120.),LEFT(-784.,5120.),RIGHT(-784.,5120.),RIGHT(-784.,5120.),LEFT(-736.,5120.),RIGHT(-736.,5120.),LEFT(-528.,5120.),LEFT(-528.,5120.),RIGHT(-384.,5120.),RIGHT(-384.,5120.),LEFT(-128.,5120.),LEFT(-128.,5120.),RIGHT(0.,5120.),RIGHT(0.,5120.),LEFT(256.,5120.),LEFT(256.,5120.),RIGHT(384.,5120.),RIGHT(384.,5120.),LEFT(650.666667,5120.),RIGHT(756.444444,5120.),LEFT(1024.,5120.),RIGHT(1207.157895,5120.),LEFT(1416.421053,5120.),RIGHT(1488.,5120.),RIGHT(1488.,5120.),LEFT(2609.560976,5120.)]
+	// More dropouts! -1 -1 ; [LEFT(-1536.,5120.),LEFT(-1360.,5120.),RIGHT(-1344.,5120.),RIGHT(-784.,5120.),LEFT(-528.,5120.),RIGHT(-384.,5120.),LEFT(-128.,5120.),RIGHT(0.,5120.),LEFT(256.,5120.),RIGHT(384.,5120.),LEFT(650.666667,5120.),RIGHT(756.444444,5120.),LEFT(1024.,5120.),RIGHT(1207.157895,5120.),LEFT(1416.421053,5120.),RIGHT(1488.,5120.),LEFT(2609.560976,5120.),RIGHT(4800.,5120.)]
+	dgVertexMap := CreateVertexMap(-1536, -688, 4800, 6272)
+	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	pts = append(pts, OrientedVertex{
+		v:    dgVertexMap.SelectVertexClose(-1536, 5120),
+		left: false,
+	},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-1360, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-1344, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-1168, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-1168, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-1152, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v: dgVertexMap.SelectVertexClose(-1152, 5120),
+
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-784, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-784, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-784, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-784, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-736, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-736, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-528, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-528, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-384, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-384, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-128, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(-128, 5120),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(0, 5120),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(0, 5120),
+			left: false,
+		}, // TODO ...
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(2609.560976, 5120),
+			left: false,
+		})
+
+	pts.Coalesce()
+	fmt.Println(pts.toString())
+	if pts[3].v.X == -784 {
+		t.Errorf("Wrong #3 point\n")
+	}
+}
+
+func TestCoalesce3(t *testing.T) {
+	// left and right vertex missing in "old" sample
+	// [RIGHT(909.391304,-3776.),LEFT(2423.226891,-110.924370),RIGHT(2427.446945,-100.707395),LEFT(2816.,840.),RIGHT(2820.956522,852.),LEFT(3262.086957,1920.)]
+	// More dropouts! -1 -1 ; [(2427.446945,-100.707395)-(2816.,840.)]; [(2820.956522,852.)-(3262.086957,1920.)]
+	// (3712,-6848) to (-3776,3840)
+	dgVertexMap := CreateVertexMap(-6848, -3776, 3840, 3712)
+	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	pts = append(pts, OrientedVertex{
+		v:    dgVertexMap.SelectVertexClose(909.391304, -3776),
+		left: false,
+	},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(909.391304, -3776),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(2423.22689, -110.924370),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(2427.446945, -100.707395),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(2816., 840.),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(2820.956522, 852.),
+			left: true,
+		},
+		OrientedVertex{
+			v: dgVertexMap.SelectVertexClose(3262.086957, 1920.),
+
+			left: false,
+		},
+	// missing last vertex
+	)
+
+	pts.Coalesce()
+	fmt.Println(pts.toString())
+	if pts[1].left != true || pts[1].v.X != 909.391304 ||
+		pts[1].v.Y != -3776 {
+		t.Errorf("Wrong #1 point\n")
+	}
+}
+
+func TestCoalesce4(t *testing.T) {
+	// left and right vertex missing in "old" sample
+	// [RIGHT(3456.,4352.),LEFT(3456.,-1408.),RIGHT(3456.,-1536.),RIGHT(3456.,-1536.),LEFT(3456.,-1600.),RIGHT(3456.,-1600.),LEFT(3456.,-1664.),LEFT(3456.,-1664.)]
+	// Sanity check failed! Evaluated partition line 13993 (3456,3308)-(3456,3318.4) doesn't consistently go in/out of the void when crossing solid lines (incidence count: 2). [LEFT(3456.,5256.),RIGHT(3456.,4352.),LEFT(3456.,-1408.),RIGHT(3456.,-1536.),RIGHT(3456.,-1536.),LEFT(3456.,-1664.),RIGHT(3456.,-2048.)]
+	// (5256,-3392) to (-2048,9664)
+	dgVertexMap := CreateVertexMap(-2048, -3392, 9664, 5256)
+	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
+	pts = append(pts, OrientedVertex{
+		v:    dgVertexMap.SelectVertexClose(3456, 5256),
+		left: false,
+	},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(3456, 4352),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(3456, -1408),
+			left: false,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(3456, -1536),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(3456, -1536),
+			left: true,
+		},
+		OrientedVertex{
+			v:    dgVertexMap.SelectVertexClose(3456, -1600.),
+			left: false,
+		},
+		OrientedVertex{
+			v: dgVertexMap.SelectVertexClose(3456, -1600.),
+
+			left: true,
+		},
+		OrientedVertex{
+			v: dgVertexMap.SelectVertexClose(3456, -1664),
+
+			left: false,
+		},
+		OrientedVertex{
+			v: dgVertexMap.SelectVertexClose(3456, -1664),
+
+			left: false,
+		},
+		OrientedVertex{
+			v: dgVertexMap.SelectVertexClose(3456, -2048),
+
+			left: true,
+		},
+	// missing last vertex
+	)
+
+	pts.Coalesce()
+	fmt.Println(pts.toString())
+	if len(pts) != 6 || pts[3].v == pts[4].v {
+		t.Errorf("Test failed %t %t\n", len(pts) == 6, pts[3].v != pts[4].v)
 	}
 }
