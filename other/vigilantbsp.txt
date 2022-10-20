@@ -310,6 +310,11 @@ partitioners used to split that sector into 2 subsectors, but the update now
 causes entire sector in question in that map to be covered with 1 subsector
 (finally!), which is preferable for sectors involved in polyobjects.
 
+VigilantBSP v0.78a tuned those adjustments to be more precise and less 
+aggressive while still attaining the goal of preventing polyobjects breakage.
+Additionally, multi-tree mode will prefer trees where splits inside polyobjects
+were totally avoided, if such trees exist.
+
 03:07 Multiple node formats support
 -----------------------------------
 

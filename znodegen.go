@@ -188,6 +188,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			numSegs:                0,
 			maxSegCountInSubsector: 0,
 			segSplits:              0,
+			preciousSplit:          0,
 		},
 		vertices:        intVertices,
 		segAliasObj:     new(SegAliasHolder),
@@ -263,6 +264,9 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.reverseDeepNodes(rootNode)
 	}
 	Log.Printf("Max seg count in subsector: %d\n", workData.totals.maxSegCountInSubsector)
+	if workData.totals.preciousSplit > 0 {
+
+	}
 
 	if uint32(workData.totals.numSSectors)&workData.SsectorMask == workData.SsectorMask {
 		Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
@@ -959,6 +963,11 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 	val := c.doLinesIntersect()
 	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 
+		if w.lines.IsTaggedPrecious(atmps.Linedef) &&
+			!w.lines.SectorIgnorePrecious(atmps.sector) {
+
+			w.totals.preciousSplit++
+		}
 		x, y := c.computeIntersection()
 		newVertex := w.AddVertex(x, y)
 		news := new(ZExt_NodeSeg)
@@ -970,6 +979,10 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 		news.Offset = uint16(ZExt_splitDist(w.lines, news))
 		w.totals.segSplits++
 		if atmps.partner != nil {
+			if w.lines.IsTaggedPrecious(atmps.partner.Linedef) &&
+				!w.lines.SectorIgnorePrecious(atmps.partner.sector) {
+				w.totals.preciousSplit++
+			}
 			w.totals.segSplits++
 			atmps.partner.alias = 0
 
@@ -1531,7 +1544,8 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock,
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 
 						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -1554,7 +1568,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock,
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) {
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -1757,7 +1773,8 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 
 						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -1779,7 +1796,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) {
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -2092,7 +2111,8 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 
 						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2117,7 +2137,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) {
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -2504,7 +2526,8 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 						return true
 					}
 
@@ -2518,6 +2541,13 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 					leftside = true
 				}
 			} else {
+
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
+
+					return true
+				}
 				leftside = true
 			}
 		} else if a <= 0 {
@@ -2547,6 +2577,33 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 		}
 	}
 
+	return false
+}
+
+func (w *ZExt_NodesWork) PartIsPolyobjSide(part, check *ZExt_NodeSeg) bool {
+	lines := w.lines.GetAllPolyobjLines(check.Linedef)
+	if lines == nil {
+		return false
+	}
+	c := &ZExt_IntersectionContext{
+		psx: part.psx,
+		psy: part.psy,
+		pdx: part.pdx,
+		pdy: part.pdy,
+		pex: part.pex,
+		pey: part.pey,
+	}
+	for _, line := range lines {
+		x1, x2, y1, y2 := w.lines.GetAllXY(line)
+		c.lsx = ZNumber(x1)
+		c.lsy = ZNumber(x2)
+		c.lex = ZNumber(y1)
+		c.ley = ZNumber(y2)
+		val := c.doLinesIntersect()
+		if (val&1 != 0) && (val&16 != 0) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -3455,6 +3512,14 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 }
 
 func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_MTPWorker_Result) bool {
+
+	oldBad := oldResult.workData.totals.preciousSplit > 0
+	newBad := newResult.workData.totals.preciousSplit > 0
+	if oldBad && !newBad {
+		return true
+	} else if !oldBad && newBad {
+		return false
+	}
 
 	oldSsectorsCnt := oldResult.workData.totals.numSSectors
 	newSSectorsCnt := newResult.workData.totals.numSSectors

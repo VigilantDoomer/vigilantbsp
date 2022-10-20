@@ -121,6 +121,7 @@ type NodesTotals struct {
 	numSegs                uint32
 	maxSegCountInSubsector uint32
 	segSplits              int
+	preciousSplit          int
 }
 
 type NodesWork struct {
@@ -350,6 +351,7 @@ func NodesGenerator(input *NodesInput) {
 			numSegs:                0,
 			maxSegCountInSubsector: 0,
 			segSplits:              0,
+			preciousSplit:          0,
 		},
 		vertices:        intVertices,
 		segAliasObj:     new(SegAliasHolder),
@@ -439,6 +441,28 @@ func NodesGenerator(input *NodesInput) {
 		workData.reverseDeepNodes(rootNode)
 	}
 	Log.Printf("Max seg count in subsector: %d\n", workData.totals.maxSegCountInSubsector)
+	if workData.totals.preciousSplit > 0 {
+		// TODO Hexen contains some awkwardly designed polyobjects, placed in
+		// non-convex sectors, sectors joined with others (map10) although
+		// not remotely etc. Until polyobject containing part is determined more
+		// precisely, this report (and the total itself is not much use).
+		// NOTE I intend to use this field (totals.preciousSplit) for multi-tree
+		// so that it would select trees where polyobjs were not damaged. But
+		// currently the number paints worse picture than there actually is: in
+		// a lot of cases with non-zero number polyobjs are functioning as
+		// intended
+		// It seems that rather than being computed in-progress, the splits need
+		// to be counted after the tree is done, via determining the number of
+		// subsectors within the sector, and plus determining whether the sector
+		// was originally convex, and if not, the minimal number of convex
+		// polygons it could have been split into (not entirely sure, mind you...
+		// I doubt we can read the mind of the user to know which exactly
+		// subsection of sector should have been polyobject performing in if
+		// sector is non-convex. Who knows if the user may have made a blunder
+		// and it was not supposed to be working anyway?)
+		//Log.Printf("Bad splits (split precious lines or lines of polyobj containing sector): %d\n",
+		//	workData.totals.preciousSplit)
+	}
 
 	// Now we can actually UNDO all our hard work if limits were exceeded
 	if uint32(workData.totals.numSSectors)&workData.SsectorMask == workData.SsectorMask {
@@ -1251,15 +1275,9 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 // For prototype of Zdoom counterpart, see zdefs.go!ZCreateSSector_Proto, it is
 // that function from which ZExt_CreateSSector is generated, not this one
 func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
-	// TODO since vanilla can't use deep nodes, at least make segs relocation
-	// for its seg limit (max seg index = 32767)
 	// TODO check that stuff is within limits. Currently node lumps are emptied
 	// AFTER the whole process completes if limit for current format was
 	// exceeded. Might try to detect condition earlier?
-	// TODO rewrite seg lump to have stuff withing limits (vanilla; limit-raising/"limit-removing")
-	// (relocate firstsegs if needed)
-	// => w.subsectors[]
-	// => w.segs[]
 	var subsectorIdx uint32
 	var oldNumSegs uint32
 	if w.nodeType == NODETYPE_DEEP {
@@ -1545,7 +1563,7 @@ func addSegToSide(segToAdd []*NodeSeg, thisside, stThisSide **NodeSeg) {
 	}
 }
 
-// CategoriseAndMaybeDivideOneSeg decides whether seg needs to be split (and
+// CategoriseAndMaybeDivideSeg decides whether seg needs to be split (and
 // splits it if so), and also which side this seg/the ones resulting from
 // split goes/go. If seg has a partner, it categorises two segs at once (and
 // if one of them gets split, the other gets split too)
@@ -1566,6 +1584,13 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 	val := c.doLinesIntersect()
 	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 		// Partition intersects this seg in tmps parameter, so it needs to be split
+		if w.lines.IsTaggedPrecious(atmps.Linedef) &&
+			!w.lines.SectorIgnorePrecious(atmps.sector) {
+			// undesirable split MIGHT have occured. Hexen.wad actually has lot
+			// of setups that are non-convex sectors, etc. so this doesn't
+			// necessarily mean things were broken
+			w.totals.preciousSplit++
+		}
 		x, y := c.computeIntersection()
 		newVertex := w.AddVertex(x, y)
 		news := new(NodeSeg)
@@ -1577,6 +1602,10 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 		news.Offset = uint16(splitDist(w.lines, news))
 		w.totals.segSplits++
 		if atmps.partner != nil {
+			if w.lines.IsTaggedPrecious(atmps.partner.Linedef) &&
+				!w.lines.SectorIgnorePrecious(atmps.partner.sector) {
+				w.totals.preciousSplit++
+			}
 			w.totals.segSplits++
 			atmps.partner.alias = 0 // clear alias, as angle may change after split
 			// Split partner too

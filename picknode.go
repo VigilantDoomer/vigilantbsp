@@ -54,9 +54,6 @@ const ONESIDED_MULTIPLY = 20
 // count on both sides
 const SEG_FAST_THRESHHOLD = 200
 
-// TODO port "passing through a vertex of precious linedef BUT I am not alongside
-// another linedef from the same sector as precious one" check from ZDBSP
-
 // secondary metric to balance costs
 type MinorCosts struct {
 	PreciousSplit int // number of "do not split" seg split
@@ -303,7 +300,8 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 					// VigilantDoomer: so is a tag on a linedef, or on a sector?
 					// Currently put on the linedef, but damn, there are other special
 					// tag values >= 900, not sure if I should give them this meaning too
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -328,21 +326,12 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 					}
 				}
 			} else {
-				// TODO review, possibly find another way to solve this
-				// This workaround seems to fix the problem with Hexen map05
-				// (Guardian of Steel) polyobject recipient sector 275 getting
-				// broken in default partitioner (visplane-aware and maelstrom
-				// are blessed to avoid this). The resulting wad seems beefier
-				// after this fix. The inspiration for writing it was some code
-				// in AJ-BSP where they rejected partition passing through
-				// vertex
-				// FIXME I suspect this logic produces false positive when
-				// partition line is coincident with line that comes from the
-				// same polyobject-hosting sector as check.Linedef. If sector
-				// was convex to begin with, it is not broken into non-convex
-				// pieces by this. Needs to replace with more elaborate
-				// condition (update other partitioners also)
-				if w.lines.IsTaggedPrecious(check.Linedef) {
+				// This fixes the problem with Hexen map05 (Guardian of Steel)
+				// polyobject recipient sector 275 getting broken. AJ-BSP and
+				// ZDBSP also use this solution
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -633,7 +622,8 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 					// treat it as precious; i.e. don't split it unless all other options
 					// are exhausted. This is used to protect deep water and invisible
 					// lifts/stairs from being messed up accidentally by splits. - Killough
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -657,15 +647,12 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 					leftside = true
 				}
 			} else {
-				// TODO review, possibly find another way to solve this
-				// Ported from default partitioner. After checking with node
-				// viewer, it seems that the damn 275 sector in Hexen map05
-				// was split into two subsectors in visplane-aware partitioners,
-				// and was just lucky to avoid problems caused by this. This
-				// sector really ought to be one subsector for safety sake.
-				// Default partitioner (seg-only guided) used to create multiple
-				// subsectors before this workaround
-				if w.lines.IsTaggedPrecious(check.Linedef) {
+				// This fixes the problem with Hexen map05 (Guardian of Steel)
+				// polyobject recipient sector 275 getting broken. AJ-BSP and
+				// ZDBSP also use this solution
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -1083,7 +1070,8 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 					// treat it as precious; i.e. don't split it unless all other options
 					// are exhausted. This is used to protect deep water and invisible
 					// lifts/stairs from being messed up accidentally by splits. - Killough
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -1110,15 +1098,12 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 					}
 				}
 			} else {
-				// TODO review, possibly find another way to solve this
-				// Ported from default partitioner. After checking with node
-				// viewer, it seems that the damn 275 sector in Hexen map05
-				// was split into two subsectors in visplane-aware partitioners,
-				// and was just lucky to avoid problems caused by this. This
-				// sector really ought to be one subsector for safety sake.
-				// Default partitioner (seg-only guided) used to create multiple
-				// subsectors before this workaround
-				if w.lines.IsTaggedPrecious(check.Linedef) {
+				// This fixes the problem with Hexen map05 (Guardian of Steel)
+				// polyobject recipient sector 275 getting broken. AJ-BSP and
+				// ZDBSP also use this solution
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
 					} else {
@@ -1576,7 +1561,8 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 					// lifts/stairs from being messed up accidentally by splits. - Killough
 					// VigilantDoomer: don't select such partitions in maelstrom
 					// fast path - we have a traditional path to fall back to
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) &&
+						!w.lines.SectorIgnorePrecious(check.sector) {
 						return true
 					}
 
@@ -1591,6 +1577,16 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 					leftside = true
 				}
 			} else {
+				// This fixes the problem with Hexen map05 (Guardian of Steel)
+				// polyobject recipient sector 275 getting broken. AJ-BSP and
+				// ZDBSP also use this solution
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					!w.PartIsPolyobjSide(part, check) {
+					// VigilantDoomer: don't select such partitions in maelstrom
+					// fast path - we have a traditional path to fall back to
+					return true
+				}
 				leftside = true
 			}
 		} else if a <= 0 {
@@ -1634,6 +1630,35 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 // It may modify cost and minors as well.
 func (w *NodesWork) PassingTooClose(part, check *NodeSeg, cost *int,
 	minors *MinorCosts) bool {
+	return false
+}
+
+// PartIsPolyobjSide returns whether part is alongside any side of polyobject
+// sector (which should be convex) that check comes from
+func (w *NodesWork) PartIsPolyobjSide(part, check *NodeSeg) bool {
+	lines := w.lines.GetAllPolyobjLines(check.Linedef)
+	if lines == nil {
+		return false
+	}
+	c := &IntersectionContext{
+		psx: part.psx,
+		psy: part.psy,
+		pdx: part.pdx,
+		pdy: part.pdy,
+		pex: part.pex,
+		pey: part.pey,
+	}
+	for _, line := range lines {
+		x1, x2, y1, y2 := w.lines.GetAllXY(line)
+		c.lsx = Number(x1)
+		c.lsy = Number(x2)
+		c.lex = Number(y1)
+		c.ley = Number(y2)
+		val := c.doLinesIntersect()
+		if (val&1 != 0) && (val&16 != 0) {
+			return true
+		}
+	}
 	return false
 }
 

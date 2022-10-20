@@ -194,7 +194,19 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 // Really banal bsp tree comparison. Tries to minimize subsector count first,
 // then bsp tree height difference, then bsp tree height itself, then seg count,
 // after that, if all things still equal, tree that came from earlier seg wins
+// NOTE also added check for precious splits
 func MTP_IsBSPTreeBetter(oldResult *MTPWorker_Result, newResult *MTPWorker_Result) bool {
+	// Prefer trees where no precious segs or polyobj sector borders were split
+	// But, don't compare numbers itself as a lot of Hexen maps have setups that
+	// deviate from "convex sector" ideal and are not getting broken by those
+	// splits really
+	oldBad := oldResult.workData.totals.preciousSplit > 0
+	newBad := newResult.workData.totals.preciousSplit > 0
+	if oldBad && !newBad {
+		return true
+	} else if !oldBad && newBad {
+		return false
+	}
 	// Compare subsector count
 	oldSsectorsCnt := oldResult.workData.totals.numSSectors
 	newSSectorsCnt := newResult.workData.totals.numSSectors

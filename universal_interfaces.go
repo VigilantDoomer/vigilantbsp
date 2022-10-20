@@ -91,10 +91,25 @@ type WriteableLines interface {
 	// returns whether the linedef was marked as a precious, which means nodes
 	// builder should avoid splitting it at all costs
 	IsTaggedPrecious(lidx uint16) bool
+	// returns whether IsTaggedPrecious == true value should nonetheless be
+	// ignored when evaluating whether splitting a seg from this line would be
+	// bad. For Doom format this is always false, because line preciousness
+	// is decided by a tag and has nothing to do with on which side of it you
+	// are splitting a seg. But for Hexen format, line is precious when it is
+	// part of polyobject definition, but what you really want is to avoid
+	// splitting the sector hosting a polyobject, which may be only to one side
+	// of this line. On the other hand, IsTaggedPrecious is also used when
+	// deciding if creating a seg can be skipped (selfref.go Culler), and it
+	// sure can't be skipped for all such lines, thus the two methods can't
+	// be merged together
+	SectorIgnorePrecious(sidx uint16) bool
 	// returns number of vertices
 	GetVerticesCount() int
 	// MUTATES linedefs of sectors containing polyobjects are "tagged" precious
 	DetectPolyobjects()
+	// Returns all lines from the same polyobject
+	// The caller has responsibility NOT to modify returned slice
+	GetAllPolyobjLines(lidx uint16) []uint16
 	// MUTATES adds a new vertex and returns its index
 	AddVertex(X, Y int) int
 	// returns underlying slice used for representing vertices
@@ -150,7 +165,9 @@ type HexenLinedefs struct {
 	things           []HexenThing
 	sidedefs         []Sidedef
 	sectorHasPolyobj map[uint16]bool
-	preciousLinedefs []bool // true for linedefs that are part of sector that has a polyobj
+	preciousLinedefs []bool              // true for linedefs that are part of sector that has a polyobj
+	poSectorLineIdx  map[uint16][]uint16 // sector (with polyobj) idx to list of line related to polyobj
+	poLineToSector   map[uint16][]uint16 // precious linedef idx to list of sectors with polyobj it is part of
 }
 
 // Hexen analogue of DoomSolidLinedefs
@@ -279,6 +296,10 @@ func (o *DoomLinedefs) DetectPolyobjects() {
 	// No-op - no polyobjects in Doom format
 }
 
+func (o *DoomLinedefs) GetAllPolyobjLines(lidx uint16) []uint16 {
+	return nil
+}
+
 func (o *DoomLinedefs) GetVertices() interface{} {
 	return o.vertices
 }
@@ -317,6 +338,10 @@ func (o *DoomLinedefs) IsTaggedPrecious(lidx uint16) bool {
 	// removed from blockmap as precious, ditto with no render for which seg
 	// ain't created
 	return (tag >= 900) && (tag != 999) && (tag != 998)
+}
+
+func (o *DoomLinedefs) SectorIgnorePrecious(sidx uint16) bool {
+	return false // never ignore IsTaggedPrecious positive result
 }
 
 func (o *DoomLinedefs) GetAction(lidx uint16) uint16 {
@@ -470,6 +495,8 @@ func (o *HexenLinedefs) PruneUnusedVertices() {
 // Possibly needs optimizations for maps heavy on polyobjects -- VigilantDoomer
 func (o *HexenLinedefs) DetectPolyobjects() {
 	o.preciousLinedefs = make([]bool, len(o.linedefs))
+	o.poLineToSector = make(map[uint16][]uint16)
+	o.poSectorLineIdx = make(map[uint16][]uint16)
 
 	// -JL- There's a conflict between Hexen polyobj thing types and Doom thing
 	//      types. In Doom type 3001 is for Imp and 3002 for Demon. To solve
@@ -614,6 +641,7 @@ func (o *HexenLinedefs) markPolyobjSector(sector uint16) {
 		return
 	}
 	o.sectorHasPolyobj[sector] = true
+	lineIdxs := make([]uint16, 0)
 	// mark all lines of this sector as precious, to prevent the sector
 	// from being split.
 	for i, line := range o.linedefs {
@@ -624,8 +652,16 @@ func (o *HexenLinedefs) markPolyobjSector(sector uint16) {
 			(line.BackSdef != SIDEDEF_NONE &&
 				o.sidedefs[line.BackSdef].Sector == sector) {
 			o.preciousLinedefs[i] = true
+			lineIdxs = append(lineIdxs, uint16(i))
+			rec := o.poLineToSector[uint16(i)]
+			if rec == nil {
+				rec = make([]uint16, 0)
+			}
+			rec = append(rec, sector)
+			o.poLineToSector[uint16(i)] = rec
 		}
 	}
+	o.poSectorLineIdx[sector] = lineIdxs
 }
 
 func checkLinedefInsideBox(xmin, ymin, xmax, ymax, x1, y1, x2, y2 int) bool {
@@ -681,6 +717,17 @@ func checkLinedefInsideBox(xmin, ymin, xmax, ymax, x1, y1, x2, y2 int) bool {
 		y1, y2 = y2, y1
 	}
 	// linedef touches block
+	return true
+}
+
+func (o *HexenLinedefs) SectorIgnorePrecious(sidx uint16) bool {
+	if o.poSectorLineIdx[sidx] != nil {
+		// this sector indeed contains a polyobject, so IsTaggedPrecious
+		// positive result needs to be honored
+		return false
+	}
+	// this sector does not contain a polyobject - so even though linedef you
+	// checked may be precious the side that faces this sector can be split
 	return true
 }
 
@@ -749,6 +796,21 @@ func (o *HexenLinedefs) GetSolidVersion() SolidLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *HexenLinedefs) GetAllPolyobjLines(lidx uint16) []uint16 {
+	rec := o.poLineToSector[lidx]
+	if rec == nil {
+		return nil
+	}
+	ret := o.poSectorLineIdx[rec[0]]
+	if len(rec) > 1 { // bad, shouldn't happen
+		ret = make([]uint16, 0)
+		for i, _ := range rec {
+			ret = append(ret, o.poSectorLineIdx[rec[i]]...)
+		}
+	}
+	return ret
 }
 
 func (o *DoomSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
@@ -985,6 +1047,8 @@ func (o *HexenLinedefs) Clone() WriteableLines {
 		sidedefs:         o.sidedefs,         // NOTE we are not yet mutating sidedefs, do we?
 		sectorHasPolyobj: o.sectorHasPolyobj, // NOTE we are not mutating sectorHasPolyobj anymore after DetectPolyobjs was called?
 		preciousLinedefs: o.preciousLinedefs, // NOTE we are not mutating preciousLinedefs anymore after DetectPolyobjs was called?
+		poSectorLineIdx:  o.poSectorLineIdx,  // NOTE we are not yet mutating this, do we?
+		poLineToSector:   o.poLineToSector,   // NOTE we are not yet mutating this, do we?
 	}
 }
 
