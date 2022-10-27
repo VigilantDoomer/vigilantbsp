@@ -313,7 +313,7 @@ func RoundToFixed1616(v *FloatVertex) {
 	v.Y = float64(int(v.Y*FIXED16DOT16_MULTIPLIER)) / FIXED16DOT16_MULTIPLIER
 }
 
-// Future_PartitionInBoundary returns two points of intersection between partition
+// PartitionInBoundary returns two points of intersection between partition
 // line and a bounding box represented by blXMax, blYMax, blXMin, blYMin.
 // Argument part is only used for log output (linedef index etc.), the values
 // are computed using c (IntersectionContext) and partSegCoords instead
@@ -397,7 +397,7 @@ func PartitionInBoundary(part *NodeSeg, c *FloatIntersectionContext,
 	return partStart, partEnd, side[0]
 }
 
-// future_appendNoDuplicates adds v to x if it is not already present, and
+// appendNoDuplicates adds v to x if it is not already present, and
 // returns new value of x and true if that happened. If x was not changed,
 // the second return value is false
 // Caveat: checks only first element, cause it is a lazy wrapper over append
