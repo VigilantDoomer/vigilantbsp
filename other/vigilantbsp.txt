@@ -259,6 +259,15 @@ either require an advanced source port or an advanced nodes format
 knowledge, no other nodebuilder does this as of yet, although the 
 possibility was previously documented by someone. 
 
+From v0.78a onwards, when building blockmap with dummy linedef
+enabled and allowed to be non-zero linedef (default), VigilantBSP
+will avoid choosing long linedefs as a dummy linedef to place
+in every block. This decreases the chance of "Histcan attacks hit
+invisible barriers in large open areas" bug (see doomwiki article
+with that title) triggering. Linedefs with length of 2048 units
+or more will be considered long for this purpose and will be 
+avoided if any shorter linedef is found.
+
 03:04 Continuing research on reducing visplanes
 --------------------------------------
 
@@ -699,12 +708,22 @@ of overhead per list) so that 2 bytes can be reclaimed back, if that is
 possible. The technique to achieve so is called "byte stealing", and uses
 the fact that the offset of last block can, under certain circumstances, be
 the offset of the beginning of its list and concide with a linedef number.
+Additionally, from v0.78a onwards, VigilantBSP will avoid choosing linedef
+with length longer than or equal to 2048 units as a dummy, to reduce 
+instances of "hitscan attacks hit invisible barriers" bug (but the best
+mitigation for the bug itself is for the mapper not to have any such 
+lines in first place, since long lines in the view will still cause 
+this error, if they are collideable).
 
 z=2 Use linedef #0 as dummy header
 Just like option z=1, this also results in blockmaps universally supported
 by Doom engines. It also adds about 2 bytes of overhead per list in the 
 blockmap, but the possibility of saving 2 bytes overall via "byte stealing"
-is lost.
+is lost. Also, if this line happens to be longer than 2048 units, it
+will cause hitscan attacks to miss very frequently in ANY part of
+the level, but VigilantBSP will not switch to some other linedef to 
+mitigate it since it will honor user's request to use this linedef
+and not any other.
 
 05:04 's' - Subset compress BLOCKMAP.
 -------------------------------------

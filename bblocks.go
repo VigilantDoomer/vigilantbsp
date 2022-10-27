@@ -21,12 +21,19 @@ package main
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 )
 
 const BBLOCKS_BUCKETS_COUNT = 4096
 const VANILLA_BM_OFFSET_TOO_BIG = 32768
 const ANYPORT_BM_OFFSET_TOO_BIG = 65536
+
+// group of constants for whether a line is too long to include it in blockmap's
+// every block. "Hitscan attacks hit invisible barriers in large open areas"
+// article on Doomwiki is the reason for this functionality
+const BLOCKMAP_LONG_LINE_SIDE = 2000
+const BLOCKMAP_LONG_LINE_LEN = float64(2048)
 
 const (
 	// idea from zokumbsp: when blocklist has both a horizontal and a vertical
@@ -164,7 +171,7 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 		// offset of the last block definition (which holds offset of this block
 		// blocklist) in blockmap would be:
 		final_offs := 4 + blockCount - 1
-		if final_offs < int(cntLines) { // TODO check whether linedef is problematic to be included in every block
+		if final_offs < int(cntLines) {
 			// Minor savings to cushion use of zero header in every blocklist
 			// Note that result.stealOneWord may still get reverted to false
 			// when lump is produced (GetBytes/GetBytesArcane and their
@@ -172,10 +179,20 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 			// block has to be written last because of its big size (and no other
 			// blocklists have the same size), as stealing only happens when
 			// blocklist of last block is written first
-			result.zeroLinedef = uint16(final_offs)
-			result.stealOneWord = true
+			eligible := IsEligibleAsZero(input.lines, uint16(final_offs))
+			if eligible {
+				result.zeroLinedef = uint16(final_offs)
+				result.stealOneWord = true
+			} else {
+				// choose different linedef - but can't use word stealing in
+				// this case
+				result.zeroLinedef = FindEligibleAsZero(input.lines)
+			}
+		} else {
+			// Avoid choosing zero linedef if it is long and some other linedef
+			// isn't
+			result.zeroLinedef = FindEligibleAsZero(input.lines)
 		}
-		// TODO compute length. If too long, will need another
 	}
 
 	// The algorithm as used here is taken from ZDBSP v1.19 (c) Marisa Heit
@@ -321,6 +338,42 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 
 	result.blocklist = blocklist
 	return result
+}
+
+// IsEligibleAsZero returns whether linedef is good to use as dummy linedef to
+// include in every blockmap's block
+func IsEligibleAsZero(lines AbstractLines, idx uint16) bool {
+	if lines.BlockmapSkipThis(idx) {
+		// This line was marked by user not to be in blockmap
+		return false
+	}
+	x1, y1, x2, y2 := lines.GetAllXY(idx)
+	iDx := x2 - x1
+	iDy := y2 - y1
+	if Abs(iDx) >= BLOCKMAP_LONG_LINE_SIDE ||
+		Abs(iDy) >= BLOCKMAP_LONG_LINE_SIDE {
+		return false
+	}
+	dx := float64(iDx)
+	dy := float64(iDy)
+	l := math.Sqrt(dx*dx + dy*dy)
+	if l >= BLOCKMAP_LONG_LINE_LEN {
+		return false
+	}
+	return true
+}
+
+// FindEligibleAsZero returns index of some linedef that is good to use as
+// dummy linedef. If it happens no such linedef exists, zero linedef will have
+// to be chosen regardless
+func FindEligibleAsZero(lines AbstractLines) uint16 {
+	cntLines := lines.Len()
+	for cid := uint16(0); cid < cntLines; cid++ {
+		if IsEligibleAsZero(lines, cid) {
+			return cid
+		}
+	}
+	return 0
 }
 
 // Returns bytes to store in BLOCKMAP lump

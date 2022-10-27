@@ -5,7 +5,8 @@ v0.78a (working name)
 - Increased precision of vanilla/deep nodes as well to avoid bugs in areas with a lot of detail (this might increase segs a little)
 - Nodebuilder no longer adds vertices that are duplicate of existing ones (although these occurences were seldom before), which may lead to smaller VERTEXES lump 
 - Redone bug fix for broken polyobject in Guardian of Steel and the like so that fewer segs and visplanes are generated for maps with polyobjects
-- Improved heuristics in advanced visplane reduction partitioner (more accurate measure of partition length without the parts that lie in the void). 
+- Improved heuristics in advanced visplane reduction partitioner (more accurate measure of partition length without the parts that lie in the void).
+- When blockmap builder is allowed to select a dummy linedef different from zero, it will prefer linedefs that are shorter than 2048 units.
 
 v0.75a
 - New feature: option to generate nodes in Zdoom non-GL extended and compressed formats

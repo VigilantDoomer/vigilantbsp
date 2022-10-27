@@ -562,6 +562,12 @@ func BMBeeMaxSize(b LevelBounds) int {
 func StatBlockmap(bm *Blockmap) {
 	mayNag := false
 	Log.Printf("Blockmap: largest block offset value: %d", bm.largestOffset)
+	if bm.useZeroHeader {
+		Log.Verbose(1, "Blockmap: dummy linedef %d, word stealing was used: %t\n",
+			bm.zeroLinedef, bm.stealOneWord)
+	} else {
+		Log.Verbose(1, "Blockmap: didn't use dummy linedef\n")
+	}
 	if (bm.gcShield != nil) && (bm.largestOffset >= MAX_ADDRESSABLE_BLOCKMAP_SIZE) {
 		Log.Printf("Blockmap lump required a buffer so large it got truncated.\n")
 	}
