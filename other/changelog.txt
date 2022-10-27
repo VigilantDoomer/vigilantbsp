@@ -8,6 +8,7 @@ v0.78a (working name)
 - Improved heuristics in advanced visplane reduction partitioner (more accurate measure of partition length without the parts that lie in the void).
 - When blockmap builder is allowed to select a dummy linedef different from zero, it will prefer linedefs that are shorter than 2048 units.
 - Failure to write report file when requested by REPORT option in RMB options file is no longer regarded as fatal.
+- Decreased memory use when building reject
 
 v0.75a
 - New feature: option to generate nodes in Zdoom non-GL extended and compressed formats

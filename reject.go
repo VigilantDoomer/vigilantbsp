@@ -89,7 +89,8 @@ type RejectWork struct {
 	fileControl       *FileControl
 	mapName           string
 	lineEffects       map[uint16]uint8
-	specialSolids     []uint16 // all linedefs that need to be treated as solid even though they aren't
+	specialSolids     []uint16   // all linedefs that need to be treated as solid even though they aren't
+	drLine            *TransLine // memory optimization: used in non-reentrant divideRegion
 }
 
 type RejectInput struct {
@@ -449,6 +450,7 @@ func (r *RejectWork) setupLines() bool {
 	// then/ deleted, never written to or read from.
 	r.solidLines = make([]SolidLine, numLines)
 	r.transLines = make([]TransLine, numLines)
+	r.drLine = new(TransLine)
 	r.indexToSolid = make([]*SolidLine, numLines) // maps index of a line in input.lines to its record in solidLines array, if one exists
 	r.slyLinesInSector = make(map[uint16]bool)
 	for i := uint16(0); i < numLines; i++ {
@@ -1403,19 +1405,19 @@ func (r *RejectWork) divideRegion(src, tgt *TransLine) bool {
 		return r.checkLOS(src, tgt)
 	}
 
-	newSrc := *src
+	// drLine is a reusable field that is allocated once
+	*(r.drLine) = *src
+	r.drLine.end = &crossPoint
 
-	newSrc.end = &crossPoint
-
-	isVisible := r.checkLOS(&newSrc, tgt)
+	isVisible := r.checkLOS(r.drLine, tgt)
 
 	if !isVisible {
-		newSrc.start = &crossPoint
-		newSrc.end = src.end
+		r.drLine.start = &crossPoint
+		r.drLine.end = src.end
 		tgt.start, tgt.end = tgt.end, tgt.start
 		tgt.DX = -tgt.DX
 		tgt.DY = -tgt.DY
-		isVisible = r.checkLOS(&newSrc, tgt)
+		isVisible = r.checkLOS(r.drLine, tgt)
 	}
 
 	return isVisible
