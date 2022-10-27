@@ -552,7 +552,9 @@ func (r *RejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
 				continue
 			}
 			writ := r.reportGetWriter()
-			r.reportDoForDistance(writ, uint16(cmd.Data[0]))
+			if writ != nil {
+				r.reportDoForDistance(writ, uint16(cmd.Data[0]))
+			}
 		}
 	}
 	if !ret {
@@ -589,8 +591,9 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 	}
 	wri, err := r.fileControl.OpenReportFile()
 	if err != nil {
-		Log.Panic("Couldn't create file %s: %s", r.fileControl.reportFileName,
+		Log.Error("Couldn't create file %s: %s", r.fileControl.reportFileName,
 			err.Error())
+		return nil
 	}
 	// Add a comment line specifying the version of VigilantBSP used to
 	// produce the file. This is so that I might change format in the future,

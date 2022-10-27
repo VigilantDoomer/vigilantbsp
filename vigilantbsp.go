@@ -125,7 +125,7 @@ func (fc *FileControl) OpenReportFile() (*os.File, error) {
 		fc.freport = nil
 		return nil, err
 	}
-	return fc.freport, err
+	return fc.freport, nil
 }
 
 func (fc *FileControl) CloseReportFile(suc bool) bool {
