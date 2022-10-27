@@ -268,6 +268,24 @@ with that title) triggering. Linedefs with length of 2048 units
 or more will be considered long for this purpose and will be 
 avoided if any shorter linedef is found.
 
+Another feature originating in v0.78a is dealing with very long 
+lines. Vanilla, DeeP and Zdoom extended/compressed nodes all
+have a limit on node line coords: they are integers (yes, even
+for compressed nodes), signed 16-bit and their range is limited
+to (-32768; 32767). This also applies to delta X and delta Y -
+the difference between X and Y of start and end point respectively.
+However, partition line can be represented by any segment of it -
+the length of segment used for representation need NOT to coincide
+with either the length of original linedef (like ZDBSP prefers
+to do) or the segment inside the node (like BSP does). VigilantBSP
+will attempt to choose shorter segment so that line will represented
+correctly, but might bail out of it if it can't preserve the angle.
+This research is new since it appears no other nodebuilder has done 
+it. It should be noted that vanilla will have rendering problems
+even with mitigation taking place, because it just can't render
+very long lines correctly whether they are partition lines or not,
+but for other ports, VigilantBSP will make a difference.
+
 03:04 Continuing research on reducing visplanes
 --------------------------------------
 
@@ -1286,6 +1304,21 @@ PrBoom-Plus v2.6.2um DOES support it, but Prboom-Plus v2.5.1.5 doesn't.
 
 Compression may occassionally result in smaller file size than even
 vanilla format.
+
+Note about VERY long lines (where DX or DY <= -32768 or > 32767) -
+all currently supported node formats struggle to represent them, 
+because even extended nodes use 16-bit signed integers to represent
+DX and DY of partition line. VigilantBSP seems to be the first to
+offer any mitigation for it and represent them using shorter
+segments that have same angle (since v0.78a), currently this 
+sometimes can not be done (when angle can't be preserved). Vanilla
+will have trouble rendering levels that contain any long lines,
+not just those that were used a partition, and even in advanced
+ports such as PrBoom-Plus, problems might occur because some 
+computations with large distances from partition line can also
+overflow (but VigilantBSP attempts to place "representative"
+segment to decrease such errors and eliminates them in at 
+least some levels).
 
 07:07 'f' - Tuning factor (seg split cost, etc.)
 ------------------------------------------------

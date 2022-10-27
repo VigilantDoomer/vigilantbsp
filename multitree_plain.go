@@ -435,12 +435,6 @@ func (w *NodesWork) MTP_DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	chosen *NodeSeg) {
 	best := chosen
 
-	w.nodeX = int(best.StartVertex.X)
-	w.nodeY = int(best.StartVertex.Y)
-	w.nodeDx = best.EndVertex.X.Ceil() - w.nodeX
-	w.nodeDy = best.EndVertex.Y.Ceil() - w.nodeY
-
-	// Partition line coords
 	c := &IntersectionContext{
 		psx: best.StartVertex.X,
 		psy: best.StartVertex.Y,
@@ -449,5 +443,9 @@ func (w *NodesWork) MTP_DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
+
+	// Node line coords
+	w.SetNodeCoords(best, bbox, c)
+
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, pseudoSuper, rightsSuper, leftsSuper)
 }

@@ -1442,13 +1442,60 @@ func (w *NodesWork) SetNodeCoords(part *NodeSeg, bbox *NodeBounds,
 	w.nodeY = int(part.StartVertex.Y)
 	w.nodeDx = part.EndVertex.X.Ceil() - w.nodeX
 	w.nodeDy = part.EndVertex.Y.Ceil() - w.nodeY
+	// Check if there is overflow
 	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 		w.nodeDy >= -32768 {
+		// No overflow - good
 		return
 	}
-	Log.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from segment of linedef %d) can not be represented correctly. You will likely experience errors in every port.\n",
+
+	// If we are still here, we have an atypically long line.
+
+	// Scale down via integer division, if can do _with zero remainders_
+	dd := GCD(Abs(w.nodeDx), Abs(w.nodeDy))
+	if dd != 1 {
+		w.nodeDx = w.nodeDx / dd
+		w.nodeDy = w.nodeDy / dd
+		if dd > 2 {
+			// Distance from partition line to other segs - if it is large - can
+			// cause numerical overflows and visual glitches in run-time even in
+			// advanced ports (PrBoom-plus etc). In particular, without this
+			// step there would be glitches in PrBoom-Plus when standing near
+			// either end of original linedef. Thus I try to keep it small by
+			// placing segment at the line's center
+			// This mitigation can't do anything for vanilla, though - vanilla
+			// has significant visual glitches with ANY long line in view (not
+			// just partition lines), which can not be helped
+			d2 := dd / 2
+			w.nodeX += d2 * w.nodeDx
+			w.nodeY += d2 * w.nodeDy
+		}
+	}
+
+	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
+		w.nodeDy >= -32768 {
+		Log.Verbose(1, "Prevented partition line coords overflow (from segment of linedef %d).\n",
+			part.Linedef)
+		return
+	}
+
+	// Could do nothing
+	// TODO could be acceptable enough if I scale down with rounding? Not sure -
+	// the angle would be different and that should be probably considered when
+	// sorting/splitting segs to each side?
+
+	Log.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from segment of linedef %d) can not be represented correctly due to (-32768,32767) signed int16 range limit in format. Parts of map will not be rendered correctly in any port.\n",
 		w.nodeDx, w.nodeDy, part.Linedef)
-	// TODO scaling down the vector could help?
+}
+
+// GCD returns greatest common divisor for POSITIVE integers
+func GCD(a, b int) int {
+	for b != 0 {
+		tmp := b
+		b = a % b
+		a = tmp
+	}
+	return a
 }
 
 // Split a list of segs (ts) into two using the method described at bottom of

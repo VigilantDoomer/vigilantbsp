@@ -399,10 +399,10 @@ func (w *NodesWork) ZSetNodeCoords_Proto(part *NodeSeg, bbox *NodeBounds,
 		w.nodeDy >= -32768 {
 		return
 	}
-	Log.Verbose(1, "Level contains very big line %d, and it was chosen as a partition line. I will try to avoid overflow by computing node values using only part of it\n",
-		part.Linedef)
-	// FIXME the part may still be longer and cause an overflow. The code below
-	// doesn't check this
+	oldDx := w.nodeDx
+	oldDy := w.nodeDy
+	oldX := w.nodeX
+	oldY := w.nodeY
 	psx, psy := part.StartVertex.X, part.StartVertex.Y
 	pex, pey := part.EndVertex.X, part.EndVertex.Y
 	pexc, peyc := pex.Ceil(), pey.Ceil()
@@ -413,71 +413,106 @@ func (w *NodesWork) ZSetNodeCoords_Proto(part *NodeSeg, bbox *NodeBounds,
 	// Is precise coords?
 	if float64(w.nodeX) == float64(psx) && float64(w.nodeY) == float64(psy) &&
 		float64(pexc) == float64(pex) && float64(peyc) == float64(pey) {
+		// Yes, but what about overflow?
 		if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 			w.nodeDy >= -32768 {
-			Log.Verbose(1, "I've chosen seg coords instead of line coords for partition, but they still overflow node values. Source linedef: %d\n",
+			// Avoided - good
+			Log.Verbose(1, "I avoided overflow in node values by chosing seg coords instead of linedef coords (line too long). Source linedef: %d\n",
 				part.Linedef)
-		}
-		//Log.Printf("Node[%d] is good enough with partition coords: [%v,%v]-[%v,%v]\n",
-		//	w.totals.numNodes, psx, psy, pex, pey)
-		return
-	}
-	// No.
-	// Ok, the node coords are integer even in extended format, but we need to
-	// round partition line wisely
-	// Let's try to scale partition seg to the bounding box (find two points
-	// of intersection between partition line and bounding box)
-	// TODO refactor, as diffgeometry's function contains unnecessary
-	// functionality and was not designed to be used here
-	// TODO downscale would also be acceptable for source ports? Downscale could
-	// be used in vanilla nodes format too, btw
-	newc := &FloatIntersectionContext{
-		psx: float64(c.psx),
-		psy: float64(c.psy),
-		pex: float64(c.pex),
-		pey: float64(c.pey),
-		pdx: float64(c.pdx),
-		pdy: float64(c.pdy),
-	}
-	ov1, ov2, _ := PartitionInBoundary(part, newc, bbox.Xmax, bbox.Ymax, bbox.Xmin,
-		bbox.Ymin, part.toVertexPairC())
-	if ov1 == nil && ov2 == nil {
-		Log.Printf("Very bad - PartitionInBoundary failed to correct extended nodes coords when it was needed.\n")
-	}
-	ov1.X = math.Round(ov1.X)
-	ov2.X = math.Round(ov2.X)
-	ov1.Y = math.Round(ov1.Y)
-	ov2.Y = math.Round(ov2.Y)
-	dx := ov2.X - ov1.X
-	dy := ov2.Y - ov1.Y
-	oldDx := pex - psx
-	oldDy := pey - psy
-	if dx != 0 {
-		if (dx > 0 && oldDx < 0) || (dx < 0 && oldDx > 0) {
-			ov1, ov2 = ov2, ov1
-		}
-		if oldDx == 0 {
-			Log.Verbose(1, "what? segDx == 0 but scaledDx != 0\n")
-			return
-		}
-	} else {
-		if (dy > 0 && oldDy < 0) || (dy < 0 && oldDy > 0) {
-			ov1, ov2 = ov2, ov1
-		}
-		if oldDy == 0 && dy != 0 {
-			Log.Verbose(1, "what? segDy == 0 but scaledDy != 0\n")
 			return
 		}
 	}
-	// Should already be rounded
-	w.nodeX = int(ov1.X)
-	w.nodeY = int(ov1.Y)
-	w.nodeDx = int(ov2.X) - w.nodeX
-	w.nodeDy = int(ov2.Y) - w.nodeY
+
+	// Restore values from partition line since the segment-derived ones were
+	// bad
+	w.nodeDx = oldDx
+	w.nodeDy = oldDy
+	w.nodeX = oldX
+	w.nodeY = oldY
+	XEnd := w.nodeX + w.nodeDx
+	YEnd := w.nodeY + w.nodeDy
+
+	// Either coords were not precise, or segment was also long
+	// It looks like the only option is to scale down this partition line
+
+	// Scale down via integer division, if can do _with zero remainders_
+	dd := GCD(Abs(w.nodeDx), Abs(w.nodeDy))
+	if dd != 1 {
+		w.nodeDx = w.nodeDx / dd
+		w.nodeDy = w.nodeDy / dd
+		if dd > 2 {
+			// Distance from partition line to other segs - if it is large - can
+			// cause numerical overflows and visual glitches in run-time even in
+			// advanced ports (PrBoom-plus etc). Let's try to move it closer
+			// to the center of node's bounding box
+			pCenter := ProjectBoxCenterOntoLine(bbox, w.nodeX, w.nodeY, XEnd,
+				YEnd)
+			dcx := int(pCenter.X) - w.nodeX
+			dcy := int(pCenter.Y) - w.nodeY
+			if w.nodeDx == 0 && w.nodeDy == 0 {
+				// just make sure there is no crash (I don't expect this to ever
+				// happen)
+				Log.Verbose(1, "Really strange happenings - partition line is a point\n")
+				return
+			}
+			if (Sign(dcx) != Sign(w.nodeDx)) ||
+				(Sign(dcy) != Sign(w.nodeDy)) {
+				Log.Verbose(2, "Signs don't match (move after scale op cancelled): dcx,dcy=(%d,%d) dx,dy=(%d,%d)\n",
+					dcx, dcy, w.nodeDx, w.nodeDy)
+				return
+			}
+			var d2 int
+			if Abs(w.nodeDx) > Abs(w.nodeDy) {
+				d2 = dcx / w.nodeDx
+			} else {
+				d2 = dcy / w.nodeDy
+			}
+			w.nodeX += d2 * w.nodeDx
+			w.nodeY += d2 * w.nodeDy
+		}
+	}
+
 	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 		w.nodeDy >= -32768 {
-		Log.Verbose(1, "I've scaled seg coords to the bounding box to use as partition line definition in node structure, but they overflow node values. Source linedef: %d\n",
+		Log.Verbose(1, "Prevented partition line coords overflow (from segment of linedef %d).\n",
 			part.Linedef)
+		return
+	}
+
+	// Could do nothing
+	// TODO could be acceptable enough if I scale down with rounding? Not sure -
+	// the angle would be different and that should be probably considered when
+	// sorting/splitting segs to each side?
+
+	Log.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from linedef %d) can not be represented correctly due to (-32768,32767) signed int16 range limit in format. Parts of map will not be rendered correctly in any port.\n",
+		w.nodeDx, w.nodeDy, part.Linedef)
+}
+
+// ProjectBoxCenterOntoLine returns a point that is perpendicular projection of
+// center point inside bbox onto line segment defined by x/y coords
+func ProjectBoxCenterOntoLine(bbox *NodeBounds, x1, y1, x2, y2 int) *FloatVertex {
+	centerX := float64(bbox.Xmin+bbox.Xmax) / 2
+	centerY := float64(bbox.Ymin+bbox.Ymax) / 2
+	return ProjectPointOntoLine(centerX, centerY, float64(x1), float64(y1),
+		float64(x2), float64(y2))
+}
+
+// ProjectPointOntoLine returns a point that is perpendicular projection of
+// point onto line defined by x/y coords.
+// Implementation sourced from
+// www.sunshine2k.de/coding/java/PointOnLine/PointOnLine.html (2022/10/27) under
+// terms of MIT license copyright Bastian Molkenthin
+// (www.sunshine2k.de/license.html)
+func ProjectPointOntoLine(px, py float64, x1, y1, x2, y2 float64) *FloatVertex {
+	e1x := x2 - x1
+	e1y := y2 - y1
+	e2x := px - x1
+	e2y := py - y1
+	dp := e1x*e2x + e1y*e2y   // dot product of e1 * e2
+	len2 := e1x*e1x + e1y*e1y // length squared
+	return &FloatVertex{
+		X: x1 + (dp*e1x)/len2,
+		Y: y1 + (dp*e1y)/len2,
 	}
 }
 

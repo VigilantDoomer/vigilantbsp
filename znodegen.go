@@ -3479,11 +3479,6 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 func (w *ZExt_NodesWork) MTP_DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds, pseudoSuper *ZExt_Superblock, rightsSuper, leftsSuper **ZExt_Superblock, chosen *ZExt_NodeSeg) {
 	best := chosen
 
-	w.nodeX = int(best.StartVertex.X)
-	w.nodeY = int(best.StartVertex.Y)
-	w.nodeDx = best.EndVertex.X.Ceil() - w.nodeX
-	w.nodeDy = best.EndVertex.Y.Ceil() - w.nodeY
-
 	c := &ZExt_IntersectionContext{
 		psx: best.StartVertex.X,
 		psy: best.StartVertex.Y,
@@ -3492,6 +3487,9 @@ func (w *ZExt_NodesWork) MTP_DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls 
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
+
+	w.SetNodeCoords(best, bbox, c)
+
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, pseudoSuper, rightsSuper, leftsSuper)
 }
 
@@ -3689,9 +3687,10 @@ func (w *ZExt_NodesWork) SetNodeCoords(part *ZExt_NodeSeg, bbox *NodeBounds,
 		w.nodeDy >= -32768 {
 		return
 	}
-	Log.Verbose(1, "Level contains very big line %d, and it was chosen as a partition line. I will try to avoid overflow by computing node values using only part of it\n",
-		part.Linedef)
-
+	oldDx := w.nodeDx
+	oldDy := w.nodeDy
+	oldX := w.nodeX
+	oldY := w.nodeY
 	psx, psy := part.StartVertex.X, part.StartVertex.Y
 	pex, pey := part.EndVertex.X, part.EndVertex.Y
 	pexc, peyc := pex.Ceil(), pey.Ceil()
@@ -3702,63 +3701,64 @@ func (w *ZExt_NodesWork) SetNodeCoords(part *ZExt_NodeSeg, bbox *NodeBounds,
 
 	if float64(w.nodeX) == float64(psx) && float64(w.nodeY) == float64(psy) &&
 		float64(pexc) == float64(pex) && float64(peyc) == float64(pey) {
+
 		if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 			w.nodeDy >= -32768 {
-			Log.Verbose(1, "I've chosen seg coords instead of line coords for partition, but they still overflow node values. Source linedef: %d\n",
-				part.Linedef)
-		}
 
+			Log.Verbose(1, "I avoided overflow in node values by chosing seg coords instead of linedef coords (line too long). Source linedef: %d\n",
+				part.Linedef)
+			return
+		}
+	}
+
+	w.nodeDx = oldDx
+	w.nodeDy = oldDy
+	w.nodeX = oldX
+	w.nodeY = oldY
+	XEnd := w.nodeX + w.nodeDx
+	YEnd := w.nodeY + w.nodeDy
+
+	dd := GCD(Abs(w.nodeDx), Abs(w.nodeDy))
+	if dd != 1 {
+		w.nodeDx = w.nodeDx / dd
+		w.nodeDy = w.nodeDy / dd
+		if dd > 2 {
+
+			pCenter := ProjectBoxCenterOntoLine(bbox, w.nodeX, w.nodeY, XEnd,
+				YEnd)
+			dcx := int(pCenter.X) - w.nodeX
+			dcy := int(pCenter.Y) - w.nodeY
+			if w.nodeDx == 0 && w.nodeDy == 0 {
+
+				Log.Verbose(1, "Really strange happenings - partition line is a point\n")
+				return
+			}
+			if (Sign(dcx) != Sign(w.nodeDx)) ||
+				(Sign(dcy) != Sign(w.nodeDy)) {
+				Log.Verbose(2, "Signs don't match (move after scale op cancelled): dcx,dcy=(%d,%d) dx,dy=(%d,%d)\n",
+					dcx, dcy, w.nodeDx, w.nodeDy)
+				return
+			}
+			var d2 int
+			if Abs(w.nodeDx) > Abs(w.nodeDy) {
+				d2 = dcx / w.nodeDx
+			} else {
+				d2 = dcy / w.nodeDy
+			}
+			w.nodeX += d2 * w.nodeDx
+			w.nodeY += d2 * w.nodeDy
+		}
+	}
+
+	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
+		w.nodeDy >= -32768 {
+		Log.Verbose(1, "Prevented partition line coords overflow (from segment of linedef %d).\n",
+			part.Linedef)
 		return
 	}
 
-	newc := &FloatIntersectionContext{
-		psx: float64(c.psx),
-		psy: float64(c.psy),
-		pex: float64(c.pex),
-		pey: float64(c.pey),
-		pdx: float64(c.pdx),
-		pdy: float64(c.pdy),
-	}
-	ov1, ov2, _ := ZExt_PartitionInBoundary(part, newc, bbox.Xmax, bbox.Ymax, bbox.Xmin,
-		bbox.Ymin, part.toVertexPairC())
-	if ov1 == nil && ov2 == nil {
-		Log.Printf("Very bad - PartitionInBoundary failed to correct extended nodes coords when it was needed.\n")
-	}
-	ov1.X = math.Round(ov1.X)
-	ov2.X = math.Round(ov2.X)
-	ov1.Y = math.Round(ov1.Y)
-	ov2.Y = math.Round(ov2.Y)
-	dx := ov2.X - ov1.X
-	dy := ov2.Y - ov1.Y
-	oldDx := pex - psx
-	oldDy := pey - psy
-	if dx != 0 {
-		if (dx > 0 && oldDx < 0) || (dx < 0 && oldDx > 0) {
-			ov1, ov2 = ov2, ov1
-		}
-		if oldDx == 0 {
-			Log.Verbose(1, "what? segDx == 0 but scaledDx != 0\n")
-			return
-		}
-	} else {
-		if (dy > 0 && oldDy < 0) || (dy < 0 && oldDy > 0) {
-			ov1, ov2 = ov2, ov1
-		}
-		if oldDy == 0 && dy != 0 {
-			Log.Verbose(1, "what? segDy == 0 but scaledDy != 0\n")
-			return
-		}
-	}
-
-	w.nodeX = int(ov1.X)
-	w.nodeY = int(ov1.Y)
-	w.nodeDx = int(ov2.X) - w.nodeX
-	w.nodeDy = int(ov2.Y) - w.nodeY
-	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
-		w.nodeDy >= -32768 {
-		Log.Verbose(1, "I've scaled seg coords to the bounding box to use as partition line definition in node structure, but they overflow node values. Source linedef: %d\n",
-			part.Linedef)
-	}
+	Log.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from linedef %d) can not be represented correctly due to (-32768,32767) signed int16 range limit in format. Parts of map will not be rendered correctly in any port.\n",
+		w.nodeDx, w.nodeDy, part.Linedef)
 }
 
 func (w *ZExt_NodesWork) updateSegLenBetter(s *ZExt_NodeSeg) {
