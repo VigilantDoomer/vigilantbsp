@@ -24,7 +24,9 @@ package main
 // 1) non-translating one, simply replace node with another one
 // 2) translating one, coordinates of segs in linguortal are adjusted
 // But first, we need to do the normal one (the first one) till the end, right?
-var LINGUORTAL_SIMPLE_OPEN = uint16(1097)
+var LINGUORTAL_SIMPLE_OPEN = uint16(1097) // intended as non-translating one, although current functionality might be translating
+// I have not yet decided whether I will have two or one linguortal type(s)
+// var LINGUORTAL_MOVE_OPEN = uint16(1098) // in the future, linguortal "with moved segs" will be separate and the former will be without move
 
 type Linguortal struct {
 	// lidx is an index of TWO-sided linedef with its back side diverted to
@@ -41,6 +43,8 @@ type Linguortal struct {
 	dset   bool         // was destination (didx) set? since linedef #0 is legitimate index
 	dgraph *CullerGraph // destination graph (set of lines)
 	bbox   *NodeBounds
+	xdiff  int
+	ydiff  int
 }
 
 type LinguortalBundle struct {

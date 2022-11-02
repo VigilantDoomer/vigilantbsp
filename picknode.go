@@ -614,7 +614,8 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 					// treat it as precious; i.e. don't split it unless all other options
 					// are exhausted. This is used to protect deep water and invisible
 					// lifts/stairs from being messed up accidentally by splits. - Killough
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) ||
+						w.lines.GazesIntoLinguortal(part.Linedef) {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -1048,7 +1049,8 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 					// treat it as precious; i.e. don't split it unless all other options
 					// are exhausted. This is used to protect deep water and invisible
 					// lifts/stairs from being messed up accidentally by splits. - Killough
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) ||
+						w.lines.GazesIntoLinguortal(part.Linedef) {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -1537,7 +1539,8 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 					// lifts/stairs from being messed up accidentally by splits. - Killough
 					// VigilantDoomer: don't select such partitions in maelstrom
 					// fast path - we have a traditional path to fall back to
-					if w.lines.IsTaggedPrecious(check.Linedef) {
+					if w.lines.IsTaggedPrecious(check.Linedef) ||
+						w.lines.GazesIntoLinguortal(part.Linedef) {
 						return true
 					}
 

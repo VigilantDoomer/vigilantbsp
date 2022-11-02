@@ -123,6 +123,7 @@ type NodesTotals struct {
 type NodeOrSubsector struct {
 	node    *NodeInProcess
 	ssector uint32
+	bbox    [4]int16
 }
 
 type NodeSubstitute struct {
@@ -1588,8 +1589,15 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	if w.linWork != nil && part.Flip == 0 { // should also probably panic if non-zero offset
 		for i, portal := range w.linWork.bundle.linguortals {
 			if portal.lidx == part.Linedef {
+				//Log.Printf("need substitute [1] = true\n")
 				needSubstitute = true
 				substituteIdx = i
+				/*_, _, x2, y2 := w.lines.GetAllXY(part.Linedef)
+				if part.Offset != 0 || Number(x2) != part.EndVertex.X ||
+					Number(y2) != part.EndVertex.Y {
+					Log.Printf("Linguortal source linedef was fragmented (bad)\n")
+				}*/
+				break
 			}
 		}
 	}
@@ -1608,6 +1616,12 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	} else {
+		// TODO can't just always create node - if needSubstitute = true, more
+		// contrived logic is needed, since the current node may be too big
+		// for what user planned. Need to isolate a smaller section of it with
+		// this linedef possibly being in its own subsector of 1 line, and a node
+		// in the back, but both together being only isolated island and the rest
+		// of original node partitioned away from it
 		res.nextL = CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
@@ -1619,12 +1633,14 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 			},
 			replacement: *w.linWork.nodes[substituteIdx],
 		}
+		//Log.Printf("need substitute [2] = true\n")
 		if w.linWork.latestSubstitutions[substituteIdx] == nil {
 			w.linWork.nodeSubstitutes = append(w.linWork.nodeSubstitutes,
 				subst)
 			w.linWork.latestSubstitutions[substituteIdx] =
 				&(w.linWork.nodeSubstitutes[len(w.linWork.nodeSubstitutes)-1])
 		} else {
+			//Log.Printf("substitute replaced\n")
 			*w.linWork.latestSubstitutions[substituteIdx] = subst
 		}
 	}
@@ -1809,34 +1825,44 @@ func (w *NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) ui
 
 // store linguortal effects in final BSP tree (or rather graph) representation
 func (w *NodesWork) performNodeSubstitutes(node *NodeInProcess) {
-	/*if true {
-		return // debug
-	}*/
-	if w.linWork.nodeSubstitutes == nil {
+	if w.linWork == nil || w.linWork.nodeSubstitutes == nil ||
+		len(w.linWork.nodeSubstitutes) == 0 {
 		return
 	}
 	if node.nextR != nil {
 		w.performNodeSubstitutes(node.nextR)
 		if w.nodes != nil {
-			b, repl := w.substituteNode(node.nextR)
+			b, repl, box := w.substituteNode(node.nextR)
 			if b {
+				Log.Printf("Substituting a node\n")
+				w.substitutePartitionLineVanilla(node, &(w.nodes[node.finalAddress]),
+					box)
 				w.nodes[node.finalAddress].RChild = int16(repl)
 			}
 		} else {
-			b, repl := w.substituteNode(node.nextR)
+			b, repl, box := w.substituteNode(node.nextR)
 			if b {
+				Log.Printf("Substituting a node\n")
+				w.substitutePartitionLineDeep(node, &(w.deepNodes[node.finalAddress]),
+					box)
 				w.deepNodes[node.finalAddress].RChild = repl
 			}
 		}
 	} else {
 		if w.nodes != nil {
-			b, repl := w.substituteSubsector(node.RChild)
+			b, repl, box := w.substituteSubsector(node.RChild)
 			if b {
+				Log.Printf("Substituting a subsector\n")
+				w.substitutePartitionLineVanilla(node, &(w.nodes[node.finalAddress]),
+					box)
 				w.nodes[node.finalAddress].RChild = int16(repl)
 			}
 		} else {
-			b, repl := w.substituteSubsector(node.RChild)
+			b, repl, box := w.substituteSubsector(node.RChild)
 			if b {
+				Log.Printf("Substituting a subsector\n")
+				w.substitutePartitionLineDeep(node, &(w.deepNodes[node.finalAddress]),
+					box)
 				w.deepNodes[node.finalAddress].RChild = repl
 			}
 		}
@@ -1845,55 +1871,263 @@ func (w *NodesWork) performNodeSubstitutes(node *NodeInProcess) {
 	if node.nextL != nil {
 		w.performNodeSubstitutes(node.nextL)
 		if w.nodes != nil {
-			b, repl := w.substituteNode(node.nextL)
+			b, repl, box := w.substituteNode(node.nextL)
 			if b {
+				Log.Printf("Substituting a node (%d) %d,%d,%d,%d [%d,%d,%d,%d]-[%d,%d,%d,%d]\n",
+					node.finalAddress,
+					node.X, node.Y, node.X+node.Dx, node.Y+node.Dy,
+					node.Lbox[BB_LEFT], node.Lbox[BB_BOTTOM], node.Lbox[BB_RIGHT], node.Lbox[BB_TOP],
+					node.Rbox[BB_LEFT], node.Rbox[BB_BOTTOM], node.Rbox[BB_RIGHT], node.Rbox[BB_TOP])
+				collector := make(map[int]int)
+				w.enumerateNode(collector, node.nextL)
+				for k, _ := range collector {
+					Log.Printf("Linedef %d in this node\n", k)
+				}
+				w.substitutePartitionLineVanilla(node, &(w.nodes[node.finalAddress]),
+					box)
 				w.nodes[node.finalAddress].LChild = int16(repl)
 			}
 		} else {
-			b, repl := w.substituteNode(node.nextL)
+			b, repl, box := w.substituteNode(node.nextL)
 			if b {
+				Log.Printf("Substituting a node\n")
+				w.substitutePartitionLineDeep(node, &(w.deepNodes[node.finalAddress]),
+					box)
 				w.deepNodes[node.finalAddress].LChild = repl
 			}
 		}
 	} else {
 		if w.nodes != nil {
-			b, repl := w.substituteSubsector(node.LChild)
+			b, repl, box := w.substituteSubsector(node.LChild)
 			if b {
+				Log.Printf("Substituting a subsector\n")
+				w.substitutePartitionLineVanilla(node, &(w.nodes[node.finalAddress]),
+					box)
 				w.nodes[node.finalAddress].LChild = int16(repl)
 			}
 		} else {
-			b, repl := w.substituteSubsector(node.LChild)
+			b, repl, box := w.substituteSubsector(node.LChild)
 			if b {
+				Log.Printf("Substituting a subsector\n")
+				w.substitutePartitionLineDeep(node, &(w.deepNodes[node.finalAddress]),
+					box)
 				w.deepNodes[node.finalAddress].LChild = repl
 			}
 		}
 	}
 }
 
-func (w *NodesWork) substituteSubsector(ssector uint32) (bool, int32) {
-	for _, item := range w.linWork.nodeSubstitutes {
-		if item.sacrificial.ssector == ssector {
-			if item.replacement.node == nil {
-				return true, int32(item.replacement.ssector)
-			} else {
-				return true, int32(item.replacement.node.finalAddress)
-			}
-		}
+func (w *NodesWork) enumerateNode(collector map[int]int,
+	node *NodeInProcess) {
+	if node.nextL != nil {
+		w.enumerateNode(collector, node.nextL)
+	} else {
+		w.enumerateSubsector(collector, node.LChild)
+
 	}
-	return false, 0
+	if node.nextR != nil {
+		w.enumerateNode(collector, node.nextR)
+	} else {
+		w.enumerateSubsector(collector, node.RChild)
+	}
 }
 
-func (w *NodesWork) substituteNode(node *NodeInProcess) (bool, int32) {
-	for _, item := range w.linWork.nodeSubstitutes {
-		if item.sacrificial.node == node {
+func (w *NodesWork) enumerateSubsector(collector map[int]int,
+	rawIdx uint32) {
+	subIdx := rawIdx & ^w.SsectorMask
+	ssector := w.subsectors[subIdx]
+	subsegs := w.segs[ssector.FirstSeg : ssector.FirstSeg+ssector.SegCount]
+	for _, seg := range subsegs {
+		collector[int(seg.Linedef)] = 0
+	}
+}
+
+func (w *NodesWork) substitutePartitionLineVanilla(node *NodeInProcess,
+	finalNode *Node, box *[4]int16) {
+	Log.Printf("Old partition line: X=%d Y=%d DX=%d DY=%d\n",
+		node.X, node.Y, node.Dx, node.Dy)
+	newX, newY, newDx, newDy := getNewNodeLine(box,
+		w.linWork.bundle.bigFree, node.X, node.Y, node.Dx, node.Dy)
+	Log.Printf("New partition line: X=%d Y=%d DX=%d DY=%d\n",
+		newX, newY, newDx, newDy)
+	finalNode.X = newX
+	finalNode.Y = newY
+	finalNode.Dx = newDx
+	finalNode.Dy = newDy
+}
+
+func (w *NodesWork) substitutePartitionLineDeep(node *NodeInProcess,
+	finalNode *DeepNode, box *[4]int16) {
+	Log.Printf("Old partition line: X=%d Y=%d DX=%d DY=%d\n",
+		node.X, node.Y, node.Dx, node.Dy)
+	newX, newY, newDx, newDy := getNewNodeLine(box,
+		w.linWork.bundle.bigFree, node.X, node.Y, node.Dx, node.Dy)
+	Log.Printf("New partition line: X=%d Y=%d DX=%d DY=%d\n",
+		newX, newY, newDx, newDy)
+	finalNode.X = newX
+	finalNode.Y = newY
+	finalNode.Dx = newDx
+	finalNode.Dy = newDy
+}
+
+func (w *NodesWork) substituteSubsector(ssector uint32) (bool, int32, *[4]int16) {
+	// FIXME w.linWork.bundle.linguortals[i].bbox will not match nodeSubstitutes
+	// index - I think
+	for i, item := range w.linWork.nodeSubstitutes {
+		if item.sacrificial.ssector == ssector {
+			portal := w.linWork.bundle.linguortals[i]
+			box := &(item.replacement.bbox)
+			translateBoundingBox(box, portal.xdiff, portal.ydiff)
 			if item.replacement.node == nil {
-				return true, int32(item.replacement.ssector)
+				return true, int32(item.replacement.ssector), box
 			} else {
-				return true, int32(item.replacement.node.finalAddress)
+				return true, int32(item.replacement.node.finalAddress), box
 			}
 		}
 	}
-	return false, 0
+	return false, 0, nil
+}
+
+func (w *NodesWork) substituteNode(node *NodeInProcess) (bool, int32, *[4]int16) {
+	// FIXME w.linWork.bundle.linguortals[i].bbox will not match nodeSubstitutes
+	// index - I think
+	for i, item := range w.linWork.nodeSubstitutes {
+		if item.sacrificial.node == node {
+			portal := w.linWork.bundle.linguortals[i]
+			box := &(item.replacement.bbox)
+			translateBoundingBox(box, portal.xdiff, portal.ydiff)
+			if item.replacement.node == nil {
+				return true, int32(item.replacement.ssector), box
+			} else {
+				return true, int32(item.replacement.node.finalAddress), box
+			}
+		}
+	}
+	return false, 0, nil
+}
+
+// Linguica's trick to avoid linguortal being sighted (drawn over other stuff)
+// when bounding box of the sacrificial node/subsector (the original one that
+// is replaced) would not be in view.
+// Both moving and non-moving kind of linguortal require this for effect to look
+// nice in almost every case (and, while a requirement, may still not be
+// sufficient).
+func getNewNodeLine(linguortalBbox *[4]int16, bigFree *NodeBounds,
+	X, Y, DX, DY int16) (int16, int16, int16, int16) {
+	// the new partition line has to be perpendicular to original and have
+	// everything to its right side, for this it has to pass through a corner
+	// of the bounding box including both main area and the specific linguortal
+	// NOTE the fallback values -1024, 32767, 2048, 0 come from
+	// Linguica/jmickle66666666's script
+	// ( https://github.com/jmickle66666666/linguortal-gen/ ). They,
+	// perhaps, could have been returned always, but that too is not proven:
+	// what if map is towards Y=-32768 and distance computations will probably
+	// overflow even in advanced ports? There is a reason VigilantBSP v0.78a
+	// (in the works at the time of this writing) contains code to not only
+	// scale down but also move segment representing ultra-long partition line
+	// closer to the center. Distance does matter.
+	// TODO since fallback values exists, errors can be downgraded to regular
+	// output with verbosity=1+ - once the debug phase is over
+	linBounds := &NodeBounds{
+		Xmin: int(linguortalBbox[BB_LEFT]),
+		Xmax: int(linguortalBbox[BB_RIGHT]),
+		Ymin: int(linguortalBbox[BB_BOTTOM]),
+		Ymax: int(linguortalBbox[BB_TOP]),
+	}
+	mbox := mergeBbox(linBounds, bigFree)
+	// Increase margin a bit
+	/*mbox.Xmin -= 2
+	mbox.Ymin -= 2
+	mbox.Xmax += 2
+	mbox.Ymax += 2*/
+	//Log.Printf("Merge of translated box and main box: (%d,%d,%d,%d)\n",
+	//	mbox.Xmin, mbox.Ymin, mbox.Xmax, mbox.Ymax)
+	sx, sy := selectPointForPerpendicular(mbox, DX, DY)
+	px, py := projectPointOntoLineInt(sx, sy, int(X), int(Y), int(X)+int(DX),
+		int(Y)+int(DY))
+	newDx := px - sx
+	newDy := py - sy
+	if newDx == 0 && newDy == 0 {
+		Log.Error("Failed to select a new partition line for linguortal entrance (source linedef passes through a bounds point)\n")
+		return -1024, 32767, 2048, 0 // fallback values ( that should be always applicable)?
+	}
+	centerX := (mbox.Xmin + mbox.Xmax) / 2
+	centerY := (mbox.Ymin + mbox.Ymax) / 2
+	// The entire map (or at least both main area and the used linguortal) must
+	// be to the _right_ side of this new partition line
+	// I bet a less expensive approach is possible (based on sign of DX and DY
+	// alone), but for now this will do
+	side := pointOnLineSideExt(sx, sy, newDx, newDy, centerX, centerY)
+	if side == -1 { // left
+		// invert so it is right
+		newDx = -newDx
+		newDy = -newDy
+	} else if side == 0 {
+		// intersection (pass through)
+		// bailout (should never happen)
+		Log.Error("Failed to select a new partition line for linguortal entrance (computed line crosses center point or passes very close to it)\n")
+		return -1024, 32767, 2048, 0 // fallback values ( that should be always applicable)?
+	}
+
+	if sx < -32768 || sx > 32767 || sy < -32768 || sy > 32767 ||
+		newDx < -32768 || newDx > 32767 || newDy < -32768 || newDy > 32767 {
+		Log.Error("Computed replacement for partition line for linguortal entrance had values out of int16 range.\n")
+		return -1024, 32767, 2048, 0
+	}
+	return int16(sx), int16(sy), int16(newDx), int16(newDy)
+}
+
+// which point the perpendicular to the original partition line must past
+// through
+func selectPointForPerpendicular(bbox *NodeBounds, DX, DY int16) (int, int) {
+	if (DX > 0 && DY > 0) || (DX < 0 && DY < 0) {
+		return bbox.Xmax, bbox.Ymax
+		// could also be bbox.Xmin, bbox.Ymin
+	} else {
+		return bbox.Xmin, bbox.Ymax
+		// could also be bbox.Xmax, bbox.Ymin
+	}
+	// NOTE for dx == 0 or dy == 0 all four corner points would work
+}
+
+// Implementation sourced from
+// www.sunshine2k.de/coding/java/PointOnLine/PointOnLine.html (2022/10/27) under
+// terms of MIT license copyright Bastian Molkenthin
+// (www.sunshine2k.de/license.html)
+func projectPointOntoLineInt(px, py int, x1, y1, x2, y2 int) (int, int) {
+	e1x := float64(x2 - x1)
+	e1y := float64(y2 - y1)
+	e2x := float64(px - x1)
+	e2y := float64(py - y1)
+	dp := e1x*e2x + e1y*e2y   // dot product of e1 * e2
+	len2 := e1x*e1x + e1y*e1y // length squared
+	return int(math.Round(float64(x1) + (dp*e1x)/len2)),
+		int(math.Round(float64(y1) + (dp*e1y)/len2))
+}
+
+func pointOnLineSideExt(sx, sy, newDx, newDy, x, y int) int {
+	// improvise a seg to reuse existing function PointOnLineSide
+	fakeSeg := &NodeSeg{
+		StartVertex: &NodeVertex{
+			X: Number(sx),
+			Y: Number(sy),
+		},
+		EndVertex: &NodeVertex{
+			X: Number(sx + newDx),
+			Y: Number(sy + newDy),
+		},
+	}
+	fakeSeg.psx = fakeSeg.StartVertex.X
+	fakeSeg.psy = fakeSeg.StartVertex.Y
+	fakeSeg.pex = fakeSeg.EndVertex.X
+	fakeSeg.pey = fakeSeg.EndVertex.Y
+	fakeSeg.pdx = fakeSeg.pex - fakeSeg.psx
+	fakeSeg.pdy = fakeSeg.pey - fakeSeg.psy
+	fakeSeg.perp = fakeSeg.pdx*fakeSeg.psy - fakeSeg.psx*fakeSeg.pdy
+	flen := math.Sqrt(float64(fakeSeg.pdx)*float64(fakeSeg.pdx) +
+		float64(fakeSeg.pdy)*float64(fakeSeg.pdy))
+	fakeSeg.len = Number(flen)
+	return PointOnLineSide(fakeSeg, x, y)
 }
 
 // computeSectorEquivalence()
@@ -2280,10 +2514,14 @@ func (w *NodesWork) BSPWithLinguortals(bbox *NodeBounds, boxes []*BoxPlusL) *Nod
 				res.nextL = CreateNode(w, lefts[0], leftBox, leftsSuper)
 				res.LChild = 0
 			}
-			w.linWork.nodes[singular.linguortalNum] = &NodeOrSubsector{
+			nos := &NodeOrSubsector{
 				node:    res.nextL,
 				ssector: res.LChild,
+				bbox:    res.Lbox,
 			}
+			w.linWork.nodes[singular.linguortalNum] = nos
+			w.MoveEntireNode(&(w.linWork.bundle.linguortals[singular.linguortalNum]),
+				nos)
 		}
 	} else {
 		res.nextL = w.BSPWithLinguortals(*lbbox, *lboxes)
@@ -2322,10 +2560,14 @@ func (w *NodesWork) BSPWithLinguortals(bbox *NodeBounds, boxes []*BoxPlusL) *Nod
 				res.nextR = CreateNode(w, rights[0], rightBox, rightsSuper)
 				res.RChild = 0
 			}
-			w.linWork.nodes[singular.linguortalNum] = &NodeOrSubsector{
+			nos := &NodeOrSubsector{
 				node:    res.nextR,
 				ssector: res.RChild,
+				bbox:    res.Rbox,
 			}
+			w.linWork.nodes[singular.linguortalNum] = nos
+			w.MoveEntireNode(&(w.linWork.bundle.linguortals[singular.linguortalNum]),
+				nos)
 		}
 	} else {
 		res.nextR = w.BSPWithLinguortals(*rbbox, *rboxes)
@@ -2333,6 +2575,211 @@ func (w *NodesWork) BSPWithLinguortals(bbox *NodeBounds, boxes []*BoxPlusL) *Nod
 	}
 
 	return res
+}
+
+// MoveEntireNode translates node that is a linguortal destination from
+// destination linedef to source linedef. That means allocating new vertices
+// (with translated coordinates) for all segs in subtree identified by nos
+// and translating coordinates of all nodes bounding boxes
+func (w *NodesWork) MoveEntireNode(portal *Linguortal, nos *NodeOrSubsector) {
+	// every time isolated linguortal destination is partitioned, need to copy
+	// all vertexes associated with all the segs inside the destination, and
+	// translate their coordinates
+	// for lines of EQUAL length for example, it can be simplified to this:
+	// xdiff = d2x - d1x
+	// ydiff = d2y - d1y
+	// seg_vertice_x -= xdiff
+	// seg_vertice_y -= ydiff
+	// where d1x, d1y - coords of source linedef first vertex,
+	// d2x, d2y - coords of destination linedef second vertex
+	// (lines are facing away from each other and we are assuming they are
+	// collinear). When lines DON'T have _identical_ length, the formula may
+	// be a bit different.
+	// So, change the vertices of segs to the new copies (use map to identify
+	// translation "old vertex" -> "new vertex"). Yes, some unused vertices will
+	// be left from old seg splits, but we are just prototyping here
+	// also, (-= xdiff, -= ydiff) is applied to all linguortal destination node
+	// bounds, including that of child nodes
+	// And that would be enough!
+	// for k, _ := range mapVertices {
+	//     v := AddVertex(k.x - xdiff, k.y - ydiff)
+	//     mapVertices[k] = v.idx
+	// }
+
+	sx1, sy1, sx2, sy2 := w.lines.GetAllXY(portal.lidx) // source linedef for linguortal
+	tx1, ty1, tx2, ty2 := w.lines.GetAllXY(portal.didx) // target, or destination, linedef for linguortal
+	dsx := sx2 - sx1
+	dsy := sy2 - sy1
+	dtx := tx1 - tx2
+	dty := ty1 - ty2
+	xdiff := tx2 - sx1
+	ydiff := ty2 - sy1
+	if dsx == dtx && dsy == dty {
+		Log.Printf("Simple case - linedef lengths match\n")
+
+	} else {
+		Log.Printf("Difficult case - linedef lengths NOT match dx, dy: (%d,%d) != (%d,%d)\n",
+			dsx, dsy, dtx, dty)
+		xdiff += (dtx - dsx) / 2
+		ydiff += (dty - dsy) / 2
+	}
+	portal.xdiff = xdiff
+	portal.ydiff = ydiff
+	Log.Printf("Translation for linguortal %d,%d\n", xdiff, ydiff)
+
+	mapVertices := make(map[uint16]uint16)
+	w.allVerticesInSubtree(mapVertices, nos, xdiff, ydiff)
+
+	oldVertices := make([]uint16, 0)
+	for k, _ := range mapVertices {
+		oldVertices = append(oldVertices, k)
+	}
+	Log.Printf("will remap %d vertices\n", len(oldVertices))
+	for _, k := range oldVertices {
+		sk := w.vertices[k]
+		v := w.AddVertex(sk.X-Number(xdiff), sk.Y-Number(ydiff))
+		mapVertices[k] = uint16(v.idx)
+	}
+	w.remapVerticesInSubtree(mapVertices, nos)
+}
+
+// allVerticesInSubtree is a function with SIDE EFFECT. Adds every vertice idx
+// as a key (0 as a value). Additionally - and this is a side effect -
+// translates coordinates of nodes (so this call DOES change state of all child
+// nodes)
+func (w *NodesWork) allVerticesInSubtree(collector map[uint16]uint16,
+	nos *NodeOrSubsector, xdiff, ydiff int) {
+	if nos.node != nil {
+		w.allVerticesInNode(collector, nos.node, xdiff, ydiff)
+	} else {
+		if w.segs != nil {
+			w.allVerticesInSubsector(collector, nos.ssector)
+		} else {
+			w.allVerticesInDeepSubsector(collector, nos.ssector)
+		}
+	}
+}
+
+func (w *NodesWork) allVerticesInNode(collector map[uint16]uint16,
+	node *NodeInProcess, xdiff, ydiff int) {
+	// Modify node coords and that of child nodes
+	node.X = int16(int(node.X) - xdiff)
+	node.Y = int16(int(node.Y) - ydiff)
+	translateBoundingBox(&(node.Lbox), xdiff, ydiff)
+	translateBoundingBox(&(node.Rbox), xdiff, ydiff)
+
+	//
+	if node.nextL != nil {
+		w.allVerticesInNode(collector, node.nextL, xdiff, ydiff)
+	} else {
+		if w.segs != nil {
+			w.allVerticesInSubsector(collector, node.LChild)
+		} else {
+			w.allVerticesInDeepSubsector(collector, node.LChild)
+		}
+	}
+	if node.nextR != nil {
+		w.allVerticesInNode(collector, node.nextR, xdiff, ydiff)
+	} else {
+		if w.segs != nil {
+			w.allVerticesInSubsector(collector, node.RChild)
+		} else {
+			w.allVerticesInDeepSubsector(collector, node.RChild)
+		}
+	}
+}
+
+func (w *NodesWork) allVerticesInSubsector(collector map[uint16]uint16,
+	rawIdx uint32) {
+	subIdx := rawIdx & ^w.SsectorMask
+	ssector := w.subsectors[subIdx]
+	subsegs := w.segs[ssector.FirstSeg : ssector.FirstSeg+ssector.SegCount]
+	for _, seg := range subsegs {
+		collector[seg.StartVertex] = 0
+		collector[seg.EndVertex] = 0
+	}
+}
+
+func (w *NodesWork) allVerticesInDeepSubsector(collector map[uint16]uint16,
+	rawIdx uint32) {
+	subIdx := rawIdx & ^w.SsectorMask
+	ssector := w.deepSubsectors[subIdx]
+	subsegs := w.deepSegs[ssector.FirstSeg : ssector.FirstSeg+uint32(ssector.SegCount)]
+	for _, seg := range subsegs {
+		collector[uint16(seg.StartVertex)] = 0
+		collector[uint16(seg.EndVertex)] = 0
+	}
+}
+
+func (w *NodesWork) remapVerticesInSubtree(collector map[uint16]uint16,
+	nos *NodeOrSubsector) {
+	if nos.node != nil {
+		w.remapVerticesInNode(collector, nos.node)
+	} else {
+		if w.segs != nil {
+			w.remapVerticesInSubsector(collector, nos.ssector)
+		} else {
+			w.remapVerticesInDeepSubsector(collector, nos.ssector)
+		}
+	}
+}
+
+func (w *NodesWork) remapVerticesInNode(collector map[uint16]uint16,
+	node *NodeInProcess) {
+	if node.nextL != nil {
+		w.remapVerticesInNode(collector, node.nextL)
+	} else {
+		if w.segs != nil {
+			w.remapVerticesInSubsector(collector, node.LChild)
+		} else {
+			w.remapVerticesInDeepSubsector(collector, node.LChild)
+		}
+	}
+	if node.nextR != nil {
+		w.remapVerticesInNode(collector, node.nextR)
+	} else {
+		if w.segs != nil {
+			w.remapVerticesInSubsector(collector, node.RChild)
+		} else {
+			w.remapVerticesInDeepSubsector(collector, node.RChild)
+		}
+	}
+}
+
+func (w *NodesWork) remapVerticesInSubsector(collector map[uint16]uint16,
+	rawIdx uint32) {
+	subIdx := rawIdx & ^w.SsectorMask
+	ssector := w.subsectors[subIdx]
+	subsegs := w.segs[ssector.FirstSeg : ssector.FirstSeg+ssector.SegCount]
+	for i, _ := range subsegs {
+		subsegs[i].StartVertex = collector[subsegs[i].StartVertex]
+		subsegs[i].EndVertex = collector[subsegs[i].EndVertex]
+	}
+}
+
+func (w *NodesWork) remapVerticesInDeepSubsector(collector map[uint16]uint16,
+	rawIdx uint32) {
+	subIdx := rawIdx & ^w.SsectorMask
+	ssector := w.deepSubsectors[subIdx]
+	subsegs := w.deepSegs[ssector.FirstSeg : ssector.FirstSeg+uint32(ssector.SegCount)]
+	for i, _ := range subsegs {
+		subsegs[i].StartVertex = uint32(collector[uint16(subsegs[i].StartVertex)])
+		subsegs[i].EndVertex = uint32(collector[uint16(subsegs[i].EndVertex)])
+	}
+}
+
+func translateBoundingBox(bbox *[4]int16, xdiff, ydiff int) {
+	bbox[BB_TOP] -= int16(ydiff)
+	bbox[BB_BOTTOM] -= int16(ydiff)
+	bbox[BB_LEFT] -= int16(xdiff)
+	bbox[BB_RIGHT] -= int16(xdiff)
+}
+
+func translateNodeBounds(bbox *NodeBounds, xdiff, ydiff int) {
+	bbox.Ymax -= ydiff
+	bbox.Ymin -= ydiff
+	bbox.Xmin -= xdiff
+	bbox.Xmax -= xdiff
 }
 
 // returns array with N+1 items where N is number of linguortals,

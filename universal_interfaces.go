@@ -111,6 +111,7 @@ type WriteableLines interface {
 	// involved in them
 	DetectLinguortals()
 	GetLinguortalBundle() *LinguortalBundle
+	GazesIntoLinguortal(lidx uint16) bool
 }
 
 // This is used to:
@@ -323,7 +324,19 @@ func (o *DoomLinedefs) IsTaggedPrecious(lidx uint16) bool {
 	// Like BSP nodebuilder as per Lee Killough ideas, but don't consider things
 	// removed from blockmap as precious, ditto with no render for which seg
 	// ain't created
-	return (tag >= 900) && (tag != 999) && (tag != 998)
+	return (tag >= 900) && (tag != 999) && (tag != 998) ||
+		o.GazesIntoLinguortal(lidx)
+}
+
+func (o *DoomLinedefs) GazesIntoLinguortal(lidx uint16) bool {
+	if o.linguortalBundle != nil {
+		for _, ling := range o.linguortalBundle.linguortals {
+			if lidx == ling.lidx {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (o *DoomLinedefs) GetAction(lidx uint16) uint16 {
@@ -732,7 +745,18 @@ func (o *HexenLinedefs) GetTag(lidx uint16) uint16 {
 }
 
 func (o *HexenLinedefs) IsTaggedPrecious(lidx uint16) bool {
-	return o.preciousLinedefs[lidx]
+	return o.preciousLinedefs[lidx] || o.GazesIntoLinguortal(lidx)
+}
+
+func (o *HexenLinedefs) GazesIntoLinguortal(lidx uint16) bool {
+	if o.linguortalBundle != nil {
+		for _, ling := range o.linguortalBundle.linguortals {
+			if lidx == ling.lidx {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (o *HexenLinedefs) GetBAMEffect(lidx uint16) BAMEffect {
