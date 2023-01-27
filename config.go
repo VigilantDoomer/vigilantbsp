@@ -169,6 +169,14 @@ const (
 	MROOT_EVERY    = 0x03
 )
 
+// which version of doLinesIntersect to use
+const (
+	NODE_DETAIL_AUTO = iota
+	NODE_DETAIL_SUPPRESS
+	NODE_DETAIL_ALWAYS
+	NODE_DETAIL_HEURISTIC
+)
+
 type ProgramConfig struct {
 	InputFileName          string
 	OutputFileName         string
@@ -227,7 +235,8 @@ type ProgramConfig struct {
 	NodeThreads     int16
 	StraightNodes   bool // write nodes without traditional reversal
 	//
-	RemoveNonCollideable bool // dangerous option. Tries to reason about which lines are not necessary to be included in blockmap and removes then. Prone to break advanced maps and maps not for Doom
+	RemoveNonCollideable   bool // dangerous option. Tries to reason about which lines are not necessary to be included in blockmap and removes then. Prone to break advanced maps and maps not for Doom
+	NodeDetailFriendliness int  // whether to use detailed version of doLinesIntersect when building non-extended nodes
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -282,6 +291,7 @@ func init() {
 		NodeThreads:            0,
 		StraightNodes:          false,
 		RemoveNonCollideable:   false,
+		NodeDetailFriendliness: NODE_DETAIL_AUTO,
 	})
 }
 

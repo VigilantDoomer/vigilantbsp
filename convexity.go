@@ -185,7 +185,7 @@ func PickNode_SingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			c.lsy = check.StartVertex.Y
 			c.lex = check.EndVertex.X
 			c.ley = check.EndVertex.Y
-			val := c.doLinesIntersect()
+			val := w.doLinesIntersect(c)
 			if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 				// splits are now double as bad as before
 				cost += PICKNODE_FACTOR << 1

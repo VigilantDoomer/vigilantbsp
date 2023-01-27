@@ -203,7 +203,7 @@ func ZenPickBestScore(sc []DepthScoreBundle) {
 
 // These builds seg and sector scores for the entire array. Other fields
 // not touched
-func ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
+func (w *NodesWork) ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 	sectorHits []uint8, depthArtifacts bool) {
 	for i, _ := range sc {
 		inter := ZenIntermediary{
@@ -223,7 +223,7 @@ func ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 		}
 		// Obtain data for current partitition by evaluating all segs against
 		// it again, as we avoided doing so earlier (performance reasons).
-		evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits)
+		w.evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits)
 		for j := 0; j < len(sectorHits); j++ {
 			switch sectorHits[j] {
 			case 0x0F:
@@ -315,8 +315,8 @@ func ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 	}
 }
 
-func evalPartitionWorker_Zen(block *Superblock, rec *DepthScoreBundle,
-	intermediate *ZenIntermediary, sectorHits []uint8) {
+func (w *NodesWork) evalPartitionWorker_Zen(block *Superblock,
+	rec *DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8) {
 	part := rec.seg
 	num := BoxOnLineSide(block, part)
 	if num < 0 {
@@ -347,7 +347,7 @@ func evalPartitionWorker_Zen(block *Superblock, rec *DepthScoreBundle,
 		c.lsy = check.StartVertex.Y
 		c.lex = check.EndVertex.X
 		c.ley = check.EndVertex.Y
-		val := c.doLinesIntersect() // use more accurate side evaluation
+		val := w.doLinesIntersect(c) // use more accurate side evaluation
 		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 			// Split line
 			intermediate.segS++
@@ -395,7 +395,7 @@ func evalPartitionWorker_Zen(block *Superblock, rec *DepthScoreBundle,
 			continue
 		}
 
-		evalPartitionWorker_Zen(block.subs[num], rec, intermediate,
+		w.evalPartitionWorker_Zen(block.subs[num], rec, intermediate,
 			sectorHits)
 	}
 

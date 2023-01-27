@@ -73,7 +73,7 @@ import (
 // #pragma replace_prototype *MyLogger.DumpSegs with *MyLogger.ZDumpSegs_Proto
 // #pragma replace_prototype *NodesWork.PassingTooClose with *NodesWork.ZPassingTooClose_Proto
 // #pragma replace_prototype *IntersectionContext.computeIntersection with *IntersectionContext.ZcomputeIntersection_Proto
-// #pragma replace_prototype *IntersectionContext.doLinesIntersect with *IntersectionContext.ZdoLinesIntersect_Proto
+// #pragma replace_prototype doLinesIntersectStandard with ZdoLinesIntersect_Proto
 // #pragma replace_prototype *NodesWork.SetNodeCoords with *NodesWork.ZSetNodeCoords_Proto
 // #pragma replace_prototype *NodesWork.updateSegLenBetter with *NodesWork.ZupdateSegLenBetter_Proto
 // #pragma replace_prototype *NodesWork.SegOrLineToVertexPairC with *NodesWork.ZSegOrLineToVertexPairC_Proto
@@ -318,7 +318,7 @@ func (c *IntersectionContext) ZcomputeIntersection_Proto() (ZNumber, ZNumber) {
 // it uses scaled values (casting coords represented via 16.16 fixed point
 // to float)? Investigate. See ClassifyLine2 in "nodebuild_classify_nosse2.cpp"
 // in ZDBSP source
-func (c *IntersectionContext) ZdoLinesIntersect_Proto() uint8 {
+func ZdoLinesIntersect_Proto(c *IntersectionContext) uint8 {
 	dx2 := c.psx - c.lsx // Checking line -> partition
 	dy2 := c.psy - c.lsy
 	dx3 := c.psx - c.lex

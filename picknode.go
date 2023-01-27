@@ -952,7 +952,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// NOTE if one or more of the superblocks went entirely to the left,
 		// there is no need to perform this check, superblock test can be relied
 		// upon as accurate
-		if !hasLeft && VigilantGuard_IsBadPartition(part, ts, cnt) {
+		if !hasLeft && w.VigilantGuard_IsBadPartition(part, ts, cnt) {
 			cost += w.pickNodeFactor * ONESIDED_MULTIPLY
 			if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 				continue
@@ -982,7 +982,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// decrease BSP depth somewhat. Functions are in zenscore.go
 		depthScores := ZenSegMinorToDepthScores(parts)
 		newSectorHits := make([]uint8, len(w.sectors))
-		ZenComputeScores(super, depthScores, newSectorHits, w.depthArtifacts)
+		w.ZenComputeScores(super, depthScores, newSectorHits, w.depthArtifacts)
 		ZenPickBestScore(depthScores)
 		if depthScores[0].scoreSeg != VERY_BAD_SCORE {
 			best = depthScores[0].seg
@@ -1168,7 +1168,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 // and the criterion for undesirability is the absence of segs that go left.
 // Early exiting as soon as seg that goes left is found allows to have minimal
 // impact on perfomance
-func VigilantGuard_IsBadPartition(part, ts *NodeSeg, cnt int) bool {
+func (w *NodesWork) VigilantGuard_IsBadPartition(part, ts *NodeSeg, cnt int) bool {
 	// NOTE some code in this function may be redundant, as we exit early as
 	// soon as there is something that will go to the left side
 	// Partition line coords
@@ -1190,7 +1190,7 @@ func VigilantGuard_IsBadPartition(part, ts *NodeSeg, cnt int) bool {
 		c.lsy = check.StartVertex.Y
 		c.lex = check.EndVertex.X
 		c.ley = check.EndVertex.Y
-		val := c.doLinesIntersect()
+		val := w.doLinesIntersect(c)
 		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 			tot++
 			return false // even splitting not so bad
@@ -1689,7 +1689,7 @@ func (w *NodesWork) PartIsPolyobjSide(part, check *NodeSeg) bool {
 		c.lsy = Number(x2)
 		c.lex = Number(y1)
 		c.ley = Number(y2)
-		val := c.doLinesIntersect()
+		val := w.doLinesIntersect(c)
 		if (val&1 != 0) && (val&16 != 0) {
 			return true
 		}

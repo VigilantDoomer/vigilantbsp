@@ -184,6 +184,30 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					// match it and hence may not fulfill performance benefits
 					// See https://www.doomworld.com/forum/topic/74354-stupid-bsp-tricks/?do=findComment&comment=1524479
 					c.StraightNodes = true
+				} else if bytes.HasPrefix([]byte(arg), []byte("--detailnodes")) {
+					// Parameter to control whether use more accurate
+					// doLinesIntersect check. Does not affect extended nodes
+					// (they use far more accurate variant always anyway).
+					ns, _ := readNumeric("--detailnodes=", []byte(arg)[len("--detailnodes=")-1:])
+					if ns.whichType == ARG_ENABLED {
+						c.NodeDetailFriendliness = NODE_DETAIL_ALWAYS
+					} else if ns.whichType == ARG_DISABLED {
+						c.NodeDetailFriendliness = NODE_DETAIL_SUPPRESS
+					} else {
+						switch ns.value {
+						case 0:
+							c.NodeDetailFriendliness = NODE_DETAIL_AUTO
+						case 1:
+							c.NodeDetailFriendliness = NODE_DETAIL_SUPPRESS
+						case 2:
+							c.NodeDetailFriendliness = NODE_DETAIL_ALWAYS
+						case 3:
+							c.NodeDetailFriendliness = NODE_DETAIL_HEURISTIC
+						default:
+							Log.Error("Unrecognised value %s, expected 0, 1, 2 or 3\n", arg)
+							return false
+						}
+					}
 				} else {
 					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
 					return false

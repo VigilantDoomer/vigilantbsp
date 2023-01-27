@@ -33,43 +33,46 @@ type ZExt_PickNodeFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_S
 
 type ZExt_CreateNodeSSFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock) *NodeInProcess
 
+type ZExt_DoLinesIntersectFunc func(c *ZExt_IntersectionContext) uint8
+
 type ZExt_NodesWork struct {
-	lines           WriteableLines
-	sides           []Sidedef
-	sectors         []Sector
-	allSegs         []*ZExt_NodeSeg
-	subsectors      []SubSector
-	segs            []Seg
-	nodeX           int
-	nodeY           int
-	nodeDx          int
-	nodeDy          int
-	totals          *NodesTotals
-	vertices        []ZExt_NodeVertex
-	nodes           []Node
-	nreverse        uint32
-	segAliasObj     *SegAliasHolder
-	pickNode        ZExt_PickNodeFunc
-	createNodeSS    ZExt_CreateNodeSSFunc
-	sectorHits      []uint8
-	incidental      []ZExt_IntVertexPairC
-	solidMap        *Blockmap
-	nonVoidCache    map[int]ZExt_NonVoidPerAlias
-	dgVertexMap     *VertexMap
-	blockity        *BlockityLines
-	deepNodes       []DeepNode
-	deepSubsectors  []DeepSubSector
-	deepSegs        []DeepSeg
-	SsectorMask     uint32
-	blocksHit       []ZExt_BlocksHit
-	diagonalPenalty int
-	pickNodeFactor  int
-	pickNodeUser    int
-	minorIsBetter   MinorIsBetterFunc
-	multipart       bool
-	depthArtifacts  bool
-	nodeType        int
-	vertexCache     map[SimpleVertex]int
+	lines            WriteableLines
+	sides            []Sidedef
+	sectors          []Sector
+	allSegs          []*ZExt_NodeSeg
+	subsectors       []SubSector
+	segs             []Seg
+	nodeX            int
+	nodeY            int
+	nodeDx           int
+	nodeDy           int
+	totals           *NodesTotals
+	vertices         []ZExt_NodeVertex
+	nodes            []Node
+	nreverse         uint32
+	segAliasObj      *SegAliasHolder
+	pickNode         ZExt_PickNodeFunc
+	createNodeSS     ZExt_CreateNodeSSFunc
+	sectorHits       []uint8
+	incidental       []ZExt_IntVertexPairC
+	solidMap         *Blockmap
+	nonVoidCache     map[int]ZExt_NonVoidPerAlias
+	dgVertexMap      *VertexMap
+	blockity         *BlockityLines
+	deepNodes        []DeepNode
+	deepSubsectors   []DeepSubSector
+	deepSegs         []DeepSeg
+	SsectorMask      uint32
+	blocksHit        []ZExt_BlocksHit
+	diagonalPenalty  int
+	pickNodeFactor   int
+	pickNodeUser     int
+	minorIsBetter    MinorIsBetterFunc
+	doLinesIntersect ZExt_DoLinesIntersectFunc
+	multipart        bool
+	depthArtifacts   bool
+	nodeType         int
+	vertexCache      map[SimpleVertex]int
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -161,6 +164,35 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	Log.Printf("Nodes: rendered part of map goes from (%d,%d) to (%d,%d)\n",
 		rootBox.Ymax, rootBox.Xmin, rootBox.Ymin, rootBox.Xmax)
 
+	doLinesIntersect := ZExt_doLinesIntersectStandard
+	if input.nodeType == NODETYPE_ZDOOM_COMPRESSED ||
+		input.nodeType == NODETYPE_ZDOOM_EXTENDED {
+
+	} else {
+		heur := false
+		switch input.detailFriendliness {
+		case NODE_DETAIL_ALWAYS:
+			doLinesIntersect = ZExt_doLinesIntersectDetail
+		case NODE_DETAIL_SUPPRESS:
+			doLinesIntersect = ZExt_doLinesIntersectStandard
+		case NODE_DETAIL_HEURISTIC:
+			heur = true
+		default:
+			heur = input.nodeType == NODETYPE_VANILLA
+			if !heur {
+				doLinesIntersect = ZExt_doLinesIntersectDetail
+			}
+		}
+		if heur {
+
+			detail := IsTooDetailed(input.lines, input.linesToIgnore, rootBox)
+			if detail {
+				doLinesIntersect = ZExt_doLinesIntersectDetail
+			}
+		}
+
+	}
+
 	var solidMap *Blockmap
 	if requestedSolid {
 		blockmapGetter := make(chan *Blockmap)
@@ -191,23 +223,24 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			segSplits:              0,
 			preciousSplit:          0,
 		},
-		vertices:        intVertices,
-		segAliasObj:     new(SegAliasHolder),
-		pickNode:        ZExt_PickNodeFuncFromOption(input.pickNodeUser),
-		createNodeSS:    ZExt_CreateNodeSSFromOption(input.pickNodeUser),
-		sectorHits:      make([]byte, whichLen),
-		incidental:      make([]ZExt_IntVertexPairC, 0),
-		solidMap:        solidMap,
-		nonVoidCache:    make(map[int]ZExt_NonVoidPerAlias),
-		SsectorMask:     ssectorMask,
-		blocksHit:       make([]ZExt_BlocksHit, 0),
-		diagonalPenalty: input.diagonalPenalty,
-		pickNodeFactor:  input.pickNodeFactor,
-		pickNodeUser:    input.pickNodeUser,
-		minorIsBetter:   MinorCmpFuncFromOption(input.minorIsBetterUser),
-		multipart:       input.minorIsBetterUser == MINOR_CMP_DEPTH,
-		depthArtifacts:  input.depthArtifacts,
-		nodeType:        input.nodeType,
+		vertices:         intVertices,
+		segAliasObj:      new(SegAliasHolder),
+		pickNode:         ZExt_PickNodeFuncFromOption(input.pickNodeUser),
+		createNodeSS:     ZExt_CreateNodeSSFromOption(input.pickNodeUser),
+		sectorHits:       make([]byte, whichLen),
+		incidental:       make([]ZExt_IntVertexPairC, 0),
+		solidMap:         solidMap,
+		nonVoidCache:     make(map[int]ZExt_NonVoidPerAlias),
+		SsectorMask:      ssectorMask,
+		blocksHit:        make([]ZExt_BlocksHit, 0),
+		diagonalPenalty:  input.diagonalPenalty,
+		pickNodeFactor:   input.pickNodeFactor,
+		pickNodeUser:     input.pickNodeUser,
+		minorIsBetter:    MinorCmpFuncFromOption(input.minorIsBetterUser),
+		multipart:        input.minorIsBetterUser == MINOR_CMP_DEPTH,
+		depthArtifacts:   input.depthArtifacts,
+		nodeType:         input.nodeType,
+		doLinesIntersect: doLinesIntersect,
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -739,6 +772,62 @@ func ZExt_splitDist(lines AbstractLines, seg *ZExt_NodeSeg) int {
 	return int(t)
 }
 
+func ZExt_doLinesIntersectDetail(c *ZExt_IntersectionContext) uint8 {
+	dx2 := c.psx - c.lsx
+	dy2 := c.psy - c.lsy
+	dx3 := c.psx - c.lex
+	dy3 := c.psy - c.ley
+
+	a := c.pdy*dx2 - c.pdx*dy2
+	b := c.pdy*dx3 - c.pdx*dy3
+	if ZDiffSign(a, b) && (a != 0) && (b != 0) {
+
+		x, y := c.computeIntersection()
+		dx2 = c.lsx - x
+		dy2 = c.lsy - y
+		if dx2 == 0 && dy2 == 0 {
+			a = 0
+		} else {
+
+			l := ZWideNumber(dx2)*ZWideNumber(dx2) + ZWideNumber(dy2)*ZWideNumber(dy2)
+			if l < ZWideNumber(2) {
+
+				a = 0
+			}
+		}
+		dx3 = c.lex - x
+		dy3 = c.ley - y
+		if dx3 == 0 && dy3 == 0 {
+			b = 0
+		} else {
+			l := ZWideNumber(dx3)*ZWideNumber(dx3) + ZWideNumber(dy3)*ZWideNumber(dy3)
+			if l < ZWideNumber(2) {
+				b = 0
+			}
+		}
+	}
+
+	var val uint8
+
+	if a == 0 {
+		val = val | 16
+	} else if a < 0 {
+		val = val | 32
+	} else {
+		val = val | 64
+	}
+
+	if b == 0 {
+		val = val | 1
+	} else if b < 0 {
+		val = val | 2
+	} else {
+		val = val | 4
+	}
+
+	return val
+}
+
 func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 	nonConvexityMode := NONCONVEX_ONESECTOR
 
@@ -786,7 +875,7 @@ func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 				c.lsy = check.StartVertex.Y
 				c.lex = check.EndVertex.X
 				c.ley = check.EndVertex.Y
-				val := c.doLinesIntersect()
+				val := w.doLinesIntersect(&c)
 				if val&34 != 0 {
 					if nonConvexityMode == NONCONVEX_ONESECTOR {
 						Log.ZExt_DumpSegs(ts)
@@ -970,7 +1059,7 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 	c.lsy = atmps.StartVertex.Y
 	c.lex = atmps.EndVertex.X
 	c.ley = atmps.EndVertex.Y
-	val := c.doLinesIntersect()
+	val := w.doLinesIntersect(c)
 	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 
 		if w.lines.IsTaggedPrecious(atmps.Linedef) &&
@@ -2028,7 +2117,7 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 			}
 		}
 
-		if !hasLeft && ZExt_VigilantGuard_IsBadPartition(part, ts, cnt) {
+		if !hasLeft && w.VigilantGuard_IsBadPartition(part, ts, cnt) {
 			cost += w.pickNodeFactor * ONESIDED_MULTIPLY
 			if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
 				continue
@@ -2055,7 +2144,7 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 		depthScores := ZExt_ZenSegMinorToDepthScores(parts)
 		newSectorHits := make([]uint8, len(w.sectors))
-		ZExt_ZenComputeScores(super, depthScores, newSectorHits, w.depthArtifacts)
+		w.ZenComputeScores(super, depthScores, newSectorHits, w.depthArtifacts)
 		ZExt_ZenPickBestScore(depthScores)
 		if depthScores[0].scoreSeg != VERY_BAD_SCORE {
 			best = depthScores[0].seg
@@ -2201,7 +2290,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 	return false
 }
 
-func ZExt_VigilantGuard_IsBadPartition(part, ts *ZExt_NodeSeg, cnt int) bool {
+func (w *ZExt_NodesWork) VigilantGuard_IsBadPartition(part, ts *ZExt_NodeSeg, cnt int) bool {
 
 	c := &ZExt_IntersectionContext{
 		psx: part.StartVertex.X,
@@ -2221,7 +2310,7 @@ func ZExt_VigilantGuard_IsBadPartition(part, ts *ZExt_NodeSeg, cnt int) bool {
 		c.lsy = check.StartVertex.Y
 		c.lex = check.EndVertex.X
 		c.ley = check.EndVertex.Y
-		val := c.doLinesIntersect()
+		val := w.doLinesIntersect(c)
 		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 			tot++
 			return false
@@ -2635,7 +2724,7 @@ func (w *ZExt_NodesWork) PartIsPolyobjSide(part, check *ZExt_NodeSeg) bool {
 		c.lsy = ZNumber(x2)
 		c.lex = ZNumber(y1)
 		c.ley = ZNumber(y2)
-		val := c.doLinesIntersect()
+		val := w.doLinesIntersect(c)
 		if (val&1 != 0) && (val&16 != 0) {
 			return true
 		}
@@ -3093,7 +3182,7 @@ func ZExt_PickNode_SingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 			c.lsy = check.StartVertex.Y
 			c.lex = check.EndVertex.X
 			c.ley = check.EndVertex.Y
-			val := c.doLinesIntersect()
+			val := w.doLinesIntersect(c)
 			if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 
 				cost += PICKNODE_FACTOR << 1
@@ -3612,7 +3701,7 @@ func (c *ZExt_IntersectionContext) computeIntersection() (ZNumber, ZNumber) {
 	return ZNumber(newx), ZNumber(newy)
 }
 
-func (c *ZExt_IntersectionContext) doLinesIntersect() uint8 {
+func ZExt_doLinesIntersectStandard(c *ZExt_IntersectionContext) uint8 {
 	dx2 := c.psx - c.lsx
 	dy2 := c.psy - c.lsy
 	dx3 := c.psx - c.lex
@@ -4144,7 +4233,7 @@ func ZExt_ZenPickBestScore(sc []ZExt_DepthScoreBundle) {
 
 }
 
-func ZExt_ZenComputeScores(super *ZExt_Superblock, sc []ZExt_DepthScoreBundle, sectorHits []uint8, depthArtifacts bool) {
+func (w *ZExt_NodesWork) ZenComputeScores(super *ZExt_Superblock, sc []ZExt_DepthScoreBundle, sectorHits []uint8, depthArtifacts bool) {
 	for i, _ := range sc {
 		inter := ZenIntermediary{
 			segL:    0,
@@ -4161,7 +4250,7 @@ func ZExt_ZenComputeScores(super *ZExt_Superblock, sc []ZExt_DepthScoreBundle, s
 			copy(sectorHits[j:], sectorHits[:j])
 		}
 
-		ZExt_evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits)
+		w.evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits)
 		for j := 0; j < len(sectorHits); j++ {
 			switch sectorHits[j] {
 			case 0x0F:
@@ -4240,7 +4329,7 @@ func ZExt_ZenComputeScores(super *ZExt_Superblock, sc []ZExt_DepthScoreBundle, s
 	}
 }
 
-func ZExt_evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZExt_DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8) {
+func (w *ZExt_NodesWork) evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZExt_DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8) {
 	part := rec.seg
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
@@ -4271,7 +4360,7 @@ func ZExt_evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZExt_DepthScoreBu
 		c.lsy = check.StartVertex.Y
 		c.lex = check.EndVertex.X
 		c.ley = check.EndVertex.Y
-		val := c.doLinesIntersect()
+		val := w.doLinesIntersect(c)
 		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 
 			intermediate.segS++
@@ -4318,7 +4407,7 @@ func ZExt_evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZExt_DepthScoreBu
 			continue
 		}
 
-		ZExt_evalPartitionWorker_Zen(block.subs[num], rec, intermediate,
+		w.evalPartitionWorker_Zen(block.subs[num], rec, intermediate,
 			sectorHits)
 	}
 

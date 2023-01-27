@@ -65,24 +65,27 @@ import (
 const SSECTOR_NORMAL_MASK = 0x8000
 const SSECTOR_DEEP_MASK = 0x80000000
 
+const DETAILED_LEVEL_THRESHOLD = 500
+
 // Passed to the nodes builder goroutine
 type NodesInput struct {
-	lines             WriteableLines
-	solidLines        AbstractLines // when a solid-only blockmap is needed to detect void space for more accurate node pick quality weighting
-	sectors           []Sector
-	sidedefs          []Sidedef
-	bcontrol          chan BconRequest
-	bgenerator        chan BgenRequest
-	nodesChan         chan<- NodesResult
-	pickNodeUser      int
-	diagonalPenalty   int
-	pickNodeFactor    int
-	minorIsBetterUser int
-	linesToIgnore     []bool // dummy linedefs such as for scrolling
-	depthArtifacts    bool
-	nodeType          int
-	multiTreeMode     int
-	specialRootMode   int
+	lines              WriteableLines
+	solidLines         AbstractLines // when a solid-only blockmap is needed to detect void space for more accurate node pick quality weighting
+	sectors            []Sector
+	sidedefs           []Sidedef
+	bcontrol           chan BconRequest
+	bgenerator         chan BgenRequest
+	nodesChan          chan<- NodesResult
+	pickNodeUser       int
+	diagonalPenalty    int
+	pickNodeFactor     int
+	minorIsBetterUser  int
+	linesToIgnore      []bool // dummy linedefs such as for scrolling
+	depthArtifacts     bool
+	nodeType           int
+	multiTreeMode      int
+	specialRootMode    int
+	detailFriendliness int
 }
 
 type Number int
@@ -103,6 +106,8 @@ type CreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *Node
 
 // Which secondary metric to use
 type MinorIsBetterFunc func(current, prev MinorCosts) bool
+
+type DoLinesIntersectFunc func(c *IntersectionContext) uint8
 
 // Returned from nodes builder goroutine through a channel
 type NodesResult struct {
@@ -125,42 +130,43 @@ type NodesTotals struct {
 }
 
 type NodesWork struct {
-	lines           WriteableLines
-	sides           []Sidedef
-	sectors         []Sector
-	allSegs         []*NodeSeg // internal format for calculations
-	subsectors      []SubSector
-	segs            []Seg // game format for actual SEGS lump
-	nodeX           int
-	nodeY           int
-	nodeDx          int
-	nodeDy          int
-	totals          *NodesTotals
-	vertices        []NodeVertex
-	nodes           []Node
-	nreverse        uint32
-	segAliasObj     *SegAliasHolder
-	pickNode        PickNodeFunc
-	createNodeSS    CreateNodeSSFunc // SS stands for "single sector". In case you worried.
-	sectorHits      []uint8          // used by PickNode_Visplane* variants, keeps track of sectors on both sides
-	incidental      []IntVertexPairC // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
-	solidMap        *Blockmap
-	nonVoidCache    map[int]NonVoidPerAlias
-	dgVertexMap     *VertexMap // vertex map for computing void parts
-	blockity        *BlockityLines
-	deepNodes       []DeepNode // also used for Zdoom (extended/compressed) nodes while in production
-	deepSubsectors  []DeepSubSector
-	deepSegs        []DeepSeg
-	SsectorMask     uint32
-	blocksHit       []BlocksHit
-	diagonalPenalty int
-	pickNodeFactor  int
-	pickNodeUser    int
-	minorIsBetter   MinorIsBetterFunc
-	multipart       bool // whether multiple partition with same primary costs are considered (for depth evaluation)
-	depthArtifacts  bool
-	nodeType        int
-	vertexCache     map[SimpleVertex]int // for nodes without extra precision
+	lines            WriteableLines
+	sides            []Sidedef
+	sectors          []Sector
+	allSegs          []*NodeSeg // internal format for calculations
+	subsectors       []SubSector
+	segs             []Seg // game format for actual SEGS lump
+	nodeX            int
+	nodeY            int
+	nodeDx           int
+	nodeDy           int
+	totals           *NodesTotals
+	vertices         []NodeVertex
+	nodes            []Node
+	nreverse         uint32
+	segAliasObj      *SegAliasHolder
+	pickNode         PickNodeFunc
+	createNodeSS     CreateNodeSSFunc // SS stands for "single sector". In case you worried.
+	sectorHits       []uint8          // used by PickNode_Visplane* variants, keeps track of sectors on both sides
+	incidental       []IntVertexPairC // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
+	solidMap         *Blockmap
+	nonVoidCache     map[int]NonVoidPerAlias
+	dgVertexMap      *VertexMap // vertex map for computing void parts
+	blockity         *BlockityLines
+	deepNodes        []DeepNode // also used for Zdoom (extended/compressed) nodes while in production
+	deepSubsectors   []DeepSubSector
+	deepSegs         []DeepSeg
+	SsectorMask      uint32
+	blocksHit        []BlocksHit
+	diagonalPenalty  int
+	pickNodeFactor   int
+	pickNodeUser     int
+	minorIsBetter    MinorIsBetterFunc
+	doLinesIntersect DoLinesIntersectFunc
+	multipart        bool // whether multiple partition with same primary costs are considered (for depth evaluation)
+	depthArtifacts   bool
+	nodeType         int
+	vertexCache      map[SimpleVertex]int // for nodes without extra precision
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -328,6 +334,37 @@ func NodesGenerator(input *NodesInput) {
 	Log.Printf("Nodes: rendered part of map goes from (%d,%d) to (%d,%d)\n",
 		rootBox.Ymax, rootBox.Xmin, rootBox.Ymin, rootBox.Xmax)
 
+	doLinesIntersect := doLinesIntersectStandard
+	if input.nodeType == NODETYPE_ZDOOM_COMPRESSED ||
+		input.nodeType == NODETYPE_ZDOOM_EXTENDED {
+		// Zdoom extended nodes keep "standard" because override (zdefs.go) is
+		// placed on it not the other func
+	} else {
+		heur := false
+		switch input.detailFriendliness {
+		case NODE_DETAIL_ALWAYS:
+			doLinesIntersect = doLinesIntersectDetail
+		case NODE_DETAIL_SUPPRESS:
+			doLinesIntersect = doLinesIntersectStandard
+		case NODE_DETAIL_HEURISTIC:
+			heur = true
+		default: // should be NODE_DETAIL_AUTO
+			heur = input.nodeType == NODETYPE_VANILLA
+			if !heur { // deep nodes default to detailed version
+				doLinesIntersect = doLinesIntersectDetail
+			}
+		}
+		if heur {
+			// use heuristic to see if level is detailed, if yes, use
+			// detail-friendly version (but that generates more segs and nodes)
+			detail := IsTooDetailed(input.lines, input.linesToIgnore, rootBox)
+			if detail {
+				doLinesIntersect = doLinesIntersectDetail
+			}
+		}
+
+	}
+
 	var solidMap *Blockmap
 	if requestedSolid {
 		blockmapGetter := make(chan *Blockmap)
@@ -358,23 +395,24 @@ func NodesGenerator(input *NodesInput) {
 			segSplits:              0,
 			preciousSplit:          0,
 		},
-		vertices:        intVertices,
-		segAliasObj:     new(SegAliasHolder),
-		pickNode:        PickNodeFuncFromOption(input.pickNodeUser),
-		createNodeSS:    CreateNodeSSFromOption(input.pickNodeUser),
-		sectorHits:      make([]byte, whichLen),
-		incidental:      make([]IntVertexPairC, 0),
-		solidMap:        solidMap,
-		nonVoidCache:    make(map[int]NonVoidPerAlias),
-		SsectorMask:     ssectorMask,
-		blocksHit:       make([]BlocksHit, 0),
-		diagonalPenalty: input.diagonalPenalty,
-		pickNodeFactor:  input.pickNodeFactor,
-		pickNodeUser:    input.pickNodeUser,
-		minorIsBetter:   MinorCmpFuncFromOption(input.minorIsBetterUser),
-		multipart:       input.minorIsBetterUser == MINOR_CMP_DEPTH,
-		depthArtifacts:  input.depthArtifacts,
-		nodeType:        input.nodeType,
+		vertices:         intVertices,
+		segAliasObj:      new(SegAliasHolder),
+		pickNode:         PickNodeFuncFromOption(input.pickNodeUser),
+		createNodeSS:     CreateNodeSSFromOption(input.pickNodeUser),
+		sectorHits:       make([]byte, whichLen),
+		incidental:       make([]IntVertexPairC, 0),
+		solidMap:         solidMap,
+		nonVoidCache:     make(map[int]NonVoidPerAlias),
+		SsectorMask:      ssectorMask,
+		blocksHit:        make([]BlocksHit, 0),
+		diagonalPenalty:  input.diagonalPenalty,
+		pickNodeFactor:   input.pickNodeFactor,
+		pickNodeUser:     input.pickNodeUser,
+		minorIsBetter:    MinorCmpFuncFromOption(input.minorIsBetterUser),
+		multipart:        input.minorIsBetterUser == MINOR_CMP_DEPTH,
+		depthArtifacts:   input.depthArtifacts,
+		nodeType:         input.nodeType,
+		doLinesIntersect: doLinesIntersect,
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -732,6 +770,101 @@ func (w *NodesWork) fitSegsToTarget(maxSegIndex uint16) (bool, int) {
 	return true, biggestSubsector
 }
 
+// IsTooDetailed returns whether level is detailed enough that it needs more
+// accurate intersection evaluation than that provided by original
+// doLinesIntersect checker from BSP v5.2 to ensure nodes are built correctly
+// The improvement on accuracy does result in more seg/sector splits, however,
+// which means it is not advised to be used for vanilla maps unless absolutely
+// necessary
+func IsTooDetailed(lines AbstractLines, linesToIgnore []bool, bounds *NodeBounds) bool {
+	bmi := BlockmapInput{
+		lines:           lines,
+		bounds:          *NodeBoundsToLevelBounds(bounds),
+		XOffset:         0,
+		YOffset:         0,
+		useZeroHeader:   false,
+		internalPurpose: true,
+		gcShield:        nil,
+		linesToIgnore:   linesToIgnore,
+	}
+	bm := CreateBlockmap(bmi)
+	hitmap := make([]int, len(bm.blocklist))
+	for i, _ := range bm.blocklist {
+		score := 0
+		for _, l := range bm.blocklist[i] {
+			id := uint16(l)
+			x1, y1, x2, y2 := lines.GetAllXY(id)
+			dx := x2 - x1
+			dy := y2 - y1
+			if dx < 0 {
+				dx = -dx
+			}
+			if dy < 0 {
+				dy = -dy
+			}
+			score++
+			twosided := uint16(lines.GetFlags(id))&LF_TWOSIDED == LF_TWOSIDED
+			orthogonal := dx == 0 || dy == 0
+			short := dx < 8 && dy < 8
+			veryshort := dx < 4 && dy < 4
+			if !orthogonal {
+				score++
+			}
+			if short {
+				score += 1
+			}
+			if veryshort {
+				score += 3
+			}
+			if !orthogonal && short && twosided {
+				score += 2
+			}
+		}
+		hitmap[i] = score
+	}
+	scoremax := 0
+	xl := int(bm.header.XBlocks)
+	xh := xl - 1
+	yl := int(bm.header.YBlocks)
+	yh := yl - 1
+	for i, _ := range hitmap {
+		xj := i / xl
+		xi := i - xj*xl
+		// Consider entire 3x3 blocks of 128x128 pixels, centered on current
+		// block
+		score9 := hitmapAccAllIdx(xi, xj, xh, yh, hitmap)
+		if scoremax < score9 {
+			scoremax = score9
+		}
+	}
+	ret := scoremax > DETAILED_LEVEL_THRESHOLD
+	Log.Verbose(1, "<High amount of detail> = %t maxscore = %d threshold = %d\n", ret, scoremax, DETAILED_LEVEL_THRESHOLD)
+	return ret
+}
+
+func hitmapAccIdx(i, j int, hiI, hiJ int, hitmap []int) int {
+	if i < 0 || j < 0 || i > hiI || j > hiJ {
+		return 0
+	}
+	x := (hiI+1)*j + i
+	if x > len(hitmap)-1 {
+		return 0 // safety measure
+	}
+	return hitmap[x]
+}
+
+func hitmapAccAllIdx(i, j int, hiI, hiJ int, hitmap []int) int {
+	return hitmapAccIdx(i-1, j-1, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i, j-1, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i+1, j-1, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i-1, j, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i, j, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i+1, j, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i-1, j+1, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i, j+1, hiI, hiJ, hitmap) +
+		hitmapAccIdx(i+1, j+1, hiI, hiJ, hitmap)
+}
+
 // createSegs iterates over linedefs to create initial segs
 // In some circumstances, it won't create a seg:
 // 1. Linedef is zero length
@@ -1054,6 +1187,15 @@ func FindLimits(ts *NodeSeg) *NodeBounds {
 	return &r
 }
 
+func NodeBoundsToLevelBounds(n *NodeBounds) *LevelBounds {
+	return &LevelBounds{
+		Xmin: int16(n.Xmin),
+		Ymin: int16(n.Ymin),
+		Xmax: int16(n.Xmax),
+		Ymax: int16(n.Ymax),
+	}
+}
+
 func UnionNodeBounds(b1, b2 *NodeBounds) *NodeBounds {
 	bu := &NodeBounds{
 		Xmin: b1.Xmin,
@@ -1204,7 +1346,7 @@ func (c *IntersectionContext) computeIntersection() (Number, Number) {
 // in mind going forward, as doing things the same way would enable me to borrow
 // superblocks idea from AJ-BSP (the speed-up from that I expect would be
 // greater than performance loss from doing things more accurately)
-func (c *IntersectionContext) doLinesIntersect() uint8 {
+func doLinesIntersectStandard(c *IntersectionContext) uint8 {
 	dx2 := c.psx - c.lsx // Checking line -> partition
 	dy2 := c.psy - c.lsy
 	dx3 := c.psx - c.lex
@@ -1221,12 +1363,71 @@ func (c *IntersectionContext) doLinesIntersect() uint8 {
 			a = 0
 		} else {
 			// NOTE this margin may lead to errors on complex, very detailed
-			// levels (or areas).
-			// Already had to edit the threshold so that I could build
-			// Water Spirit map02 close to correct (but not perfect) in vanilla
-			// nodes format and visplane-reducing partitioners
-			// And for extended nodes, I had to completely replace the check
+			// levels (or areas), so:
+			// 1. For non-extended nodes, there is alternate function
+			// doLinesIntersectDetail
+			// 2. For extended nodes, I had to completely replace the check
 			// with more expensive but accurate one from ZDBSP
+			// -- VigilantDoomer
+			l := WideNumber(dx2)*WideNumber(dx2) + WideNumber(dy2)*WideNumber(dy2)
+			if l < WideNumber(4) {
+				// If either ends of the split
+				// are smaller than 2 pixs then
+				// assume this starts on part line
+				a = 0
+			}
+		}
+		dx3 = c.lex - x // Find distance from line end
+		dy3 = c.ley - y // to split point
+		if dx3 == 0 && dy3 == 0 {
+			b = 0
+		} else {
+			l := WideNumber(dx3)*WideNumber(dx3) + WideNumber(dy3)*WideNumber(dy3)
+			if l < WideNumber(4) { // same as start of line
+				b = 0
+			}
+		}
+	}
+
+	var val uint8
+
+	if a == 0 {
+		val = val | 16 // start is on middle
+	} else if a < 0 {
+		val = val | 32 // start is on left side
+	} else {
+		val = val | 64 // start is on right side
+	}
+
+	if b == 0 {
+		val = val | 1 // end is on middle
+	} else if b < 0 {
+		val = val | 2 // end is on left side
+	} else {
+		val = val | 4 // end is on right side
+	}
+
+	return val
+}
+
+// doLinesIntersect for detailed maps
+func doLinesIntersectDetail(c *IntersectionContext) uint8 {
+	dx2 := c.psx - c.lsx // Checking line -> partition
+	dy2 := c.psy - c.lsy
+	dx3 := c.psx - c.lex
+	dy3 := c.psy - c.ley
+
+	a := c.pdy*dx2 - c.pdx*dy2
+	b := c.pdy*dx3 - c.pdx*dy3
+	if DiffSign(a, b) && (a != 0) && (b != 0) { // Line is split, just check that
+
+		x, y := c.computeIntersection()
+		dx2 = c.lsx - x // Find distance from line start
+		dy2 = c.lsy - y // to split point
+		if dx2 == 0 && dy2 == 0 {
+			a = 0
+		} else {
+			// Margin decreased to account for maps such as in Water Spirit, etc.
 			// -- VigilantDoomer
 			l := WideNumber(dx2)*WideNumber(dx2) + WideNumber(dy2)*WideNumber(dy2)
 			if l < WideNumber(2) { // Killough used 4 not 2
@@ -1332,7 +1533,7 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 				c.lsy = check.StartVertex.Y
 				c.lex = check.EndVertex.X
 				c.ley = check.EndVertex.Y
-				val := c.doLinesIntersect()
+				val := w.doLinesIntersect(&c)
 				if val&34 != 0 {
 					if nonConvexityMode == NONCONVEX_ONESECTOR {
 						Log.DumpSegs(ts)
@@ -1708,7 +1909,7 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 	c.lsy = atmps.StartVertex.Y
 	c.lex = atmps.EndVertex.X
 	c.ley = atmps.EndVertex.Y
-	val := c.doLinesIntersect()
+	val := w.doLinesIntersect(c)
 	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 		// Partition intersects this seg in tmps parameter, so it needs to be split
 		if w.lines.IsTaggedPrecious(atmps.Linedef) &&

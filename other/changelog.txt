@@ -2,7 +2,7 @@ Changelog for VigilantBSP
 
 v0.78a (working name)
 - Fixed errors in Zdoom extended/compressed nodebuilding, including the ones observed in map02 of watrsp.wad
-- Increased precision of vanilla/deep nodes as well to avoid bugs in areas with a lot of detail (this might increase segs a little)
+- Also fixed errors related to building those same levels in vanilla/deep format - see "Debug and other hidden parameters", --detailnodes
 - Nodebuilder no longer adds vertices that are duplicate of existing ones (although these occurences were seldom before), which may lead to smaller VERTEXES lump 
 - Redone bug fix for broken polyobject in Guardian of Steel and the like so that fewer segs and visplanes are generated for maps with polyobjects
 - Improved heuristics in advanced visplane reduction partitioner (more accurate measure of partition length without the parts that lie in the void).
