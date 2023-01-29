@@ -1,9 +1,12 @@
 Changelog for VigilantBSP
 
-v0.78a (working name)
-- Fixed errors in Zdoom extended/compressed nodebuilding, including the ones observed in map02 of watrsp.wad
-- Also fixed errors related to building those same levels in vanilla/deep format - see "Debug and other hidden parameters", --detailnodes
-- Nodebuilder no longer adds vertices that are duplicate of existing ones (although these occurences were seldom before), which may lead to smaller VERTEXES lump 
+v0.78a
+- Fixed bug: Zdoom extended/compressed nodebuilding now uses the correct precision, map02 of watrsp.wad now builds correctly
+- Fixed bug: detailed levels that had problems now shall be built correctly with vanilla and DeeP nodes as well (same map as an example as previous)
+    This leads to a change in the way some maps are built, and might result in increased segs and visplanes (but VigilantBSP tries
+    to avoid using that on vanilla maps). See "Debug and other hidden parameters", --detailnodes if you are interested in
+    more information/control over this.
+- Nodebuilder no longer adds vertices that are duplicate of existing ones (although these occurences were seldom before), this will result in smaller VERTEXES lump 
 - Redone bug fix for broken polyobject in Guardian of Steel and the like so that fewer segs and visplanes are generated for maps with polyobjects
 - Improved heuristics in advanced visplane reduction partitioner (more accurate measure of partition length without the parts that lie in the void).
 - When blockmap builder is allowed to select a dummy linedef different from zero, it will prefer linedefs that are shorter than 2048 units.

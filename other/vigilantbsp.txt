@@ -1642,6 +1642,7 @@ It is recommended to give this file an extension of ".prof"
 
 Also, see comments closing this section.
 
+
 --memprofile <filename>
 A debug option.
 Write memory allocations profile to  the file described by
@@ -1654,6 +1655,7 @@ analysing tool such as "go tool pprof <filename>".
 It is recommended to give this file an extension of ".prof"
 
 Also, see comments closing this section.
+
 
 --unreversenodes
 A niche use option.
@@ -1676,6 +1678,58 @@ Since the link to the original algorithm Linguica produces has expired,
 it cannot be verified that the algorithm used by VigilantBSP is the
 same. Since even the original produced benefits only in some cases,
 this option is probably condemned to obscurity.
+
+
+--detailnodes=<n>, where n is a number
+This controls whether nodes will be build with increased precision,
+with options being such as always, never, or conditionally etc.
+NOTE: It has no effect and will be ignored when building Zdoom
+extended or compressed nodes - they are always built to a much 
+greater accuracy than with either mode of this algorithm, since
+VigilantBSP v0.78a. 
+
+Some maps require accurate split detection in node building algorithms
+to function correctly, otherwise user will experience more than just
+visual errors and might not be able to complete the map. However, the
+increased precision also yields more segs and nodes (and thus, likely,
+visplanes), which may be undesirable for maps trying to fit under
+vanilla limits.  
+
+Options are:
+	--detailnodes=0
+	This is the default. 
+	If building vanilla format nodes, a heuristic
+	will be used to determine whether map is "detailed" or otherwise
+	contains dense line placement in some area of the map. If heuristic
+	yields "yes" to that, the more accurate algorithm will be used,
+	but more segs and nodes will be generated, otherwise it is not
+	used. 
+	If building DeeP format nodes, accurate algorithm will be used
+	regardless (when using this option)
+	
+	--detailnodes=1 
+	(alternative way to specify: --detailnodes- )
+	Never use detailed algorithm whether building vanilla or DeeP nodes.
+	This is what VigilantBSP prior to version 0.78a did.
+	Example of map that won't built correctly this way: Water Spirit
+	map02, near sector tagged 24 an invisible blockade will appear.
+	VigilantBSP 0.75a didn't build this map correctly with extended 
+	nodes either, but that is fixed in 0.78a+.
+	
+	--detailednodes=2
+	(alternative way to specify: --detailnodes+ )
+	Always use detailed algorithm whether building vanilla or DeeP nodes.
+	Might not be a good idea for vanilla maps pushing limits but that
+	do not need increased precision to correctly function. It might still
+	be possible to build a vanilla map that needs this, so if heuristic
+	fails to detect that case you can force increased precision.
+	
+	--detailednodes=3
+	Use heuristic to see if increased precision is to be used, whether
+	building vanilla format nodes or DeeP.
+	
+If heuristic is used, the decision made should be included in verbose
+output lvl 1 (pass -v option).
 
 Closing comments in regards to --memprofile and --cpuprofile options:
 
