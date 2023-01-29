@@ -298,7 +298,7 @@ func init() {
 // Moved away from init, used to confuse the "go test"!
 func Configure() {
 	Log.Printf("VigilantBSP ver %s\n", VERSION)
-	Log.Printf("Copyright (c)   2022 VigilantDoomer\n")
+	Log.Printf("Copyright (c)   2022-2023 VigilantDoomer\n")
 	Log.Printf("This program is built upon ideas first implemented in DEU by Raphael Quinet, \n")
 	Log.Printf("BSP v5.2 by Colin Reed, Lee Killough and other contributors to BSP (program),\n")
 	Log.Printf("ZDBSP by Marisa Heit, Zennode by Marc Rousseau,\n")
