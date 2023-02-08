@@ -1697,6 +1697,258 @@ func (w *NodesWork) PartIsPolyobjSide(part, check *NodeSeg) bool {
 	return false
 }
 
+// Zennode-like node picker. Split/sideness evaluation is not zennode's, but
+// the scoring system is more or less faithful
+func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
+	super *Superblock) *NodeSeg {
+	best := ts // make sure always got something to return
+	cnt := 0
+
+	for part := ts; part != nil; part = part.next { // Count once and for all
+		cnt++
+	}
+
+	var previousPart *NodeSeg // keep track of previous partition - test only one seg per partner pair
+
+	w.segAliasObj.UnvisitAll() // remove marks from previous PickNode calls
+	w.zenScores = w.zenScores[:0]
+
+	for part := ts; part != nil; part = part.next { // Use each Seg as partition
+		if part.partner != nil && part.partner == previousPart {
+			// Partner segs are kept next to each other, they would result in
+			// same nodeline - so skip second partner
+			continue
+		}
+		if part.alias != 0 {
+			if w.segAliasObj.MarkAndRecall(part.alias) {
+				// More advanced way to skip all colinear segs (which would also
+				// create the exact same nodeline). This check is more
+				// expensive than partnership check (verified on big maps)
+				continue
+			}
+		} else { // = 0 means alias was not assigned (or was intentionally dropped when segs were split)
+			// Generate and assign new alias
+			// Note we don't assign anything to partner HERE, partners are skipped
+			// as part of big loop but get covered by inner loop anyway
+			part.alias = w.segAliasObj.Generate()
+			// Aliases get copied in the inner loop: when a line we are checking
+			// is colinear to partition, it "inherits" alias from partition
+		}
+		previousPart = part // used for check above
+		cost := 0           // cost is most likely never used,
+		tot := 0
+		slen := Number(0) // length of partition that is incidental with segs
+
+		w.zenScores = append(w.zenScores, DepthScoreBundle{})
+		bundle := &(w.zenScores[len(w.zenScores)-1])
+		minorsDummy := MinorCosts{}
+		bundle.seg = part
+		// Fill sectorHits array with zeros FAST (fewer bound checks)
+		// Credit: gist github.com taylorza GO-Fillslice.md
+		w.sectorHits[0] = 0
+		sectorCount := len(w.sectorHits)
+		for j := 1; j < sectorCount; j = j << 1 {
+			copy(w.sectorHits[j:], w.sectorHits[:j])
+		}
+
+		c := &IntersectionContext{
+			psx: part.StartVertex.X,
+			psy: part.StartVertex.Y,
+			pex: part.EndVertex.X,
+			pey: part.EndVertex.Y,
+		}
+
+		//progress();           	        // Something for the user to look at.
+		w.blocksHit = w.blocksHit[:0]
+		inter := &ZenIntermediary{}
+		prune := w.evalPartitionWorker_ZennodeDepth(super, part, c, &cost,
+			&slen, bundle, inter, &minorsDummy)
+		prune = prune ||
+			inter.segR == 0 ||
+			(inter.segR == 1 && inter.segL == 0)
+		if prune { // Early exit and skip past the tests below
+			w.zenScores = w.zenScores[:len(w.zenScores)-1] // remove corresponding record
+			continue
+		}
+
+		// Apply missing sectorHits from evalPartitionWorker
+		for _, hitRecord := range w.blocksHit {
+			hitRecord.block.MarkSectorsHit(w.sectorHits, hitRecord.mask)
+		}
+
+		// Count sectors on each side of partition line, and the split sectors
+		flat := 0
+		for tot = 0; tot < len(w.sectorHits); tot++ {
+			switch w.sectorHits[tot] {
+			case 0x0F:
+				{
+					inter.sectorL++
+					flat++
+				}
+			case 0xF0:
+				{
+					inter.sectorR++
+					flat++
+
+				}
+			case 0xFF:
+				{
+					inter.sectorS++
+					flat++
+				}
+			}
+		}
+
+		if flat > 1 && w.diagonalPenalty != 0 && (part.pdx != 0 && part.pdy != 0) {
+			bundle.diagonalFactor++
+		}
+
+		scoreIntermediate(bundle, inter, w.depthArtifacts)
+
+		best = part // this should be overridden later, and only used as a fallback
+	}
+	if len(w.zenScores) > 0 {
+		ZenPickBestScore(w.zenScores)
+		// Log.Printf("\n", w.zenScores[0]) // debug
+		best = w.zenScores[0].seg
+	}
+	return best // All finished, return best Seg
+}
+
+// If returns true, the partition &part must be skipped, because it produced
+// many splits early so that cost exceed bestcost
+// Worker for Zennode prefers not to quit early, though
+func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
+	part *NodeSeg, c *IntersectionContext, cost *int, slen *Number,
+	bundle *DepthScoreBundle, inter *ZenIntermediary, minors *MinorCosts) bool {
+
+	// -AJA- this is the heart of my superblock idea, it tests the
+	//       _whole_ block against the partition line to quickly handle
+	//       all the segs within it at once.  Only when the partition
+	//       line intercepts the box do we need to go deeper into it.
+	num := BoxOnLineSide(block, part)
+	if num < 0 {
+		// LEFT
+		inter.segL += block.realNum
+		w.blocksHit = append(w.blocksHit, BlocksHit{
+			block: block,
+			mask:  uint8(0x0F),
+		})
+		return false
+	} else if num > 0 {
+		// RIGHT
+		inter.segR += block.realNum
+		w.blocksHit = append(w.blocksHit, BlocksHit{
+			block: block,
+			mask:  uint8(0xF0),
+		})
+		return false
+	}
+
+	for check := block.segs; check != nil; check = check.nextInSuper { // Check partition against all Segs
+		// get state of lines' relation to each other
+		leftside := false
+		mask := uint8(0xF0)
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
+		c.lsx = check.StartVertex.X
+		c.lsy = check.StartVertex.Y
+		c.lex = check.EndVertex.X
+		c.ley = check.EndVertex.Y
+		val := w.doLinesIntersect(c) // use more accurate side evaluation
+
+		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
+			if w.PassingTooClose(part, check, cost, nil) {
+				return true
+			}
+			// Split line
+			inter.segS++
+			mask = uint8(0xFF)
+			if w.lines.IsTaggedPrecious(check.Linedef) &&
+				!w.lines.SectorIgnorePrecious(check.sector) {
+				bundle.preciousSplit++
+			}
+		} else {
+			if check == part || check == part.partner {
+				// Partition itself or its partner
+				leftside = check == part.partner
+				if leftside {
+					inter.segL++
+				} else {
+					inter.segR++
+				}
+			} else {
+				// if to the left or to the right and not a collinear seg,
+				// check for passing through vertex if this is precious
+				checkPrecious := false
+				if val&34 != 0 {
+					// to the left
+					leftside = true
+					inter.segL++
+					checkPrecious = true
+				}
+				if val&64 != 0 {
+					// to the right
+					inter.segR++
+					checkPrecious = true
+				}
+				if checkPrecious && w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					passingThrough(part, check) &&
+					!w.PartIsPolyobjSide(part, check) {
+					bundle.preciousSplit++
+				}
+				if (val&1 != 0) && (val&16 != 0) {
+					// Collinear seg
+					check.alias = part.alias
+					*slen += check.len
+					if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
+						leftside = true
+						inter.segL++
+					} else {
+						inter.segR++
+					}
+				}
+			}
+		}
+		if leftside {
+			mask = uint8(0x0F)
+		}
+
+		w.sectorHits[check.sector] |= mask
+	}
+	// handle sub-blocks recursively
+
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+
+		if w.evalPartitionWorker_ZennodeDepth(block.subs[num], part, c,
+			cost, slen, bundle, inter, minors) {
+			return true
+		}
+	}
+
+	// no "bad seg" was found
+	return false
+}
+
+// passingThrough returns whether partition line part passes through either
+// of the end vertices of check
+func passingThrough(part, check *NodeSeg) bool {
+	a := part.pdy*check.psx - part.pdx*check.psy + part.perp
+	b := part.pdy*check.pex - part.pdx*check.pey + part.perp
+	if DiffSign(a, b) {
+		if a != 0 && b != 0 {
+
+		} else {
+			return true
+		}
+	}
+	return false
+}
+
 // Good Lord, Raphael Quinet, you were right: writing a node builder takes HEAPS of
 // time! Big thanks for reaching there before the rest of us. -- VigilantDoomer
 

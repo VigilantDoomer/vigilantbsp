@@ -79,6 +79,7 @@ type ZExt_NodesWork struct {
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
 	vertexMap         *VertexMap
+	zenScores         []ZExt_DepthScoreBundle
 }
 
 type ZExt_NodeVertex struct {
@@ -241,6 +242,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		depthArtifacts:   input.depthArtifacts,
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
+		zenScores:        make([]ZExt_DepthScoreBundle, 0, len(allSegs)),
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -364,6 +366,10 @@ func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
 	case PICKNODE_MAELSTROM:
 		{
 			return ZExt_PickNode_maelstrom
+		}
+	case PICKNODE_ZENLIKE:
+		{
+			return ZExt_PickNode_ZennodeDepth
 		}
 	default:
 		{
@@ -1389,7 +1395,7 @@ func (ni *NodesInput) ZExt_applySectorEquivalence(allSegs []*ZExt_NodeSeg, secto
 func (w *ZExt_NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *ZExt_Superblock {
 	ret := ZExt_NewSuperBlock()
 	ret.SetBounds(rootBox)
-	if w.pickNodeUser == PICKNODE_VISPLANE {
+	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
 		ret.sectors = make([]uint16, 0)
 		ret.secMap = make(map[uint16]bool)
 	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
@@ -1487,6 +1493,7 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 
 	newW.nonVoidCache = make(map[int]ZExt_NonVoidPerAlias)
 	newW.blocksHit = make([]ZExt_BlocksHit, 0)
+	newW.zenScores = make([]ZExt_DepthScoreBundle, 0, cap(w.zenScores))
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -2726,6 +2733,233 @@ func (w *ZExt_NodesWork) PartIsPolyobjSide(part, check *ZExt_NodeSeg) bool {
 		c.ley = ZNumber(y2)
 		val := w.doLinesIntersect(c)
 		if (val&1 != 0) && (val&16 != 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
+	super *ZExt_Superblock) *ZExt_NodeSeg {
+	best := ts
+	cnt := 0
+
+	for part := ts; part != nil; part = part.next {
+		cnt++
+	}
+
+	var previousPart *ZExt_NodeSeg
+
+	w.segAliasObj.UnvisitAll()
+	w.zenScores = w.zenScores[:0]
+
+	for part := ts; part != nil; part = part.next {
+		if part.partner != nil && part.partner == previousPart {
+
+			continue
+		}
+		if part.alias != 0 {
+			if w.segAliasObj.MarkAndRecall(part.alias) {
+
+				continue
+			}
+		} else {
+
+			part.alias = w.segAliasObj.Generate()
+
+		}
+		previousPart = part
+		cost := 0
+		tot := 0
+		slen := ZNumber(0)
+
+		w.zenScores = append(w.zenScores, ZExt_DepthScoreBundle{})
+		bundle := &(w.zenScores[len(w.zenScores)-1])
+		minorsDummy := MinorCosts{}
+		bundle.seg = part
+
+		w.sectorHits[0] = 0
+		sectorCount := len(w.sectorHits)
+		for j := 1; j < sectorCount; j = j << 1 {
+			copy(w.sectorHits[j:], w.sectorHits[:j])
+		}
+
+		c := &ZExt_IntersectionContext{
+			psx: part.StartVertex.X,
+			psy: part.StartVertex.Y,
+			pex: part.EndVertex.X,
+			pey: part.EndVertex.Y,
+		}
+
+		w.blocksHit = w.blocksHit[:0]
+		inter := &ZenIntermediary{}
+		prune := w.evalPartitionWorker_ZennodeDepth(super, part, c, &cost,
+			&slen, bundle, inter, &minorsDummy)
+		prune = prune ||
+			inter.segR == 0 ||
+			(inter.segR == 1 && inter.segL == 0)
+		if prune {
+			w.zenScores = w.zenScores[:len(w.zenScores)-1]
+			continue
+		}
+
+		for _, hitRecord := range w.blocksHit {
+			hitRecord.block.MarkSectorsHit(w.sectorHits, hitRecord.mask)
+		}
+
+		flat := 0
+		for tot = 0; tot < len(w.sectorHits); tot++ {
+			switch w.sectorHits[tot] {
+			case 0x0F:
+				{
+					inter.sectorL++
+					flat++
+				}
+			case 0xF0:
+				{
+					inter.sectorR++
+					flat++
+
+				}
+			case 0xFF:
+				{
+					inter.sectorS++
+					flat++
+				}
+			}
+		}
+
+		if flat > 1 && w.diagonalPenalty != 0 && (part.pdx != 0 && part.pdy != 0) {
+			bundle.diagonalFactor++
+		}
+
+		ZExt_scoreIntermediate(bundle, inter, w.depthArtifacts)
+
+		best = part
+	}
+	if len(w.zenScores) > 0 {
+		ZExt_ZenPickBestScore(w.zenScores)
+
+		best = w.zenScores[0].seg
+	}
+	return best
+}
+
+func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock, part *ZExt_NodeSeg, c *ZExt_IntersectionContext, cost *int, slen *ZNumber,
+	bundle *ZExt_DepthScoreBundle, inter *ZenIntermediary, minors *MinorCosts) bool {
+
+	num := ZExt_BoxOnLineSide(block, part)
+	if num < 0 {
+
+		inter.segL += block.realNum
+		w.blocksHit = append(w.blocksHit, ZExt_BlocksHit{
+			block: block,
+			mask:  uint8(0x0F),
+		})
+		return false
+	} else if num > 0 {
+
+		inter.segR += block.realNum
+		w.blocksHit = append(w.blocksHit, ZExt_BlocksHit{
+			block: block,
+			mask:  uint8(0xF0),
+		})
+		return false
+	}
+
+	for check := block.segs; check != nil; check = check.nextInSuper {
+
+		leftside := false
+		mask := uint8(0xF0)
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
+		c.lsx = check.StartVertex.X
+		c.lsy = check.StartVertex.Y
+		c.lex = check.EndVertex.X
+		c.ley = check.EndVertex.Y
+		val := w.doLinesIntersect(c)
+
+		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
+			if w.PassingTooClose(part, check, cost, nil) {
+				return true
+			}
+
+			inter.segS++
+			mask = uint8(0xFF)
+			if w.lines.IsTaggedPrecious(check.Linedef) &&
+				!w.lines.SectorIgnorePrecious(check.sector) {
+				bundle.preciousSplit++
+			}
+		} else {
+			if check == part || check == part.partner {
+
+				leftside = check == part.partner
+				if leftside {
+					inter.segL++
+				} else {
+					inter.segR++
+				}
+			} else {
+
+				checkPrecious := false
+				if val&34 != 0 {
+
+					leftside = true
+					inter.segL++
+					checkPrecious = true
+				}
+				if val&64 != 0 {
+
+					inter.segR++
+					checkPrecious = true
+				}
+				if checkPrecious && w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) &&
+					ZExt_passingThrough(part, check) &&
+					!w.PartIsPolyobjSide(part, check) {
+					bundle.preciousSplit++
+				}
+				if (val&1 != 0) && (val&16 != 0) {
+
+					check.alias = part.alias
+					*slen += check.len
+					if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
+						leftside = true
+						inter.segL++
+					} else {
+						inter.segR++
+					}
+				}
+			}
+		}
+		if leftside {
+			mask = uint8(0x0F)
+		}
+
+		w.sectorHits[check.sector] |= mask
+	}
+
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+
+		if w.evalPartitionWorker_ZennodeDepth(block.subs[num], part, c,
+			cost, slen, bundle, inter, minors) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func ZExt_passingThrough(part, check *ZExt_NodeSeg) bool {
+	a := part.pdy*check.psx - part.pdx*check.psy + part.perp
+	b := part.pdy*check.pex - part.pdx*check.pey + part.perp
+	if ZDiffSign(a, b) {
+		if a != 0 && b != 0 {
+
+		} else {
 			return true
 		}
 	}
@@ -4131,13 +4365,14 @@ func ZExt_BoxOnLineSide(box *ZExt_Superblock, part *ZExt_NodeSeg) int {
 }
 
 type ZExt_DepthScoreBundle struct {
-	seg           *ZExt_NodeSeg
-	preciousSplit int
-	equivSplit    int
-	segSplit      int
-	scoreSeg      int
-	scoreSector   int
-	scoreTotal    int
+	seg            *ZExt_NodeSeg
+	preciousSplit  int
+	equivSplit     int
+	segSplit       int
+	diagonalFactor int
+	scoreSeg       int
+	scoreSector    int
+	scoreTotal     int
 }
 
 type ZExt_DepthScoresBySeg []ZExt_DepthScoreBundle
@@ -4190,6 +4425,18 @@ func (x ZExt_DepthScoresByTotal) Less(i, j int) bool {
 		return false
 	}
 
+	if x[i].preciousSplit > 0 {
+
+		axisAlignedI := x[i].seg.pdx == 0 || x[i].seg.pdy == 0
+		axisAlignedJ := x[j].seg.pdx == 0 || x[j].seg.pdy == 0
+		if axisAlignedI && !axisAlignedJ {
+			return true
+		}
+		if axisAlignedJ && !axisAlignedI {
+			return false
+		}
+	}
+
 	if x[i].scoreTotal < x[j].scoreTotal {
 		return true
 	} else if x[i].scoreTotal > x[j].scoreTotal {
@@ -4208,6 +4455,12 @@ func (x ZExt_DepthScoresByTotal) Less(i, j int) bool {
 		return false
 	}
 
+	if x[i].diagonalFactor < x[j].diagonalFactor {
+		return true
+	} else if x[i].diagonalFactor > x[j].diagonalFactor {
+		return false
+	}
+
 	return x[i].seg.Linedef < x[j].seg.Linedef
 }
 func (x ZExt_DepthScoresByTotal) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
@@ -4216,7 +4469,7 @@ func ZExt_ZenPickBestScore(sc []ZExt_DepthScoreBundle) {
 	sort.Sort(ZExt_DepthScoresBySeg(sc))
 	rank := 0
 	for i := 0; i < len(sc); i++ {
-		sc[i].scoreSeg = rank
+		sc[i].scoreTotal = rank
 		if i < len(sc)-1 && sc[i].scoreSeg != sc[i+1].scoreSeg {
 			rank++
 		}
@@ -4224,7 +4477,7 @@ func ZExt_ZenPickBestScore(sc []ZExt_DepthScoreBundle) {
 	sort.Sort(ZExt_DepthScoresBySector(sc))
 	rank = 0
 	for i := 0; i < len(sc); i++ {
-		sc[i].scoreSector += rank
+		sc[i].scoreTotal += rank
 		if i < len(sc)-1 && sc[i].scoreSector != sc[i+1].scoreSector {
 			rank++
 		}
@@ -4268,63 +4521,69 @@ func (w *ZExt_NodesWork) ZenComputeScores(super *ZExt_Superblock, sc []ZExt_Dept
 			}
 		}
 
-		sc[i].scoreSeg = (inter.segL + inter.segS) * (inter.segR + inter.segS)
-		sc[i].scoreSector = (inter.sectorL + inter.sectorS) * (inter.sectorR + inter.sectorS)
+		ZExt_scoreIntermediate(&(sc[i]), &inter, depthArtifacts)
+	}
+}
 
-		if sc[i].scoreSeg == 0 {
+func ZExt_scoreIntermediate(rec *ZExt_DepthScoreBundle, inter *ZenIntermediary,
+	depthArtifacts bool) {
 
-			sc[i].scoreSeg = VERY_BAD_SCORE
-			sc[i].scoreSector = VERY_BAD_SCORE
-			continue
+	rec.scoreSeg = (inter.segL + inter.segS) * (inter.segR + inter.segS)
+	rec.scoreSector = (inter.sectorL + inter.sectorS) * (inter.sectorR + inter.sectorS)
+
+	if rec.scoreSeg == 0 {
+
+		rec.scoreSeg = VERY_BAD_SCORE
+		rec.scoreSector = VERY_BAD_SCORE
+		return
+	}
+
+	if inter.segS > 0 {
+
+		tmp := ZEN_X1 * inter.segS
+		if ZEN_X2 < tmp {
+			rec.scoreSeg = ZEN_X2 * rec.scoreSeg / tmp
 		}
-
-		if inter.segS > 0 {
-
-			tmp := ZEN_X1 * inter.segS
-			if ZEN_X2 < tmp {
-				sc[i].scoreSeg = ZEN_X2 * sc[i].scoreSeg / tmp
-			}
-			if depthArtifacts {
-
-				sc[i].scoreSeg -= (ZEN_X3*inter.segS*(inter.segS/3) +
-					ZEN_X4) * inter.segS
-			} else {
-				sc[i].scoreSeg -= (ZEN_X3*inter.segS + ZEN_X4) * inter.segS
-			}
-		} else {
-
-			sc[i].scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
-				inter.segR)
-		}
-
 		if depthArtifacts {
 
-			if inter.sectorS > 0 {
-				tmp := ZEN_X1 * inter.sectorS
-				if ZEN_X2 < tmp {
-					sc[i].scoreSector = ZEN_X2 * sc[i].scoreSector / tmp
-				}
+			rec.scoreSeg -= (ZEN_X3*inter.segS*(inter.segS/3) +
+				ZEN_X4) * inter.segS
+		} else {
+			rec.scoreSeg -= (ZEN_X3*inter.segS + ZEN_X4) * inter.segS
+		}
+	} else {
 
-				sc[i].scoreSector -= (ZEN_X3*inter.sectorS + ZEN_X4) * inter.segS
-			} else {
+		rec.scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
+			inter.segR)
+	}
 
-				sc[i].scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
-					inter.sectorR)
+	if depthArtifacts {
+
+		if inter.sectorS > 0 {
+			tmp := ZEN_X1 * inter.sectorS
+			if ZEN_X2 < tmp {
+				rec.scoreSector = ZEN_X2 * rec.scoreSector / tmp
 			}
+
+			rec.scoreSector -= (ZEN_X3*inter.sectorS + ZEN_X4) * inter.segS
 		} else {
 
-			if inter.sectorS > 0 {
-				tmp := ZEN_Y1 * inter.sectorS
-				if ZEN_Y2 < tmp {
-					sc[i].scoreSector = ZEN_Y2 * sc[i].scoreSector / tmp
-				}
+			rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+				inter.sectorR)
+		}
+	} else {
 
-				sc[i].scoreSector -= (ZEN_Y3*inter.sectorS + ZEN_Y4) * inter.sectorS
-			} else {
-
-				sc[i].scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
-					inter.sectorR)
+		if inter.sectorS > 0 {
+			tmp := ZEN_Y1 * inter.sectorS
+			if ZEN_Y2 < tmp {
+				rec.scoreSector = ZEN_Y2 * rec.scoreSector / tmp
 			}
+
+			rec.scoreSector -= (ZEN_Y3*inter.sectorS + ZEN_Y4) * inter.sectorS
+		} else {
+
+			rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+				inter.sectorR)
 		}
 	}
 }

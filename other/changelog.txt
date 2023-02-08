@@ -1,5 +1,9 @@
 Changelog for VigilantBSP
 
+v0.82a
+- New feature: added new partition algorithm - "Zennode/Zokumbsp-like (tree balance and depth)"  
+- New feature: added "balanced tree" variant to "Priority for partition selection" option
+
 v0.78a
 - Fixed bug: Zdoom extended/compressed nodebuilding now uses the correct precision, map02 of watrsp.wad now builds correctly
 - Fixed bug: detailed levels that had problems now shall be built correctly with vanilla and DeeP nodes as well (same map as an example as previous)

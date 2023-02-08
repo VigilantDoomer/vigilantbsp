@@ -173,6 +173,7 @@ type NodesWork struct {
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
 	vertexMap         *VertexMap
+	zenScores         []DepthScoreBundle
 }
 
 type NodeVertex struct {
@@ -413,6 +414,7 @@ func NodesGenerator(input *NodesInput) {
 		depthArtifacts:   input.depthArtifacts,
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
+		zenScores:        make([]DepthScoreBundle, 0, len(allSegs)),
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -607,6 +609,10 @@ func PickNodeFuncFromOption(userOption int) PickNodeFunc {
 	case PICKNODE_MAELSTROM:
 		{
 			return PickNode_maelstrom
+		}
+	case PICKNODE_ZENLIKE:
+		{
+			return PickNode_ZennodeDepth
 		}
 	default:
 		{
@@ -2405,7 +2411,7 @@ func (ni *NodesInput) applySectorEquivalence(allSegs []*NodeSeg, sectorEquiv []u
 func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *Superblock {
 	ret := NewSuperBlock()
 	ret.SetBounds(rootBox)
-	if w.pickNodeUser == PICKNODE_VISPLANE {
+	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
 		ret.sectors = make([]uint16, 0)
 		ret.secMap = make(map[uint16]bool)
 	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
@@ -2517,6 +2523,7 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 
 	newW.nonVoidCache = make(map[int]NonVoidPerAlias)
 	newW.blocksHit = make([]BlocksHit, 0)
+	newW.zenScores = make([]DepthScoreBundle, 0, cap(w.zenScores))
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)

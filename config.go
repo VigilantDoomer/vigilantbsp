@@ -21,7 +21,7 @@ import (
 )
 
 const PROG_CAPIT_NAME = "VigilantBSP"
-const VERSION = "0.78a"
+const VERSION = "0.82a"
 
 /*
 -b Rebuild BLOCKMAP.
@@ -56,9 +56,11 @@ const VERSION = "0.78a"
 		1 Visplane reduction per Lee Killough
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
+		4 Zennode/Zokumbsp-like (tree balance and depth)
 	p= Priority for partition selection.
 		0 Split minimization (default)
 		1 Depth reduction
+		2 Balanced tree
 	m= Multi-tree mode (experimental, SLOW).
 		0 Don't use, build single tree (default)
 		1 Try every one-sided linedef as a possible root partition
@@ -114,6 +116,7 @@ const (
 	PICKNODE_VISPLANE
 	PICKNODE_VISPLANE_ADV
 	PICKNODE_MAELSTROM
+	PICKNODE_ZENLIKE
 )
 
 const (
@@ -357,9 +360,11 @@ func PrintHelp() {
 	Log.Printf("		1 Visplane reduction per Lee Killough\n")
 	Log.Printf("		2 Advanced visplane reduction\n")
 	Log.Printf("		3 Maelstrom - fastest build speed\n")
+	Log.Printf("		4 Zennode/Zokumbsp-like (tree balance and depth) \n")
 	Log.Printf("	p= Priority for partition selection.\n")
 	Log.Printf("		0 Split minimization (default)\n")
 	Log.Printf("		1 Depth reduction\n")
+	Log.Printf("		2 Balanced tree\n")
 	Log.Printf("	m= Multi-tree mode (experimental, SLOW).\n")
 	Log.Printf("		0 Don't use, build single tree (default)\n")
 	Log.Printf("		1 Try every one-sided linedef as a possible root partition\n")

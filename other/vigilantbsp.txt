@@ -139,9 +139,11 @@ is either a suboption of option above it, or a possible value:
 		1 Visplane reduction per Lee Killough
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
+		4 Zennode/Zokumbsp-like (tree balance and depth)
 	p= Priority for partition selection.
 		0 Split minimization
 		1 Depth reduction
+		2 Balanced tree
 	m= Multi-tree mode (experimental, SLOW).
 		0 Don't use, build single tree (default)
 		1 Try every one-sided linedef as a possible root node
@@ -969,6 +971,29 @@ It produces worse results limit-wise than even the "seg balancing only"
 algorithm, but it achieves graceful running times even on very large and
 complex levels.
 
+a=4 - Zennode/Zokumbsp-like (tree balance and depth)
+
+Introduced in v0.82a.
+
+Algorithm based on the scoring system found in Zennode family of 
+nodebuilders, this aims to produce BSP trees that have high run-time
+performance in game engine over other concerns, but is still 
+better visplane-wise than at least non-visplane aware algorithms. 
+It is best used on detailed maps that require advanced source ports 
+to run, but also is the slowest of the currently offered
+algorithms (up to 3 times slower than advanced visplane 
+reduction). There are plans to improve its performance in
+future versions.
+
+The results produced by this algorithms are most similar, but not
+identical, to the depth algorithm of Zennode/ZokumBSP (also
+ZokumBSP's default), the difference coming from the fact that
+VigilantBSP's implementation only shares approach to scoring
+with those nodebuilders, but the rest of partition machinery
+in VigilantBSP (such as algorithms that decide to which
+side of partition line a seg lies) is shared with the rest of
+algorithms. 
+
 07:02 'p' - Priority for partition selection
 --------------------------------------------
 Note: this option was introduced in v0.69a of VigilantBSP, under the
@@ -1019,9 +1044,25 @@ algorithm, such as within the part of it that computes partition
 candidate line length without segments that cross the void, or
 something else. 
 
-I have tried to use Zennode's approach to reduce depth, but, being
-applied after visplane-sensitive algorithm, it didn't produce 
-results distinct from what is currently implemented. 
+p=2 Balanced tree
+
+Introduced in v0.82a. 
+
+Applies Zennode's scoring system as a secondary metric after
+several candidates with the same primary metric have been selected.
+Using advanced visplane reduction with this priority option 
+selected gives results that are midway between advanced visplane
+reduction with other options and partition algorithm based on 
+Zennode, while taking less time to compute than the latter. 
+
+This was intended to be implemented way before, but I made some 
+typos in the original implementation which, being unnoticed, 
+led me to errorneously conclude that this approach is pointless,
+and thus I used to make this option unreachable through interface
+although still present in source code. When I was implementing
+entire partition selection algorithm based on Zennode's scoring
+system, I reused that disabled code, fixing bugs in process,
+which made this viable again. 
 
 07:03 'm' -  Multi-tree mode (experimental, SLOW)
 -------------------------------------------------

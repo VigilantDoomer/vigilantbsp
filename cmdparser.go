@@ -497,6 +497,10 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 						{
 							c.PickNodeUser = PICKNODE_MAELSTROM
 						}
+					case 4:
+						{
+							c.PickNodeUser = PICKNODE_ZENLIKE
+						}
 					default:
 						{
 							Log.Error("Ignoring invalid (out of range) value for partition selection algorithm.")
@@ -520,6 +524,11 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					case 1:
 						{
 							c.MinorCmpUser = MINOR_CMP_BALANCE
+							c.PenalizeSectorSplits = false
+						}
+					case 2:
+						{
+							c.MinorCmpUser = MINOR_CMP_DEPTH
 							c.PenalizeSectorSplits = false
 						}
 					default:
