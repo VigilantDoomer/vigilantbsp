@@ -980,10 +980,10 @@ nodebuilders, this aims to produce BSP trees that have high run-time
 performance in game engine over other concerns, but is still 
 better visplane-wise than at least non-visplane aware algorithms. 
 It is best used on detailed maps that require advanced source ports 
-to run, but also is the slowest of the currently offered
+to run, but is often the slowest of the currently offered
 algorithms (up to 3 times slower than advanced visplane 
-reduction). There are plans to improve its performance in
-future versions.
+reduction, although occassionally can be faster). There are plans
+to improve its performance in future versions.
 
 The results produced by this algorithms are most similar, but not
 identical, to the depth algorithm of Zennode/ZokumBSP (also
@@ -1771,6 +1771,54 @@ Options are:
 	
 If heuristic is used, the decision made should be included in verbose
 output lvl 1 (pass -v option).
+
+--sidecache=<n>, where n is a number
+Introduced in v0.82a, together with Zennode-like partition algorithm.
+It controls whether so called "sideness cache" is used to optimize
+this partition algorithm performance, and is never used - regardless
+of this option if manually specified - with any other partition
+algorithm. Sideness cache is a one-time computations of all lines
+relations to each other before partition process begins, storing
+the results in memory, and then looking it up in memory instead of
+computing anew whenever processing linedefs that were not split yet.
+It only offers speed advantage if multiple trees are built, otherwise
+it is always detrimental and will result in increased running time
+of VigilantBSP.
+
+Options are:
+	--sidecache=0
+	This is the default. It means that sideness cache is used if and
+	only if building multiple trees. 
+	
+	--sidecache=1 
+	(alternative way to specify: --sidecache- )
+	Never use sideness cache, even for multiple trees. If you happen
+	to find some case where it is faster to build multiple trees with
+	Zennode-like tree balancing algorithm *WITHOUT* caching sideness,
+	you can use it.
+	
+	--sidecache=2
+	(alternative way to specify: --sidecache+ )
+	Force sideness cache, even when not building multiple trees. Only
+	useful for debugging (the results with cache on and off must be
+	identical), as building cache for a single BSP tree will always
+	be slower than not building it.
+	
+	If you are not using Zennode-like algorithm, this option will 
+	still be ignored.
+	
+When cache is used, after partitioning completes you may see the 
+report on how much "aliases" were included in cache and how many
+there were at the end, with the latter number greater. This is 
+debug information and is only output without verbosity because
+verbose output would be extremely bloated in multi-tree. Note that
+even though there are appears so many new aliases created that are
+not covered by cache, this doesn't signify a problem, nor there
+would likely be so many new aliases if they were again recomputed
+against entire map. (Alias corresponds to some set of linedefs
+all collinear with each other, while initial aliases are likely
+to never miss to categorize a linedef collinear with some other,
+later aliases are only checked against the ever narrowing subtree)
 
 Closing comments in regards to --memprofile and --cpuprofile options:
 

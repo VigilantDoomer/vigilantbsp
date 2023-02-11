@@ -227,6 +227,7 @@ func ZenPickBestScore(sc []DepthScoreBundle) {
 // not touched
 func (w *NodesWork) ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 	sectorHits []uint8, depthArtifacts bool) {
+	var c IntersectionContext
 	for i, _ := range sc {
 		inter := ZenIntermediary{
 			segL:    0,
@@ -245,7 +246,14 @@ func (w *NodesWork) ZenComputeScores(super *Superblock, sc []DepthScoreBundle,
 		}
 		// Obtain data for current partitition by evaluating all segs against
 		// it again, as we avoided doing so earlier (performance reasons).
-		w.evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits)
+		part := sc[i].seg
+		c.psx = part.psx
+		c.psy = part.psy
+		c.pex = part.pex
+		c.pey = part.pey
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
+		w.evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits, &c)
 		for j := 0; j < len(sectorHits); j++ {
 			switch sectorHits[j] {
 			case 0x0F:
@@ -343,7 +351,8 @@ func scoreIntermediate(rec *DepthScoreBundle, inter *ZenIntermediary,
 }
 
 func (w *NodesWork) evalPartitionWorker_Zen(block *Superblock,
-	rec *DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8) {
+	rec *DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8,
+	c *IntersectionContext) {
 	part := rec.seg
 	num := BoxOnLineSide(block, part)
 	if num < 0 {
@@ -362,14 +371,6 @@ func (w *NodesWork) evalPartitionWorker_Zen(block *Superblock,
 		// get state of lines' relation to each other
 		leftside := false
 		mask := uint8(0xF0)
-		c := &IntersectionContext{
-			psx: part.StartVertex.X,
-			psy: part.StartVertex.Y,
-			pex: part.EndVertex.X,
-			pey: part.EndVertex.Y,
-		}
-		c.pdx = c.psx - c.pex
-		c.pdy = c.psy - c.pey
 		c.lsx = check.StartVertex.X
 		c.lsy = check.StartVertex.Y
 		c.lex = check.EndVertex.X
@@ -394,7 +395,7 @@ func (w *NodesWork) evalPartitionWorker_Zen(block *Superblock,
 					leftside = true
 					intermediate.segL++
 				}
-				if val&64 != 0 {
+				if val&68 != 0 {
 					// to the right
 					intermediate.segR++
 				}
@@ -423,7 +424,7 @@ func (w *NodesWork) evalPartitionWorker_Zen(block *Superblock,
 		}
 
 		w.evalPartitionWorker_Zen(block.subs[num], rec, intermediate,
-			sectorHits)
+			sectorHits, c)
 	}
 
 }

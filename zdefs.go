@@ -77,6 +77,7 @@ import (
 // #pragma replace_prototype *NodesWork.SetNodeCoords with *NodesWork.ZSetNodeCoords_Proto
 // #pragma replace_prototype *NodesWork.updateSegLenBetter with *NodesWork.ZupdateSegLenBetter_Proto
 // #pragma replace_prototype *NodesWork.SegOrLineToVertexPairC with *NodesWork.ZSegOrLineToVertexPairC_Proto
+// #pragma replace_prototype vetAliasTransfer with ZVetAliasTransfer_Proto
 
 // Finally, we need to assign the core function - which will include all other
 // generated stuff in its calltree - to a predefined callback. The generated
@@ -177,7 +178,7 @@ func (w *NodesWork) ZCreateSSector_Proto(tmps *NodeSeg) uint32 {
 			StartVertex: uint32(tmps.StartVertex.idx),
 			EndVertex:   uint32(tmps.EndVertex.idx),
 			Linedef:     tmps.Linedef,
-			Flip:        byte(tmps.Flip),
+			Flip:        byte(tmps.getFlip()),
 		})
 	}
 	currentCount = uint32(len(w.zdoomSegs)) - oldNumSegs
@@ -221,7 +222,7 @@ func (log *MyLogger) ZDumpSegs_Proto(ts *NodeSeg) {
 	for tmps := ts; tmps != nil; tmps = tmps.next {
 		log.segs.WriteString(fmt.Sprintf(
 			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
-			tmps.Linedef, tmps.Flip, tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
 			tmps.EndVertex.X, tmps.EndVertex.Y))
 		if tmps.sector != allSector {
 			// Is not supposed to write stuff from multiple sectors. You'll have
@@ -384,7 +385,7 @@ func (w *NodesWork) ZSetNodeCoords_Proto(part *NodeSeg, bbox *NodeBounds,
 	// first? Both AJ-BSP and ZDBSP use them, doesn't seem to be important if
 	// linedef is within bounds or not
 	x1, y1, x2, y2 := w.lines.GetAllXY(part.Linedef)
-	if part.Flip != 0 {
+	if part.getFlip() != 0 {
 		w.nodeX = x2
 		w.nodeY = y2
 		w.nodeDx = x1 - x2
@@ -556,4 +557,9 @@ func (w *NodesWork) ZSegOrLineToVertexPairC_Proto(part *NodeSeg) VertexPairC {
 			len:         l,
 		}
 	}
+}
+
+// In extended nodes mode, the used intersection evaluator is accurate enough
+func ZVetAliasTransfer_Proto(c *IntersectionContext) bool {
+	return true
 }

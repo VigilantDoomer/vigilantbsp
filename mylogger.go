@@ -118,7 +118,7 @@ func (log *MyLogger) DumpSegs(ts *NodeSeg) {
 	for tmps := ts; tmps != nil; tmps = tmps.next {
 		log.segs.WriteString(fmt.Sprintf(
 			"  Linedef: %d Flip: %d (%d,%d) - (%d, %d)",
-			tmps.Linedef, tmps.Flip, tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
 			tmps.EndVertex.X, tmps.EndVertex.Y))
 		if tmps.sector != allSector {
 			// Is not supposed to write stuff from multiple sectors. You'll have

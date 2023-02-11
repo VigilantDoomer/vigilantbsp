@@ -377,7 +377,7 @@ func PartitionInBoundary(part *NodeSeg, c *FloatIntersectionContext,
 			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
 				len(intersectPoints), linesTried)
 			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
-				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
+				part.Linedef, part.getFlip(), part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
 				Log.Verbose(2, "Intersection#%d: (%v, %v)",

@@ -73,13 +73,14 @@ type ZExt_NodesWork struct {
 	depthArtifacts   bool
 	nodeType         int
 	vertexCache      map[SimpleVertex]int
+	sidenessCache    *SidenessCache
+	zenScores        []ZExt_DepthScoreBundle
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
 	vertexMap         *VertexMap
-	zenScores         []ZExt_DepthScoreBundle
 }
 
 type ZExt_NodeVertex struct {
@@ -93,7 +94,7 @@ type ZExt_NodeSeg struct {
 	EndVertex          *ZExt_NodeVertex
 	Angle              int16
 	Linedef            uint16
-	Flip               int16
+	flags              uint8
 	Offset             uint16
 	next               *ZExt_NodeSeg
 	partner            *ZExt_NodeSeg
@@ -105,6 +106,7 @@ type ZExt_NodeSeg struct {
 	alias              int
 	block              *ZExt_Superblock
 	nextInSuper        *ZExt_NodeSeg
+	sidenessIdx        int
 }
 
 type ZExt_IntersectionContext struct {
@@ -243,6 +245,9 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
 		zenScores:        make([]ZExt_DepthScoreBundle, 0, len(allSegs)),
+		sidenessCache: &SidenessCache{
+			maxKnownAlias: 0,
+		},
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -267,12 +272,20 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
+	if input.cacheSideness {
+		workData.buildSidenessCache(rootSeg, initialSuper)
+	}
 
 	var rootNode *NodeInProcess
 	if input.multiTreeMode == MULTITREE_NOTUSED {
 
 		rootNode = ZExt_CreateNode(&workData, rootSeg, rootBox, initialSuper)
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
+
+		if workData.sidenessCache.maxKnownAlias == 0 {
+
+			workData.sidenessCache.readOnly = true
+		}
 
 		rootNode = ZExt_MTPSentinel_MakeBestBSPTree(&workData, rootBox, initialSuper,
 			input.specialRootMode)
@@ -323,6 +336,13 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.emptyNodesLumps()
 	}
 
+	if input.cacheSideness {
+		Log.Printf("[nodes] Sideness cache was generated for %d INITIAL aliases (out of %d total aliases) for %d (out of %d) linedefs \n",
+			workData.sidenessCache.maxKnownAlias,
+			workData.segAliasObj.maxAlias, workData.sidenessCache.colCount,
+			input.lines.Len())
+	}
+
 	if input.nodeType == NODETYPE_DEEP {
 		input.nodesChan <- NodesResult{
 			deepNodes:      workData.deepNodes,
@@ -347,6 +367,10 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		}
 	}
 	Log.Printf("Nodes took %s\n", time.Since(start))
+}
+
+func (n ZNumber) Floor16() int16 {
+	return int16(n)
 }
 
 func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
@@ -576,7 +600,6 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 			} else {
 				lcs = ZExt_addSeg(myVertices, i, vidx1, vidx2, rootCs,
 					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
-				lcs.Flip = 0
 				*res = append(*res, lcs)
 			}
 		} else {
@@ -595,7 +618,7 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 			} else {
 				rcs = ZExt_addSeg(myVertices, i, vidx2, vidx1, rootCs,
 					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
-				rcs.Flip = 1
+				rcs.flags |= SEG_FLAG_FLIP
 				*res = append(*res, rcs)
 			}
 		} else {
@@ -702,7 +725,7 @@ func (x ZExt_InitialSegOrderByLinedef) Len() int { return len(x) }
 func (x ZExt_InitialSegOrderByLinedef) Less(i, j int) bool {
 
 	return (x[i].Linedef < x[j].Linedef) ||
-		(x[i].Linedef == x[j].Linedef && x[i].Flip < x[j].Flip)
+		(x[i].Linedef == x[j].Linedef && x[i].getFlip() < x[j].getFlip())
 }
 func (x ZExt_InitialSegOrderByLinedef) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
@@ -754,7 +777,7 @@ func ZExt_FindLimits(ts *ZExt_NodeSeg) *NodeBounds {
 func ZExt_splitDist(lines AbstractLines, seg *ZExt_NodeSeg) int {
 	var dx, dy float64
 
-	if seg.Flip == 0 {
+	if seg.getFlip() == 0 {
 
 		x1, y1, _, _ := lines.GetAllXY(seg.Linedef)
 		fx1 := ZNumber(x1)
@@ -772,7 +795,7 @@ func ZExt_splitDist(lines AbstractLines, seg *ZExt_NodeSeg) int {
 
 	if dx == 0 && dy == 0 {
 
-		Log.Printf("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.Flip, dx, dy)
+		Log.Printf("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.getFlip(), dx, dy)
 	}
 	t := math.Sqrt((dx * dx) + (dy * dy))
 	return int(t)
@@ -838,7 +861,7 @@ func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 	nonConvexityMode := NONCONVEX_ONESECTOR
 
 	var sector uint16
-	if ts.Flip != 0 {
+	if ts.getFlip() != 0 {
 		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, false)].Sector
 	} else {
 		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, true)].Sector
@@ -847,7 +870,7 @@ func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 		line := ts.next
 		for line != nil {
 			var csector uint16
-			if line.Flip != 0 {
+			if line.getFlip() != 0 {
 				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, false)].Sector
 			} else {
 				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, true)].Sector
@@ -1077,6 +1100,14 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 		newVertex := w.AddVertex(x, y)
 		news := new(ZExt_NodeSeg)
 		atmps.alias = 0
+		if w.sidenessCache.maxKnownAlias > 0 {
+			if ZExt_getGlobalFlip(atmps) {
+				atmps.flags |= SEG_FLAG_GLOBAL_FLIP
+			} else {
+				atmps.flags &= ^uint8(SEG_FLAG_GLOBAL_FLIP)
+			}
+		}
+		atmps.flags |= SEG_FLAG_NOCACHE
 		*news = *atmps
 		atmps.next = news
 		news.StartVertex = newVertex
@@ -1090,6 +1121,14 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 			}
 			w.totals.segSplits++
 			atmps.partner.alias = 0
+			if w.sidenessCache.maxKnownAlias > 0 {
+				if ZExt_getGlobalFlip(atmps.partner) {
+					atmps.partner.flags |= SEG_FLAG_GLOBAL_FLIP
+				} else {
+					atmps.partner.flags &= ^uint8(SEG_FLAG_GLOBAL_FLIP)
+				}
+			}
+			atmps.partner.flags |= SEG_FLAG_NOCACHE
 
 			newVertex2 := newVertex
 			news2 := new(ZExt_NodeSeg)
@@ -1209,7 +1248,7 @@ func (w *ZExt_NodesWork) recomputeOneSeg(s *ZExt_NodeSeg) {
 	horizon := w.lines.IsHorizonEffect(s.Linedef)
 	if horizon {
 
-		isFront := s.Flip == 0
+		isFront := s.getFlip() == 0
 		sdef := w.lines.GetSidedefIndex(s.Linedef, isFront)
 		s.Angle += int16(float64(w.sides[sdef].XOffset) * float64(65536.0/360.0))
 	}
@@ -1478,6 +1517,10 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 		}
 	}
 
+	if !w.sidenessCache.readOnly {
+		Log.Panic("Sideness cache [nodes] must be finalized before running multi-tree\n")
+	}
+
 	if w.vertexMap != nil {
 		newW.vertexMap = w.vertexMap.Clone()
 	}
@@ -1486,8 +1529,7 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 		newW.dgVertexMap = w.dgVertexMap.Clone()
 	}
 
-	newW.segAliasObj = new(SegAliasHolder)
-	newW.segAliasObj.Init()
+	newW.segAliasObj = w.segAliasObj.Clone()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
 	newW.incidental = make([]ZExt_IntVertexPairC, 0)
 
@@ -1549,6 +1591,13 @@ func ZExt_PopulateVertexCache(cache map[SimpleVertex]int, allSegs []*ZExt_NodeSe
 		rec = SimpleVertex{int(it.EndVertex.X), int(it.EndVertex.Y)}
 		cache[rec] = int(it.EndVertex.idx)
 	}
+}
+
+func (s *ZExt_NodeSeg) getFlip() int16 {
+	if s.flags&SEG_FLAG_FLIP != 0 {
+		return 1
+	}
+	return 0
 }
 
 type ZExt_SegMinorBundle struct {
@@ -2752,6 +2801,7 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 
 	w.segAliasObj.UnvisitAll()
 	w.zenScores = w.zenScores[:0]
+	var c ZExt_IntersectionContext
 
 	for part := ts; part != nil; part = part.next {
 		if part.partner != nil && part.partner == previousPart {
@@ -2784,16 +2834,16 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 			copy(w.sectorHits[j:], w.sectorHits[:j])
 		}
 
-		c := &ZExt_IntersectionContext{
-			psx: part.StartVertex.X,
-			psy: part.StartVertex.Y,
-			pex: part.EndVertex.X,
-			pey: part.EndVertex.Y,
-		}
+		c.psx = part.StartVertex.X
+		c.psy = part.StartVertex.Y
+		c.pex = part.EndVertex.X
+		c.pey = part.EndVertex.Y
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
 
 		w.blocksHit = w.blocksHit[:0]
 		inter := &ZenIntermediary{}
-		prune := w.evalPartitionWorker_ZennodeDepth(super, part, c, &cost,
+		prune := w.evalPartitionWorker_ZennodeDepth(super, part, &c, &cost,
 			&slen, bundle, inter, &minorsDummy)
 		prune = prune ||
 			inter.segR == 0 ||
@@ -2871,44 +2921,37 @@ func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock
 
 		leftside := false
 		mask := uint8(0xF0)
-		c.pdx = c.psx - c.pex
-		c.pdy = c.psy - c.pey
-		c.lsx = check.StartVertex.X
-		c.lsy = check.StartVertex.Y
-		c.lex = check.EndVertex.X
-		c.ley = check.EndVertex.Y
-		val := w.doLinesIntersect(c)
+		if check == part || check == part.partner {
 
-		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
-			if w.PassingTooClose(part, check, cost, nil) {
-				return true
-			}
-
-			inter.segS++
-			mask = uint8(0xFF)
-			if w.lines.IsTaggedPrecious(check.Linedef) &&
-				!w.lines.SectorIgnorePrecious(check.sector) {
-				bundle.preciousSplit++
+			leftside = check == part.partner
+			if leftside {
+				inter.segL++
+			} else {
+				inter.segR++
 			}
 		} else {
-			if check == part || check == part.partner {
+			val := w.WhichSideCached(part, check, c)
+			if val == SIDENESS_INTERSECT {
+				if w.PassingTooClose(part, check, cost, nil) {
+					return true
+				}
 
-				leftside = check == part.partner
-				if leftside {
-					inter.segL++
-				} else {
-					inter.segR++
+				inter.segS++
+				mask = uint8(0xFF)
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) {
+					bundle.preciousSplit++
 				}
 			} else {
 
 				checkPrecious := false
-				if val&34 != 0 {
+				if val == SIDENESS_LEFT {
 
 					leftside = true
 					inter.segL++
 					checkPrecious = true
 				}
-				if val&64 != 0 {
+				if val == SIDENESS_RIGHT {
 
 					inter.segR++
 					checkPrecious = true
@@ -2917,11 +2960,14 @@ func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock
 					!w.lines.SectorIgnorePrecious(check.sector) &&
 					ZExt_passingThrough(part, check) &&
 					!w.PartIsPolyobjSide(part, check) {
+
 					bundle.preciousSplit++
 				}
-				if (val&1 != 0) && (val&16 != 0) {
+				if val == SIDENESS_COLLINEAR {
 
-					check.alias = part.alias
+					if check.alias != part.alias && ZExt_vetAliasTransfer(c) {
+						check.alias = part.alias
+					}
 					*slen += check.len
 					if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
 						leftside = true
@@ -3222,7 +3268,7 @@ func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *FloatIntersectionContext,
 			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
 				len(intersectPoints), linesTried)
 			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
-				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
+				part.Linedef, part.getFlip(), part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
 				Log.Verbose(2, "Intersection#%d: (%v, %v)",
@@ -3442,7 +3488,7 @@ func ZExt_PickNode_SingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 						leftside = true
 						leftcnt++
 					}
-					if val&64 != 0 {
+					if val&68 != 0 {
 
 						rightcnt++
 					}
@@ -3844,7 +3890,7 @@ func (w *ZExt_NodesWork) CreateSSector(tmps *ZExt_NodeSeg) uint32 {
 			StartVertex: uint32(tmps.StartVertex.idx),
 			EndVertex:   uint32(tmps.EndVertex.idx),
 			Linedef:     tmps.Linedef,
-			Flip:        byte(tmps.Flip),
+			Flip:        byte(tmps.getFlip()),
 		})
 	}
 	currentCount = uint32(len(w.zdoomSegs)) - oldNumSegs
@@ -3883,7 +3929,7 @@ func (log *MyLogger) ZExt_DumpSegs(ts *ZExt_NodeSeg) {
 	for tmps := ts; tmps != nil; tmps = tmps.next {
 		log.segs.WriteString(fmt.Sprintf(
 			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
-			tmps.Linedef, tmps.Flip, tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
 			tmps.EndVertex.X, tmps.EndVertex.Y))
 		if tmps.sector != allSector {
 
@@ -3995,7 +4041,7 @@ func (w *ZExt_NodesWork) SetNodeCoords(part *ZExt_NodeSeg, bbox *NodeBounds,
 	c *ZExt_IntersectionContext) {
 
 	x1, y1, x2, y2 := w.lines.GetAllXY(part.Linedef)
-	if part.Flip != 0 {
+	if part.getFlip() != 0 {
 		w.nodeX = x2
 		w.nodeY = y2
 		w.nodeDx = x1 - x2
@@ -4116,6 +4162,10 @@ func (w *ZExt_NodesWork) SegOrLineToVertexPairC(part *ZExt_NodeSeg) ZExt_VertexP
 			len:         l,
 		}
 	}
+}
+
+func ZExt_vetAliasTransfer(c *ZExt_IntersectionContext) bool {
+	return true
 }
 
 type ZExt_Superblock struct {
@@ -4487,6 +4537,7 @@ func ZExt_ZenPickBestScore(sc []ZExt_DepthScoreBundle) {
 }
 
 func (w *ZExt_NodesWork) ZenComputeScores(super *ZExt_Superblock, sc []ZExt_DepthScoreBundle, sectorHits []uint8, depthArtifacts bool) {
+	var c ZExt_IntersectionContext
 	for i, _ := range sc {
 		inter := ZenIntermediary{
 			segL:    0,
@@ -4503,7 +4554,14 @@ func (w *ZExt_NodesWork) ZenComputeScores(super *ZExt_Superblock, sc []ZExt_Dept
 			copy(sectorHits[j:], sectorHits[:j])
 		}
 
-		w.evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits)
+		part := sc[i].seg
+		c.psx = part.psx
+		c.psy = part.psy
+		c.pex = part.pex
+		c.pey = part.pey
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
+		w.evalPartitionWorker_Zen(super, &(sc[i]), &inter, sectorHits, &c)
 		for j := 0; j < len(sectorHits); j++ {
 			switch sectorHits[j] {
 			case 0x0F:
@@ -4588,7 +4646,8 @@ func ZExt_scoreIntermediate(rec *ZExt_DepthScoreBundle, inter *ZenIntermediary,
 	}
 }
 
-func (w *ZExt_NodesWork) evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZExt_DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8) {
+func (w *ZExt_NodesWork) evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZExt_DepthScoreBundle, intermediate *ZenIntermediary, sectorHits []uint8,
+	c *ZExt_IntersectionContext) {
 	part := rec.seg
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
@@ -4607,14 +4666,6 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZE
 
 		leftside := false
 		mask := uint8(0xF0)
-		c := &ZExt_IntersectionContext{
-			psx: part.StartVertex.X,
-			psy: part.StartVertex.Y,
-			pex: part.EndVertex.X,
-			pey: part.EndVertex.Y,
-		}
-		c.pdx = c.psx - c.pex
-		c.pdy = c.psy - c.pey
 		c.lsx = check.StartVertex.X
 		c.lsy = check.StartVertex.Y
 		c.lex = check.EndVertex.X
@@ -4639,7 +4690,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZE
 					leftside = true
 					intermediate.segL++
 				}
-				if val&64 != 0 {
+				if val&68 != 0 {
 
 					intermediate.segR++
 				}
@@ -4667,7 +4718,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Zen(block *ZExt_Superblock, rec *ZE
 		}
 
 		w.evalPartitionWorker_Zen(block.subs[num], rec, intermediate,
-			sectorHits)
+			sectorHits, c)
 	}
 
 }
@@ -4781,7 +4832,7 @@ func ZExt_IntPartitionInBoundary(part *ZExt_NodeSeg, c *ZExt_IntersectionContext
 			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
 				len(intersectPoints), linesTried)
 			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
-				part.Linedef, part.Flip, part.Offset, c.psx, c.psy, c.pex,
+				part.Linedef, part.getFlip(), part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
 				Log.Verbose(2, "Intersection#%d: %s",
@@ -5015,6 +5066,303 @@ func (x *ZExt_IntOrientedVertex) toString() string {
 func ZExt_IntIsClockwiseTriangle(p1, p2, p3 *ZExt_NodeVertex) bool {
 	sgn := (p2.X-p1.X)*(p3.Y-p1.Y) - (p2.Y-p1.Y)*(p3.X-p1.X)
 	return sgn < 0
+}
+
+func (w *ZExt_NodesWork) buildSidenessCache(rootSeg *ZExt_NodeSeg, super *ZExt_Superblock) {
+	start := time.Now()
+	Log.Printf("[nodes] Building cache for sideness\n")
+	lineCount := w.precomputeAliasesForCache(rootSeg, super)
+	w.sidenessCache.maxKnownAlias = w.segAliasObj.maxAlias
+	w.sidenessCache.colCount = int(lineCount)
+	w.sidenessCache.data = make([]uint8,
+		w.sidenessCache.maxKnownAlias*w.sidenessCache.colCount)
+	ZExt_setSidenessIdxForAll(super)
+	w.computeAndLockSidenessCache(rootSeg, super)
+	Log.Printf("[nodes] sideness cache took %s\n", time.Since(start))
+}
+
+func (w *ZExt_NodesWork) precomputeAliasesForCache(ts *ZExt_NodeSeg, super *ZExt_Superblock) int {
+	var previousPart *ZExt_NodeSeg
+	w.segAliasObj.UnvisitAll()
+	var c ZExt_IntersectionContext
+	lines := make(map[uint16]bool)
+	for part := ts; part != nil; part = part.next {
+		if part.partner != nil && part.partner == previousPart {
+
+			continue
+		}
+		lines[part.Linedef] = true
+		if part.alias != 0 {
+			if w.segAliasObj.MarkAndRecall(part.alias) {
+
+				continue
+			}
+		} else {
+
+			part.alias = w.segAliasObj.Generate()
+
+		}
+		previousPart = part
+		c.psx = part.psx
+		c.psy = part.psy
+		c.pex = part.pex
+		c.pey = part.pey
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
+		w.evalComputeAliasesWorker(super, part, &c)
+	}
+	cntLines := 0
+	for range lines {
+		cntLines++
+	}
+	return cntLines
+}
+
+func (w *ZExt_NodesWork) evalComputeAliasesWorker(block *ZExt_Superblock, part *ZExt_NodeSeg, c *ZExt_IntersectionContext) {
+
+	num := ZExt_BoxOnLineSide(block, part)
+	if num < 0 {
+		return
+	} else if num > 0 {
+		return
+	}
+
+	for check := block.segs; check != nil; check = check.nextInSuper {
+		c.lsx = check.psx
+		c.lsy = check.psy
+		c.lex = check.pex
+		c.ley = check.pey
+		val := w.doLinesIntersect(c)
+		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
+		} else {
+			if check == part || check == part.partner {
+			} else {
+				if (val&1 != 0) && (val&16 != 0) {
+
+					if check.alias != part.alias && ZExt_vetAliasTransfer(c) {
+						check.alias = part.alias
+					}
+				}
+			}
+		}
+	}
+
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+
+		w.evalComputeAliasesWorker(block.subs[num], part, c)
+	}
+}
+
+func ZExt_setSidenessIdxForAll(super *ZExt_Superblock) {
+	remap := make(map[uint16]int)
+	gen := 0
+	ZExt_evalSidenessIdx(super, remap, &gen)
+}
+
+func ZExt_evalSidenessIdx(block *ZExt_Superblock, remap map[uint16]int, gen *int) {
+	for check := block.segs; check != nil; check = check.nextInSuper {
+		val, ok := remap[check.Linedef]
+		if !ok {
+			val = *gen
+			(*gen)++
+			remap[check.Linedef] = val
+		}
+		check.sidenessIdx = val
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+
+		ZExt_evalSidenessIdx(block.subs[num], remap, gen)
+	}
+}
+
+func (w *ZExt_NodesWork) computeAndLockSidenessCache(ts *ZExt_NodeSeg, super *ZExt_Superblock) {
+	if w.sidenessCache.readOnly {
+		Log.Panic("Can't compute sideness cache - already locked (read only) (programmer error)")
+		return
+	}
+	if w.sidenessCache.maxKnownAlias > 0 {
+		var previousPart *ZExt_NodeSeg
+		w.segAliasObj.UnvisitAll()
+		var c ZExt_IntersectionContext
+		for part := ts; part != nil; part = part.next {
+			if ZExt_getGlobalFlip(part) {
+				part.flags |= SEG_FLAG_GLOBAL_FLIP
+			}
+			if part.partner != nil && part.partner == previousPart {
+
+				continue
+			}
+			if part.alias != 0 {
+				if w.segAliasObj.MarkAndRecall(part.alias) {
+
+					continue
+				}
+			} else {
+
+				part.alias = w.segAliasObj.Generate()
+
+			}
+			previousPart = part
+			c.psx = part.psx
+			c.psy = part.psy
+			c.pex = part.pex
+			c.pey = part.pey
+			c.pdx = c.psx - c.pex
+			c.pdy = c.psy - c.pey
+			w.evalComputeSidenessCache(super, part, &c)
+		}
+		w.segAliasObj.UnvisitAll()
+	}
+	w.sidenessCache.readOnly = true
+}
+
+func (w *ZExt_NodesWork) evalComputeSidenessCache(block *ZExt_Superblock, part *ZExt_NodeSeg, c *ZExt_IntersectionContext) {
+
+	num := ZExt_BoxOnLineSide(block, part)
+	if num < 0 {
+
+		w.storeEntireBlockSideness(block, part, SIDENESS_LEFT)
+		return
+	} else if num > 0 {
+
+		w.storeEntireBlockSideness(block, part, SIDENESS_RIGHT)
+		return
+	}
+
+	for check := block.segs; check != nil; check = check.nextInSuper {
+		w.computeAndCacheSideness(part, check, c)
+	}
+
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+
+		w.evalComputeSidenessCache(block.subs[num], part, c)
+	}
+}
+
+func (w *ZExt_NodesWork) storeEntireBlockSideness(block *ZExt_Superblock, part *ZExt_NodeSeg, sideness uint8) {
+
+	for check := block.segs; check != nil; check = check.nextInSuper {
+		w.storeSidenessDirectly(part, check, sideness)
+	}
+
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+
+		w.storeEntireBlockSideness(block.subs[num], part, sideness)
+	}
+}
+
+func (w *ZExt_NodesWork) WhichSideCached(part, check *ZExt_NodeSeg, c *ZExt_IntersectionContext) uint8 {
+	if part.alias == 0 || part.alias > w.sidenessCache.maxKnownAlias ||
+		(check.flags&SEG_FLAG_NOCACHE != 0) {
+
+		return w.WhichSideInternal(check, c)
+	}
+	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
+
+	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	raw := w.sidenessCache.data[cell]
+	if check.flags&SEG_FLAG_FLIP != 0 {
+		raw = raw >> 4
+	} else {
+		raw = raw & 0x0F
+	}
+	if negate {
+		return flipVal(raw)
+	}
+	return raw
+}
+
+func (w *ZExt_NodesWork) computeAndCacheSideness(part, check *ZExt_NodeSeg, c *ZExt_IntersectionContext) {
+	if part.alias == 0 || part.alias > w.sidenessCache.maxKnownAlias ||
+		(check.flags&SEG_FLAG_NOCACHE != 0) {
+		return
+	}
+	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	raw := w.sidenessCache.data[cell]
+	displ := check.flags&SEG_FLAG_FLIP != 0
+	if displ {
+		if raw&0xF0 != 0 {
+			return
+		}
+	} else {
+		if raw&0x0F != 0 {
+			return
+		}
+	}
+	newRaw := w.WhichSideInternal(check, c)
+	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
+	if negate {
+		newRaw = flipVal(newRaw)
+	}
+	if displ {
+		newRaw = newRaw << 4
+	}
+	w.sidenessCache.data[cell] = raw | newRaw
+}
+
+func (w *ZExt_NodesWork) storeSidenessDirectly(part, check *ZExt_NodeSeg, sideness uint8) {
+	if part.alias == 0 || part.alias > w.sidenessCache.maxKnownAlias ||
+		(check.flags&SEG_FLAG_NOCACHE != 0) {
+		return
+	}
+	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	raw := w.sidenessCache.data[cell]
+	displ := check.flags&SEG_FLAG_FLIP != 0
+	if displ {
+		if raw&0xF0 != 0 {
+			return
+		}
+	} else {
+		if raw&0x0F != 0 {
+			return
+		}
+	}
+	newRaw := sideness
+	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
+	if negate {
+		newRaw = flipVal(newRaw)
+	}
+	if displ {
+		newRaw = newRaw << 4
+	}
+	w.sidenessCache.data[cell] = raw | newRaw
+}
+
+func ZExt_getGlobalFlip(part *ZExt_NodeSeg) bool {
+	return ZExt_IntVertexPairCOrdering(part.StartVertex, part.EndVertex, false)
+}
+
+func (w *ZExt_NodesWork) WhichSideInternal(check *ZExt_NodeSeg, c *ZExt_IntersectionContext) uint8 {
+	c.lsx = check.psx
+	c.lsy = check.psy
+	c.lex = check.pex
+	c.ley = check.pey
+	val := w.doLinesIntersect(c)
+	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
+		return SIDENESS_INTERSECT
+	}
+	if (val&1 != 0) && (val&16 != 0) {
+		return SIDENESS_COLLINEAR
+	}
+	if val&34 != 0 {
+		return SIDENESS_LEFT
+	}
+	if val&68 != 0 {
+		return SIDENESS_RIGHT
+	}
+	return 0
 }
 func init() {
 	ZNodesGenerator = ZExt_NodesGenerator

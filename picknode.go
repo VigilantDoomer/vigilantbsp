@@ -1712,6 +1712,7 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 	w.segAliasObj.UnvisitAll() // remove marks from previous PickNode calls
 	w.zenScores = w.zenScores[:0]
+	var c IntersectionContext
 
 	for part := ts; part != nil; part = part.next { // Use each Seg as partition
 		if part.partner != nil && part.partner == previousPart {
@@ -1751,17 +1752,17 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			copy(w.sectorHits[j:], w.sectorHits[:j])
 		}
 
-		c := &IntersectionContext{
-			psx: part.StartVertex.X,
-			psy: part.StartVertex.Y,
-			pex: part.EndVertex.X,
-			pey: part.EndVertex.Y,
-		}
+		c.psx = part.StartVertex.X
+		c.psy = part.StartVertex.Y
+		c.pex = part.EndVertex.X
+		c.pey = part.EndVertex.Y
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
 
 		//progress();           	        // Something for the user to look at.
 		w.blocksHit = w.blocksHit[:0]
 		inter := &ZenIntermediary{}
-		prune := w.evalPartitionWorker_ZennodeDepth(super, part, c, &cost,
+		prune := w.evalPartitionWorker_ZennodeDepth(super, part, &c, &cost,
 			&slen, bundle, inter, &minorsDummy)
 		prune = prune ||
 			inter.segR == 0 ||
@@ -1849,45 +1850,38 @@ func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
 		// get state of lines' relation to each other
 		leftside := false
 		mask := uint8(0xF0)
-		c.pdx = c.psx - c.pex
-		c.pdy = c.psy - c.pey
-		c.lsx = check.StartVertex.X
-		c.lsy = check.StartVertex.Y
-		c.lex = check.EndVertex.X
-		c.ley = check.EndVertex.Y
-		val := w.doLinesIntersect(c) // use more accurate side evaluation
-
-		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
-			if w.PassingTooClose(part, check, cost, nil) {
-				return true
-			}
-			// Split line
-			inter.segS++
-			mask = uint8(0xFF)
-			if w.lines.IsTaggedPrecious(check.Linedef) &&
-				!w.lines.SectorIgnorePrecious(check.sector) {
-				bundle.preciousSplit++
+		if check == part || check == part.partner {
+			// Partition itself or its partner
+			leftside = check == part.partner
+			if leftside {
+				inter.segL++
+			} else {
+				inter.segR++
 			}
 		} else {
-			if check == part || check == part.partner {
-				// Partition itself or its partner
-				leftside = check == part.partner
-				if leftside {
-					inter.segL++
-				} else {
-					inter.segR++
+			val := w.WhichSideCached(part, check, c)
+			if val == SIDENESS_INTERSECT {
+				if w.PassingTooClose(part, check, cost, nil) {
+					return true
+				}
+				// Split line
+				inter.segS++
+				mask = uint8(0xFF)
+				if w.lines.IsTaggedPrecious(check.Linedef) &&
+					!w.lines.SectorIgnorePrecious(check.sector) {
+					bundle.preciousSplit++
 				}
 			} else {
 				// if to the left or to the right and not a collinear seg,
 				// check for passing through vertex if this is precious
 				checkPrecious := false
-				if val&34 != 0 {
+				if val == SIDENESS_LEFT {
 					// to the left
 					leftside = true
 					inter.segL++
 					checkPrecious = true
 				}
-				if val&64 != 0 {
+				if val == SIDENESS_RIGHT {
 					// to the right
 					inter.segR++
 					checkPrecious = true
@@ -1896,11 +1890,18 @@ func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
 					!w.lines.SectorIgnorePrecious(check.sector) &&
 					passingThrough(part, check) &&
 					!w.PartIsPolyobjSide(part, check) {
+					// passing through vertex is bad for polyobject support (cue
+					// taken from AJ_BSP)
 					bundle.preciousSplit++
 				}
-				if (val&1 != 0) && (val&16 != 0) {
-					// Collinear seg
-					check.alias = part.alias
+				if val == SIDENESS_COLLINEAR {
+					// Collinear seg... or so doLinesIntersect would tell us
+					// This algorithm caches doLinesIntersect values rather
+					// than computing them face to face so additional vetting
+					// is needed
+					if check.alias != part.alias && vetAliasTransfer(c) {
+						check.alias = part.alias
+					}
 					*slen += check.len
 					if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
 						leftside = true

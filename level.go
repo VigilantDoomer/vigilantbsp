@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -16,7 +16,7 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go"
+//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go;zensideness.go"
 
 import (
 	"bytes"
@@ -311,6 +311,14 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			if !applyDiagonalPenalty {
 				diagonalPenalty = 0
 			}
+			// sideness cache (see zensideness.go) is only used for Zennode-like
+			// partitioner and can never be used with any other partitioner;
+			// for Zennode-like partitioner, defaults to enabled only for
+			// multi-tree mode
+			cacheSideness := config.PickNodeUser == PICKNODE_ZENLIKE &&
+				config.CacheSideness != CACHE_SIDENESS_NEVER &&
+				(config.CacheSideness == CACHE_SIDENESS_ALWAYS ||
+					config.MultiTreeMode != MULTITREE_NOTUSED)
 			nodeType := config.NodeType // global config
 			nodesInput := &NodesInput{
 				lines:      l.newLines,
@@ -334,6 +342,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				specialRootMode: config.SpecialRootMode, // global config
 
 				detailFriendliness: config.NodeDetailFriendliness, // global config
+				cacheSideness:      cacheSideness,
 			}
 			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA {
 

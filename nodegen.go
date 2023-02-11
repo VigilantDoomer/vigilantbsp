@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -86,6 +86,7 @@ type NodesInput struct {
 	multiTreeMode      int
 	specialRootMode    int
 	detailFriendliness int
+	cacheSideness      bool
 }
 
 type Number int
@@ -129,6 +130,11 @@ type NodesTotals struct {
 	preciousSplit          int
 }
 
+// NodesWork encapsulates data used for nodebuilding thread. When multi-tree is
+// built, each tree uses a copy of original NodesWork, with some fields copied
+// deep, but some are copied SHALLOW (and must thus never be written to once
+// multi-tree starts)! Be cautious to support this functionality when adding
+// new fields by modifying NodesWork method GetInitialStateClone()
 type NodesWork struct {
 	lines            WriteableLines
 	sides            []Sidedef
@@ -167,13 +173,14 @@ type NodesWork struct {
 	depthArtifacts   bool
 	nodeType         int
 	vertexCache      map[SimpleVertex]int // for nodes without extra precision
+	sidenessCache    *SidenessCache
+	zenScores        []DepthScoreBundle
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
 	vertexMap         *VertexMap
-	zenScores         []DepthScoreBundle
 }
 
 type NodeVertex struct {
@@ -199,7 +206,7 @@ type NodeSeg struct {
 	EndVertex          *NodeVertex
 	Angle              int16
 	Linedef            uint16
-	Flip               int16  // 0 - seg follows same direction as linedef, 1 - the opposite
+	flags              uint8  // flip and flags for internal use go here
 	Offset             uint16 // distance along linedef to start of seg
 	next               *NodeSeg
 	partner            *NodeSeg
@@ -211,6 +218,7 @@ type NodeSeg struct {
 	alias              int
 	block              *Superblock
 	nextInSuper        *NodeSeg // not yet ready to port everything to superblock use, need conventional "next" to be separate field
+	sidenessIdx        int      // uses to linearize access to sidenessCache (since the traversal happens through superblocks and not in seg creation order)
 }
 
 type NodeInProcess struct {
@@ -270,6 +278,28 @@ type FloatVertex struct {
 	X  float64
 	Y  float64
 }
+
+const (
+	// SEG_FLAG_FLIP - seg's direction is opposite to its linedef direction.
+	// Used to be separate field in NodeSeg
+	SEG_FLAG_FLIP = uint8(0x01)
+	// SEG_FLAG_NOCACHE - doLinesIntersect result for check=<this seg> is not
+	// stored in sideness cache
+	// (used by Zenlike partitioner under certain conditions)
+	// Usual reason seg is not cached is that it has been split, but programmer
+	// might introduce other reasons. Since sideness cache takes a lot of memory,
+	// it might be beneficial (hypothesis) to omit segs which are rarely evaluated
+	// directly (thanks to quick sideness analysis of superblocks), IF this is
+	// shown to benefit performance
+	SEG_FLAG_NOCACHE = uint8(0x02)
+	// SEG_FLAG_GLOBAL_FLIP - also used for cache purposes, since cache only
+	// stores value per alias but not the direction of partition line, all
+	// values in cache are assumed to be stored against a certain direction,
+	// with partition segs following opposite direction marked with this flag.
+	// This flag has no correlation with SEG_FLAG_FLIP - the two must never be
+	// confused!
+	SEG_FLAG_GLOBAL_FLIP = uint8(0x04)
+)
 
 const (
 	CONVEX_SUBSECTOR = iota
@@ -415,6 +445,9 @@ func NodesGenerator(input *NodesInput) {
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
 		zenScores:        make([]DepthScoreBundle, 0, len(allSegs)),
+		sidenessCache: &SidenessCache{
+			maxKnownAlias: 0,
+		},
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -442,6 +475,9 @@ func NodesGenerator(input *NodesInput) {
 	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
+	if input.cacheSideness {
+		workData.buildSidenessCache(rootSeg, initialSuper)
+	}
 
 	// The main act
 	var rootNode *NodeInProcess
@@ -455,6 +491,16 @@ func NodesGenerator(input *NodesInput) {
 		// with a limited number of worker threads) and the "best" is chosen
 		// This is NOT the way Zokumbsp does multi-tree, but rather a more
 		// simple feature requested by user nicknamed jerko
+
+		if workData.sidenessCache.maxKnownAlias == 0 {
+			// Damn cache, if it was not built, needs still be locked. If was build,
+			// should be locked already
+			// This is really just used as defense against programmers who might
+			// not have yet learned the fact that cache is built before
+			// multitree and is shared between multitree threads
+			workData.sidenessCache.readOnly = true
+		}
+
 		rootNode = MTPSentinel_MakeBestBSPTree(&workData, rootBox, initialSuper,
 			input.specialRootMode)
 	} else {
@@ -532,6 +578,13 @@ func NodesGenerator(input *NodesInput) {
 		workData.emptyNodesLumps()
 	}
 
+	if input.cacheSideness {
+		Log.Printf("[nodes] Sideness cache was generated for %d INITIAL aliases (out of %d total aliases) for %d (out of %d) linedefs \n",
+			workData.sidenessCache.maxKnownAlias,
+			workData.segAliasObj.maxAlias, workData.sidenessCache.colCount,
+			input.lines.Len())
+	}
+
 	if input.nodeType == NODETYPE_DEEP {
 		input.nodesChan <- NodesResult{
 			deepNodes:      workData.deepNodes,
@@ -584,6 +637,10 @@ func (n Number) Ceil() int {
 
 func (n Number) Floor() int {
 	return int(n)
+}
+
+func (n Number) Floor16() int16 {
+	return int16(n)
 }
 
 // On Number, this truncates x. The value of n is ignored (is used only
@@ -996,7 +1053,6 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 			} else {
 				lcs = addSeg(myVertices, i, vidx1, vidx2, rootCs,
 					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
-				lcs.Flip = 0
 				*res = append(*res, lcs)
 			}
 		} else {
@@ -1015,7 +1071,7 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 			} else {
 				rcs = addSeg(myVertices, i, vidx2, vidx1, rootCs,
 					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
-				rcs.Flip = 1
+				rcs.flags |= SEG_FLAG_FLIP
 				*res = append(*res, rcs)
 			}
 		} else {
@@ -1140,7 +1196,7 @@ func (x InitialSegOrderByLinedef) Less(i, j int) bool {
 	// primitive ordering - doesn't include offset, because damn offset
 	// should be always ZERO for the intended use case
 	return (x[i].Linedef < x[j].Linedef) ||
-		(x[i].Linedef == x[j].Linedef && x[i].Flip < x[j].Flip)
+		(x[i].Linedef == x[j].Linedef && x[i].getFlip() < x[j].getFlip())
 }
 func (x InitialSegOrderByLinedef) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
@@ -1270,7 +1326,7 @@ func GetLineBounds(lines AbstractLines) *NodeBounds {
 func splitDist(lines AbstractLines, seg *NodeSeg) int {
 	var dx, dy float64
 
-	if seg.Flip == 0 {
+	if seg.getFlip() == 0 {
 		// from start vertex of linedef
 		x1, y1, _, _ := lines.GetAllXY(seg.Linedef)
 		fx1 := Number(x1)
@@ -1288,7 +1344,7 @@ func splitDist(lines AbstractLines, seg *NodeSeg) int {
 
 	if dx == 0 && dy == 0 {
 		// TODO stderr
-		Log.Printf("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.Flip, dx, dy)
+		Log.Printf("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.getFlip(), dx, dy)
 	}
 	t := math.Sqrt((dx * dx) + (dy * dy))
 	return int(t)
@@ -1493,7 +1549,7 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 	// "special" with sector tag >= 900. Original idea, Lee Killough
 
 	var sector uint16
-	if ts.Flip != 0 {
+	if ts.getFlip() != 0 {
 		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, false)].Sector
 	} else {
 		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, true)].Sector
@@ -1502,7 +1558,7 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 		line := ts.next
 		for line != nil {
 			var csector uint16
-			if line.Flip != 0 {
+			if line.getFlip() != 0 {
 				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, false)].Sector
 			} else {
 				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, true)].Sector
@@ -1587,7 +1643,7 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 				EndVertex:   uint32(tmps.EndVertex.idx),
 				Angle:       tmps.Angle,
 				Linedef:     tmps.Linedef,
-				Flip:        tmps.Flip,
+				Flip:        tmps.getFlip(),
 				Offset:      tmps.Offset,
 			})
 		}
@@ -1600,7 +1656,7 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 				EndVertex:   uint16(tmps.EndVertex.idx),
 				Angle:       tmps.Angle,
 				Linedef:     tmps.Linedef,
-				Flip:        tmps.Flip,
+				Flip:        tmps.getFlip(),
 				Offset:      tmps.Offset,
 			})
 		}
@@ -1929,6 +1985,14 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 		newVertex := w.AddVertex(x, y)
 		news := new(NodeSeg)
 		atmps.alias = 0 // clear alias, as angle may change after split
+		if w.sidenessCache.maxKnownAlias > 0 {
+			if getGlobalFlip(atmps) {
+				atmps.flags |= SEG_FLAG_GLOBAL_FLIP
+			} else {
+				atmps.flags &= ^uint8(SEG_FLAG_GLOBAL_FLIP)
+			}
+		}
+		atmps.flags |= SEG_FLAG_NOCACHE // not in cache because split
 		*news = *atmps
 		atmps.next = news
 		news.StartVertex = newVertex
@@ -1942,6 +2006,14 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 			}
 			w.totals.segSplits++
 			atmps.partner.alias = 0 // clear alias, as angle may change after split
+			if w.sidenessCache.maxKnownAlias > 0 {
+				if getGlobalFlip(atmps.partner) {
+					atmps.partner.flags |= SEG_FLAG_GLOBAL_FLIP
+				} else {
+					atmps.partner.flags &= ^uint8(SEG_FLAG_GLOBAL_FLIP)
+				}
+			}
+			atmps.partner.flags |= SEG_FLAG_NOCACHE // not in cache because split
 			// Split partner too
 			newVertex2 := newVertex
 			news2 := new(NodeSeg)
@@ -2106,7 +2178,7 @@ func (w *NodesWork) recomputeOneSeg(s *NodeSeg) {
 		// I check flip bit just in case. Actually I made horizon effect apply
 		// to only one-sided lines, but if someone changes that, the angle
 		// shall be reflected correctly nonetheless
-		isFront := s.Flip == 0
+		isFront := s.getFlip() == 0
 		sdef := w.lines.GetSidedefIndex(s.Linedef, isFront)
 		s.Angle += int16(float64(w.sides[sdef].XOffset) * float64(65536.0/360.0))
 	}
@@ -2506,6 +2578,10 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 		}
 	}
 
+	if !w.sidenessCache.readOnly {
+		Log.Panic("Sideness cache [nodes] must be finalized before running multi-tree\n")
+	}
+
 	if w.vertexMap != nil {
 		newW.vertexMap = w.vertexMap.Clone()
 	}
@@ -2514,8 +2590,7 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 		newW.dgVertexMap = w.dgVertexMap.Clone()
 	}
 
-	newW.segAliasObj = new(SegAliasHolder)
-	newW.segAliasObj.Init()
+	newW.segAliasObj = w.segAliasObj.Clone()
 	newW.sectorHits = make([]byte, len(w.sectorHits))
 	newW.incidental = make([]IntVertexPairC, 0)
 
@@ -2755,6 +2830,13 @@ func PopulateVertexCache(cache map[SimpleVertex]int, allSegs []*NodeSeg) {
 		rec = SimpleVertex{int(it.EndVertex.X), int(it.EndVertex.Y)}
 		cache[rec] = int(it.EndVertex.idx)
 	}
+}
+
+func (s *NodeSeg) getFlip() int16 {
+	if s.flags&SEG_FLAG_FLIP != 0 {
+		return 1
+	}
+	return 0
 }
 
 /*---------------------------------------------------------------------------*

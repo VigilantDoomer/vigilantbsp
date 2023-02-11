@@ -58,3 +58,13 @@ func (s *SegAliasHolder) UnvisitAll() {
 	// sorry, nothing more efficient exists
 	s.visited = make(map[int]bool)
 }
+
+func (s *SegAliasHolder) Clone() *SegAliasHolder {
+	ret := new(SegAliasHolder)
+	ret.maxAlias = s.maxAlias
+	ret.visited = make(map[int]bool)
+	for k, v := range s.visited {
+		ret.visited[k] = v
+	}
+	return ret
+}

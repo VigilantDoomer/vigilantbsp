@@ -678,7 +678,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			},
 			Angle:   0, // unused
 			Linedef: i,
-			Flip:    0,
+			flags:   0,
 			Offset:  0,
 			perp:    0,
 			sector:  sector,

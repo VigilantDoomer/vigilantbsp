@@ -211,7 +211,7 @@ func PickNode_SingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 						leftside = true
 						leftcnt++
 					}
-					if val&64 != 0 {
+					if val&68 != 0 {
 						// to the right
 						rightcnt++
 					}

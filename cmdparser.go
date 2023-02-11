@@ -208,6 +208,26 @@ func (c *ProgramConfig) FromCommandLine() bool {
 							return false
 						}
 					}
+				} else if bytes.HasPrefix([]byte(arg), []byte("--sidecache")) {
+					// Parameter to control whether use
+					ns, _ := readNumeric("--sidecache=", []byte(arg)[len("--sidecache=")-1:])
+					if ns.whichType == ARG_ENABLED {
+						c.CacheSideness = CACHE_SIDENESS_ALWAYS
+					} else if ns.whichType == ARG_DISABLED {
+						c.CacheSideness = CACHE_SIDENESS_NEVER
+					} else {
+						switch ns.value {
+						case 0:
+							c.CacheSideness = CACHE_SIDENESS_AUTO
+						case 1:
+							c.CacheSideness = CACHE_SIDENESS_NEVER
+						case 2:
+							c.CacheSideness = CACHE_SIDENESS_ALWAYS
+						default:
+							Log.Error("Unrecognised value %s, expected 0, 1 or 2\n", arg)
+							return false
+						}
+					}
 				} else {
 					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
 					return false
@@ -255,6 +275,12 @@ func (c *ProgramConfig) FromCommandLine() bool {
 		Log.Printf("Ignoring 'process RMB file' option because you requested not to rebuild reject lump\n")
 		c.UseRMB = false
 	}
+	if c.CacheSideness == CACHE_SIDENESS_ALWAYS && c.PickNodeUser != PICKNODE_ZENLIKE {
+		Log.Printf("You requested to cache sideness, but partitioner algorithm is not:\n" +
+			"'Zennode/Zokumbsp-like (tree balance and depth)' and cannot take advantage of it.\n" +
+			"So sideness cache won't be build.\n")
+	}
+
 	return true
 }
 
