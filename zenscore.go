@@ -40,26 +40,37 @@ const VERY_BAD_SCORE = -2147483648
 // towards depth reduction - unlike BSP's visplane reduction algorithm, there
 // is no rationale to be found behind either numbers or the formula
 
-const ZEN_X1 = 20
+const ORIG_ZEN_X1 = 20
 
-const ZEN_X2 = 10
+const ORIG_ZEN_X2 = 10
 
-const ZEN_X3 = 1
+const ORIG_ZEN_X3 = 1
 
-const ZEN_X4 = 25
+const ORIG_ZEN_X4 = 25
 
 // similar metric, but for sectors instead of segs
 // Note: Zennode and ZokumBSP defined the values found below, and even allowed
 // to modify them with environment variables, but used X-constants in their
 // place, while these remained unused
 
-const ZEN_Y1 = 1
+const ORIG_ZEN_Y1 = 1
 
-const ZEN_Y2 = 7
+const ORIG_ZEN_Y2 = 7
 
-const ZEN_Y3 = 1
+const ORIG_ZEN_Y3 = 1
 
-const ZEN_Y4 = 0
+const ORIG_ZEN_Y4 = 0
+
+// These variables are stored as globals and not as fields in config variable
+
+var ZEN_X1 = ORIG_ZEN_X1
+var ZEN_X2 = ORIG_ZEN_X2
+var ZEN_X3 = ORIG_ZEN_X3
+var ZEN_X4 = ORIG_ZEN_X4
+var ZEN_Y1 = ORIG_ZEN_Y1
+var ZEN_Y2 = ORIG_ZEN_Y2
+var ZEN_Y3 = ORIG_ZEN_Y3
+var ZEN_Y4 = ORIG_ZEN_Y4
 
 // So, important note about working on it: this metric is not cost, so a greater
 // value may mean better, not worse for some of the fields

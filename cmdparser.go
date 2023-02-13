@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"os"
 	"strconv"
+	"strings"
 )
 
 const ( // NumericOrState.whichType values
@@ -227,6 +228,21 @@ func (c *ProgramConfig) FromCommandLine() bool {
 							Log.Error("Unrecognised value %s, expected 0, 1 or 2\n", arg)
 							return false
 						}
+					}
+				} else if bytes.HasPrefix([]byte(arg), []byte("--zenvar")) {
+					ok := bytes.HasPrefix([]byte(arg), []byte("--zenvar:"))
+					if !ok {
+						Log.Error("Zen variables must be specified as --zenvar:<string>\n")
+						return false
+					}
+					sharg := []byte(arg)[len([]byte("--zenvar:")):]
+					ok2, yused := ReadZenVariables(sharg) // modifies globals in zenscore.go instead of config
+					if !ok2 {
+						Log.Error("-- couldn't parse %s\n", arg)
+						return false
+					}
+					if yused {
+						config.DepthArtifacts = false
 					}
 				} else {
 					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
@@ -832,4 +848,86 @@ func readNumericOnly(arg []byte) (bool, int, []byte) {
 		return true, v, arg[l:]
 	}
 	return false, 0, arg
+}
+
+// ReadZenVariables does the reading AND setting zenscore.go globals
+// Second parameter is whether any of the Y variables were specified
+func ReadZenVariables(arg []byte) (bool, bool) {
+	ok, rmp := readIntParams(arg)
+	if !ok {
+		return false, false
+	}
+	yused := false
+	for k, v := range rmp {
+		kk := strings.ToLower(k)
+		switch kk {
+		case "x1":
+			ZEN_X1 = v
+		case "x2":
+			ZEN_X2 = v
+		case "x3":
+			ZEN_X3 = v
+		case "x4":
+			ZEN_X4 = v
+		case "y1":
+			ZEN_Y1 = v
+			yused = true
+		case "y2":
+			ZEN_Y2 = v
+			yused = true
+		case "y3":
+			ZEN_Y3 = v
+			yused = true
+		case "y4":
+			ZEN_Y4 = v
+			yused = true
+		default:
+			Log.Error("Unknown zen variable: \"%s\" - only known are x1,x2,x3,x4,y1,y2,y3,y4 \n",
+				kk)
+			return false, false
+		}
+	}
+	return true, yused
+}
+
+// something of form x1=1,x2=10,y4=15
+// might also be "x1 = 1, x2 = 10, y4 = 15"
+// TODO make efficient
+func readIntParams(arg []byte) (bool, map[string]int) {
+	if len(arg) < 2 {
+		return false, nil
+	}
+	if (arg[0] == '"' && arg[1] == '"') ||
+		(arg[0] == '\'' && arg[1] == '\'') {
+		b, m := readIntParams(arg[1 : len(arg)-1])
+		return b, m
+	}
+	params := bytes.Split(arg, []byte(","))
+	rmp := make(map[string]int)
+	for i, p := range params {
+		ok, k, v := readOneParam(p)
+		if !ok {
+			Log.Error("couldn't interpret %d param \"%s\" at %s\n",
+				i, string(p), string(arg))
+			return false, nil
+		}
+		vv, err := strconv.Atoi(string(v))
+		if err != nil {
+			Log.Error("%s is not a valid integer in \"%s\"\n",
+				string(v), string(p))
+			return false, nil
+		}
+		rmp[string(k)] = vv
+	}
+	return true, rmp
+}
+
+func readOneParam(param []byte) (bool, []byte, []byte) {
+	kv := bytes.Split(param, []byte("="))
+	if len(kv) != 2 {
+		return false, nil, nil
+	}
+	kv[0] = bytes.TrimSpace(kv[0])
+	kv[1] = bytes.TrimSpace(kv[1])
+	return true, kv[0], kv[1]
 }

@@ -994,6 +994,9 @@ in VigilantBSP (such as algorithms that decide to which
 side of partition line a seg lies) is shared with the rest of
 algorithms. 
 
+See also "Debug and other hidden parameters", option "--zenvar"
+for a way to tweak this partitioner.
+
 07:02 'p' - Priority for partition selection
 --------------------------------------------
 Note: this option was introduced in v0.69a of VigilantBSP, under the
@@ -1063,6 +1066,11 @@ although still present in source code. When I was implementing
 entire partition selection algorithm based on Zennode's scoring
 system, I reused that disabled code, fixing bugs in process,
 which made this viable again. 
+
+Also, advanced visplane reduction with this option selected
+for secondary priority will also be affected by variables
+use can set through option documented in 
+"Debug and other hidden parameters", "--zenvar"
 
 07:03 'm' -  Multi-tree mode (experimental, SLOW)
 -------------------------------------------------
@@ -1378,6 +1386,11 @@ secondary cost evaluation affected by np=x parameter.
 Since there are other contributors to that cost, altering this value
 will change its relative contribution and the resulting node tree will
 be different.
+
+Note: Zennode-like partitioner doesn't use this - you can tweak it
+using the option "--zenvar" documented under "Debug and other hidden
+parameters", but advanced visplane reduction in conjunction with
+"balanced tree" secondary priority will be affected by BOTH.
 
 Default value is 17, same as BSP v5.2
 
@@ -1819,6 +1832,80 @@ against entire map. (Alias corresponds to some set of linedefs
 all collinear with each other, while initial aliases are likely
 to never miss to categorize a linedef collinear with some other,
 later aliases are only checked against the ever narrowing subtree)
+
+
+--zenvar:<string>, where <string> is a comma-delimited list of
+variables and their values (not all variables need to be present,
+but only these are allowed)
+
+Example:
+	--zenvar:x1=20,x2=10,x3=1,x4=25,y1=1,y2=7,y3=1,y4=0
+
+or you can use quotes and then spaces are allowed:
+	--zenvar:"x1 = 20, x2 = 14, x3 = 1"
+
+Letter case should make no difference:
+	--zenvar:"X1 = 20, X2 = 14, X3 = 1"
+
+Note that it uses ":" after "zenvar", not "=". 
+
+These are parameters used in Zennode-like partition logic, so they
+have effect when Zennode-like partitioner is selected, or if 
+advanced visplane reduction partitioner is used in conjuction with
+"balanced tree" secondary priority. Their use is documented in 
+Zennode nodebuilder changelog, more specifically changelog entry
+for Zennode v0.96, although it is not entirely accurate:
+
+<quote>
+You can now 'customize' ZenNode's partitioning logic! The formula used to
+determine the merit of a particular SEG is now user adjustable. You can now
+set the four coefficients used in the calculation. If you don't like the way
+ZenNode picks lines, or you just want to experiment, now you can actually do 
+something about it. The metric formula used is:
+
+	metric = ( L * R ) / ( x1 * S / x2 ) - ( x3 * S + x4 ) * S
+
+Where L, R, and S represent the # of SEGS to the left, right, and split 
+by the candidate SEG. Checks are made to avoid division by zero. The
+programmable values x1, x2, x3, and x4 can be modified by setting the
+environment variables ZEN_X1, ZEN_X2, ZEN_X3, and ZEN_X4 respectively. 
+
+...
+
+Algorithm 2 also uses a similar set of variables, ZEN_Y1, ZEN_Y2, ZEN_Y3,
+and ZEN_Y4, where L, R, and S represent sectors rather than SEGS. The
+default settings are: 
+y1=0, y2=1, y3=1, y4=5. Have fun.
+</quote>
+
+VigilantBSP does NOT read these variables from environment, and also
+takes cue of how the formula was actually implemented, rather than
+the documented version. First, neither ZenNode nor Zokumbsp seem
+to actually use ZEN_Y* variables, using ZEN_X* variables in their 
+place. Second, the formula is adjusted in ZokumBSP:
+	segMetric = ( L * R ) / ( x1 * S * (S / 3) / x2 ) - ( x3 * S + x4 ) * S
+	
+and the formula for sectors in both nodebuilders is:
+	sectorMetric = ( LL * RR ) / ( x1 * SS / x2 ) - ( x3 * SS + x4 ) * S
+where LL, RR, SS represent the number of sectors to the left, right
+and split by the candidate SEG, but S is still number of segs split!
+
+Since Y variables don't have to be specified, BY DEFAULT VigilantBSP 
+does not use them either, and uses formulas from ZokumBSP. However,
+should the user set at least one "y"-value, VigilantBSP will change
+both formulas to the ones documented in Zennode's changelog entry:
+	segMetric = ( L * R ) / ( x1 * S / x2 ) - ( x3 * S + x4 ) * S
+	sectorMetric = ( LL * RR ) / ( y1 * SS / y2 ) - ( y3 * SS + y4 ) * SS
+	
+The rationale for this behavior being is that if y* variables are
+provided by user, they are intended to be used, and since even ZenNode
+itself didn't use them, the only valid behavior in such case is the
+one given in documentation.
+
+Note that ZenNodes defaults changed from version to version. 
+VigilantBSP defaults are equivalent to the following zenvar option:
+--zenvar:"x1 = 20, x2 = 10, x3 = 1, x4 = 25"
+
 
 Closing comments in regards to --memprofile and --cpuprofile options:
 

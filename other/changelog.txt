@@ -2,7 +2,11 @@ Changelog for VigilantBSP
 
 v0.82a
 - New feature: added new partition algorithm - "Zennode/Zokumbsp-like (tree balance and depth)"  
+    See also "Debug and other hidden parameters", "--zenvar" on how to set numeric parameters used in formula
+    Not affected by -nf=<number> (factor parameter)
 - New feature: added "balanced tree" variant to "Priority for partition selection" option
+    When advanced visplane reduction is combined with this option, numeric parameters from "--zenvar" also have effect
+    (in addition to factor from -nf=<number>)
 - Added hidden option documented under "Debug and other hidden parameters", "--sidecache"
 
 v0.78a
