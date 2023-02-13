@@ -42,14 +42,16 @@ const (
 	SIDENESS_COLLINEAR = 0x0
 	SIDENESS_INTERSECT = 0x1
 	SIDENESS_RIGHT     = 0x2
-	SIDENESS_LEFT      = 0x4
+	SIDENESS_LEFT      = 0x3
 )
 
 // buildSidenessCache does all the operations required to bring sidenessCache
 // to proper state. The cache in question is used to make Zennode-like
 // partitioner fast(er)
 // All segs must be reachable from rootSeg, and in super as well
-// TODO memory efficiency (can halve used space)
+// Memory efficiency - DONE (one cell stores values for 4 keys. One key is
+// a compound <alias,linedef> - implementation-wise, linedef indices are
+// substituted for a reordering of them that improves cache locality)
 // TODO advanced memory efficiency - not store certain segs in cache (those
 // which are excluded by superblocks 90% of the time). Need heuristic for this,
 // and putting flag SEG_FLAG_NOCACHE on those segs and not assigning them
@@ -63,8 +65,8 @@ func (w *NodesWork) buildSidenessCache(rootSeg *NodeSeg, super *Superblock) {
 	lineCount := w.precomputeAliasesForCache(rootSeg, super)
 	w.sidenessCache.maxKnownAlias = w.segAliasObj.maxAlias // more aliases can generated later, but cache will not have data for them
 	w.sidenessCache.colCount = int(lineCount)
-	w.sidenessCache.data = make([]uint8,
-		w.sidenessCache.maxKnownAlias*w.sidenessCache.colCount)
+	w.sidenessCache.data = make([]uint8, // 2 bits per value
+		(w.sidenessCache.maxKnownAlias*w.sidenessCache.colCount)>>2+1)
 	setSidenessIdxForAll(super)
 	w.computeAndLockSidenessCache(rootSeg, super)
 	Log.Printf("[nodes] sideness cache took %s\n", time.Since(start))
@@ -307,12 +309,10 @@ func (w *NodesWork) WhichSideCached(part, check *NodeSeg,
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
 
 	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	mov := (cell & 0x3) << 1
+	cell >>= 2
 	raw := w.sidenessCache.data[cell]
-	if check.flags&SEG_FLAG_FLIP != 0 {
-		raw = raw >> 4
-	} else {
-		raw = raw & 0x0F
-	}
+	raw = raw >> mov & 0x3
 	if negate {
 		return flipVal(raw)
 	}
@@ -337,25 +337,19 @@ func (w *NodesWork) computeAndCacheSideness(part, check *NodeSeg, c *Intersectio
 		return
 	}
 	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	mov := (cell & 0x3) << 1
+	cell >>= 2
 	raw := w.sidenessCache.data[cell]
-	displ := check.flags&SEG_FLAG_FLIP != 0
-	if displ {
-		if raw&0xF0 != 0 {
-			return
-		}
-	} else {
-		if raw&0x0F != 0 {
-			return
-		}
+	subraw := raw >> mov & 0x3
+	if subraw != 0 { // although strictly speaking, 0 is a value too
+		return
 	}
 	newRaw := w.WhichSideInternal(check, c)
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
 	if negate {
 		newRaw = flipVal(newRaw)
 	}
-	if displ {
-		newRaw = newRaw << 4
-	}
+	newRaw = newRaw << mov
 	w.sidenessCache.data[cell] = raw | newRaw
 }
 
@@ -368,25 +362,19 @@ func (w *NodesWork) storeSidenessDirectly(part, check *NodeSeg, sideness uint8) 
 		return
 	}
 	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	mov := (cell & 0x3) << 1
+	cell >>= 2
 	raw := w.sidenessCache.data[cell]
-	displ := check.flags&SEG_FLAG_FLIP != 0
-	if displ {
-		if raw&0xF0 != 0 {
-			return
-		}
-	} else {
-		if raw&0x0F != 0 {
-			return
-		}
+	subraw := raw >> mov & 0x3
+	if subraw != 0 { // although strictly speaking, 0 is a value too
+		return
 	}
 	newRaw := sideness
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
 	if negate {
 		newRaw = flipVal(newRaw)
 	}
-	if displ {
-		newRaw = newRaw << 4
-	}
+	newRaw = newRaw << mov
 	w.sidenessCache.data[cell] = raw | newRaw
 }
 

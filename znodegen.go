@@ -5075,7 +5075,7 @@ func (w *ZExt_NodesWork) buildSidenessCache(rootSeg *ZExt_NodeSeg, super *ZExt_S
 	w.sidenessCache.maxKnownAlias = w.segAliasObj.maxAlias
 	w.sidenessCache.colCount = int(lineCount)
 	w.sidenessCache.data = make([]uint8,
-		w.sidenessCache.maxKnownAlias*w.sidenessCache.colCount)
+		(w.sidenessCache.maxKnownAlias*w.sidenessCache.colCount)>>2+1)
 	ZExt_setSidenessIdxForAll(super)
 	w.computeAndLockSidenessCache(rootSeg, super)
 	Log.Printf("[nodes] sideness cache took %s\n", time.Since(start))
@@ -5272,12 +5272,10 @@ func (w *ZExt_NodesWork) WhichSideCached(part, check *ZExt_NodeSeg, c *ZExt_Inte
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
 
 	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	mov := (cell & 0x3) << 1
+	cell >>= 2
 	raw := w.sidenessCache.data[cell]
-	if check.flags&SEG_FLAG_FLIP != 0 {
-		raw = raw >> 4
-	} else {
-		raw = raw & 0x0F
-	}
+	raw = raw >> mov & 0x3
 	if negate {
 		return flipVal(raw)
 	}
@@ -5290,25 +5288,19 @@ func (w *ZExt_NodesWork) computeAndCacheSideness(part, check *ZExt_NodeSeg, c *Z
 		return
 	}
 	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	mov := (cell & 0x3) << 1
+	cell >>= 2
 	raw := w.sidenessCache.data[cell]
-	displ := check.flags&SEG_FLAG_FLIP != 0
-	if displ {
-		if raw&0xF0 != 0 {
-			return
-		}
-	} else {
-		if raw&0x0F != 0 {
-			return
-		}
+	subraw := raw >> mov & 0x3
+	if subraw != 0 {
+		return
 	}
 	newRaw := w.WhichSideInternal(check, c)
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
 	if negate {
 		newRaw = flipVal(newRaw)
 	}
-	if displ {
-		newRaw = newRaw << 4
-	}
+	newRaw = newRaw << mov
 	w.sidenessCache.data[cell] = raw | newRaw
 }
 
@@ -5318,25 +5310,19 @@ func (w *ZExt_NodesWork) storeSidenessDirectly(part, check *ZExt_NodeSeg, sidene
 		return
 	}
 	cell := (part.alias-1)*w.sidenessCache.colCount + check.sidenessIdx
+	mov := (cell & 0x3) << 1
+	cell >>= 2
 	raw := w.sidenessCache.data[cell]
-	displ := check.flags&SEG_FLAG_FLIP != 0
-	if displ {
-		if raw&0xF0 != 0 {
-			return
-		}
-	} else {
-		if raw&0x0F != 0 {
-			return
-		}
+	subraw := raw >> mov & 0x3
+	if subraw != 0 {
+		return
 	}
 	newRaw := sideness
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
 	if negate {
 		newRaw = flipVal(newRaw)
 	}
-	if displ {
-		newRaw = newRaw << 4
-	}
+	newRaw = newRaw << mov
 	w.sidenessCache.data[cell] = raw | newRaw
 }
 
