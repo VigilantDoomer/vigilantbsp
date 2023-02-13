@@ -1005,8 +1005,9 @@ effectively overwritten, old options are no longer valid. It may be
 overwritten once again or removed in future versions.
 
 This experimental option allows to make slight alterations to partition
-selection algorithm. Currently it only has effect when na=2 (advanced
-visplane reduction) is selected, for performance as well as other reasons.
+selection algorithm. Currently it only has effect when either na=2 
+(advanced visplane reduction) or na=4 (Zennode-like balanced tree
+and depth algorithm) is selected, for performance as well as other reasons.
 It may result in more effecient tree built (less deep and/or fewer segs
 overall), but which exact option will yield better/worse result is
 specific to each map.
@@ -1024,21 +1025,38 @@ values to this option.
 
 p=0 Split minimization
 
-This gives priority to avoiding sector splits. Technically, it does
-not count sector splits directly but rather the number of groups of
-sectors whose flats and ceilings are visplane-compatible that have
-been split. The penalty factor is then applied per each group that
-has been split.
+This has different meaning depending on the algorithm used:
+
+1) For advanced visplane reduction:
+This gives priority to avoiding sector splits. Is used by default.
+
+Technically, it does not count sector splits directly but rather 
+the number of groups of sectors whose flats and ceilings are 
+visplane-compatible that have been split. The penalty factor is 
+then applied per each group that has been split.
 
 This behavior was common to all versions of VigilantBSP up to
 and including v0.69a. Additionally, this now enforces secondary
 metric that VigilantBSP v0.69a had by default, as it was determined
 as most efficient.
 
+2) For Zennode-like:
+This gives priority to avoiding *seg* splits, overriding the usual
+metric computation by giving a very good score to partitions
+that don't split segs at all. The resulting map will have fewer
+segs generated. Equivalent of ZokumBSP's option -np=s
+
 p=1 Depth reduction
 
+1) For advanced visplane reduction:
 This moves "avoiding sector splits" lower in priority list, thus
 increasing the priority of balance between both segs and sectors.
+
+2) For Zennode-like:
+This gives priority to avoiding sector splits, overriding the usual
+metric computation by giving a very good score to partitions
+that don't split sectors at all. Equivalent of ZokumBSP's option
+-np=u
 
 Contrary to the option's name, it will not necessarily produce
 less deep / smaller trees or result in more splits. It may have 
@@ -1050,6 +1068,8 @@ something else.
 p=2 Balanced tree
 
 Introduced in v0.82a. 
+
+1) For advanced visplane reduction:
 
 Applies Zennode's scoring system as a secondary metric after
 several candidates with the same primary metric have been selected.
@@ -1071,6 +1091,15 @@ Also, advanced visplane reduction with this option selected
 for secondary priority will also be affected by variables
 use can set through option documented in 
 "Debug and other hidden parameters", "--zenvar"
+
+2) For Zennode-like:
+
+The default. Both segs and sector metrics can be overridden
+for partitions candidates that don't split segs or sectors 
+at all, resulting in them being preferred over any other. 
+
+This is equivalent to ZokumBSP's option "-np=b", which is
+also the default there.
 
 07:03 'm' -  Multi-tree mode (experimental, SLOW)
 -------------------------------------------------

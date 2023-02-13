@@ -4611,8 +4611,10 @@ func ZExt_scoreIntermediate(rec *ZExt_DepthScoreBundle, inter *ZenIntermediary,
 		}
 	} else {
 
-		rec.scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
-			inter.segR)
+		if config.EffectiveSecondary != SECONDARY_PRIORITY_SUBSECTORS {
+			rec.scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
+				inter.segR)
+		}
 	}
 
 	if depthArtifacts {
@@ -4626,8 +4628,10 @@ func ZExt_scoreIntermediate(rec *ZExt_DepthScoreBundle, inter *ZenIntermediary,
 			rec.scoreSector -= (ZEN_X3*inter.sectorS + ZEN_X4) * inter.segS
 		} else {
 
-			rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
-				inter.sectorR)
+			if config.EffectiveSecondary != SECONDARY_PRIORITY_SEGS {
+				rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+					inter.sectorR)
+			}
 		}
 	} else {
 
@@ -4640,8 +4644,10 @@ func ZExt_scoreIntermediate(rec *ZExt_DepthScoreBundle, inter *ZenIntermediary,
 			rec.scoreSector -= (ZEN_Y3*inter.sectorS + ZEN_Y4) * inter.sectorS
 		} else {
 
-			rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
-				inter.sectorR)
+			if config.EffectiveSecondary != SECONDARY_PRIORITY_SEGS {
+				rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+					inter.sectorR)
+			}
 		}
 	}
 }

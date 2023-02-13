@@ -319,8 +319,10 @@ func scoreIntermediate(rec *DepthScoreBundle, inter *ZenIntermediary,
 	} else { // Logic introduced in ZokumBSP, activated when no SEG splits are preferred
 		// It also makes better balanced partitions with respect to SEG
 		// count on both sides score better (higher)
-		rec.scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
-			inter.segR)
+		if config.EffectiveSecondary != SECONDARY_PRIORITY_SUBSECTORS { // reference to global: config
+			rec.scoreSeg = 0x7FFFFFFF - Abs(inter.segL-
+				inter.segR)
+		}
 	}
 
 	// Finish computing sector metric
@@ -339,8 +341,10 @@ func scoreIntermediate(rec *DepthScoreBundle, inter *ZenIntermediary,
 		} else { // Logic introduced in ZokumBSP, activated when no SECTOR splits are preferred
 			// It also makes better balanced partitions with respect to
 			// SECTOR count on both sides score better (higher)
-			rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
-				inter.sectorR)
+			if config.EffectiveSecondary != SECONDARY_PRIORITY_SEGS { // reference to global: config
+				rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+					inter.sectorR)
+			}
 		}
 	} else {
 		// What I though it would be
@@ -355,8 +359,10 @@ func scoreIntermediate(rec *DepthScoreBundle, inter *ZenIntermediary,
 		} else { // Logic introduced in ZokumBSP, activated when no SECTOR splits are preferred
 			// It also makes better balanced partitions with respect to
 			// SECTOR count on both sides score better (higher)
-			rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
-				inter.sectorR)
+			if config.EffectiveSecondary != SECONDARY_PRIORITY_SEGS { // reference to global: config
+				rec.scoreSector = 0x7FFFFFFF - Abs(inter.sectorL-
+					inter.sectorR)
+			}
 		}
 	}
 }

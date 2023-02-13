@@ -296,6 +296,32 @@ func (c *ProgramConfig) FromCommandLine() bool {
 			"'Zennode/Zokumbsp-like (tree balance and depth)' and cannot take advantage of it.\n" +
 			"So sideness cache won't be build.\n")
 	}
+	c.EffectiveSecondary = c.SecondaryPriority
+	if c.SecondaryPriority == SECONDARY_PRIORITY_AUTO {
+		if c.PickNodeUser == PICKNODE_ZENLIKE {
+			c.EffectiveSecondary = SECONDARY_PRIORITY_BALANCE
+		} else {
+			c.EffectiveSecondary = SECONDARY_PRIORITY_SEGS
+		}
+	}
+	switch c.EffectiveSecondary {
+	// note names are confusing and may seem like they are mismatched. They were
+	// devised in old version of VigilantBSP where zenscore unit contained bugs,
+	// so secondary metric didn't work as intended
+	// Also the values set here affect "advanced visplane partitioner" only,
+	// Zen-like partitioner uses config.EffectiveSecondary directly
+	case SECONDARY_PRIORITY_SEGS:
+		c.MinorCmpUser = MINOR_CMP_BALANCE
+		c.PenalizeSectorSplits = true
+	case SECONDARY_PRIORITY_SUBSECTORS:
+		c.MinorCmpUser = MINOR_CMP_BALANCE
+		c.PenalizeSectorSplits = false
+	case SECONDARY_PRIORITY_BALANCE:
+		c.MinorCmpUser = MINOR_CMP_DEPTH
+		c.PenalizeSectorSplits = false
+	default:
+		Log.Panic("Secondary priority value not recognized (programmer error).\n")
+	}
 
 	return true
 }
@@ -560,18 +586,19 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					switch nos.value {
 					case 0:
 						{
+							c.SecondaryPriority = SECONDARY_PRIORITY_SEGS
 							c.MinorCmpUser = MINOR_CMP_BALANCE
 							c.PenalizeSectorSplits = true
 						}
 					case 1:
 						{
+							c.SecondaryPriority = SECONDARY_PRIORITY_SUBSECTORS
 							c.MinorCmpUser = MINOR_CMP_BALANCE
 							c.PenalizeSectorSplits = false
 						}
 					case 2:
 						{
-							c.MinorCmpUser = MINOR_CMP_DEPTH
-							c.PenalizeSectorSplits = false
+							c.SecondaryPriority = SECONDARY_PRIORITY_BALANCE
 						}
 					default:
 						{

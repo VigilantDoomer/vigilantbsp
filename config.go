@@ -57,10 +57,10 @@ const VERSION = "0.82a"
 		2 Advanced visplane reduction
 		3 Maelstrom - fastest build speed
 		4 Zennode/Zokumbsp-like (tree balance and depth)
-	p= Priority for partition selection.
-		0 Split minimization (default)
+	p= Priority for partition selection (if applicable).
+		0 Split minimization (default for AVR)
 		1 Depth reduction
-		2 Balanced tree
+		2 Balanced tree (default for Zennode-like)
 	m= Multi-tree mode (experimental, SLOW).
 		0 Don't use, build single tree (default)
 		1 Try every one-sided linedef as a possible root partition
@@ -186,6 +186,13 @@ const (
 	CACHE_SIDENESS_ALWAYS
 )
 
+const (
+	SECONDARY_PRIORITY_AUTO = iota
+	SECONDARY_PRIORITY_SEGS
+	SECONDARY_PRIORITY_SUBSECTORS
+	SECONDARY_PRIORITY_BALANCE
+)
+
 type ProgramConfig struct {
 	InputFileName          string
 	OutputFileName         string
@@ -209,8 +216,8 @@ type ProgramConfig struct {
 	// Thus PickNodeUser is an actual config option user might modify,
 	// but PickNode and CreateNodeSS aren't
 	PickNodeUser int // <- This is the actual config option
-	// Secondary metric for picking a partition
-	MinorCmpUser int // <- This is the actual config option
+	// Derivative of secondary metric for picking a partition
+	MinorCmpUser int // Used to be actual config option, replaced by SecondaryPriority
 	//
 	BlockmapSearchAbortion int    // when trying multiple offsets, finish the search for a good blockmap as soon as it fits the limit
 	UseGraphsForLOS        bool   // use graphs for LOS calculations (build reject faster)
@@ -247,7 +254,9 @@ type ProgramConfig struct {
 	RemoveNonCollideable   bool // dangerous option. Tries to reason about which lines are not necessary to be included in blockmap and removes then. Prone to break advanced maps and maps not for Doom
 	NodeDetailFriendliness int  // whether to use detailed version of doLinesIntersect when building non-extended nodes
 	//
-	CacheSideness int // whether to use cache for WhichSide (for algorithms that use it)
+	CacheSideness      int // whether to use cache for WhichSide (for algorithms that use it)
+	SecondaryPriority  int // (since 0.82a) Secondary metric for picking a partition
+	EffectiveSecondary int // derivative value of SecondaryPriority that never has AUTO value
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -304,6 +313,8 @@ func init() {
 		RemoveNonCollideable:   false,
 		NodeDetailFriendliness: NODE_DETAIL_AUTO,
 		CacheSideness:          CACHE_SIDENESS_AUTO,
+		SecondaryPriority:      SECONDARY_PRIORITY_AUTO,
+		EffectiveSecondary:     SECONDARY_PRIORITY_BALANCE, // will be overridden in config.FromCommandLine
 	})
 }
 
@@ -370,10 +381,10 @@ func PrintHelp() {
 	Log.Printf("		2 Advanced visplane reduction\n")
 	Log.Printf("		3 Maelstrom - fastest build speed\n")
 	Log.Printf("		4 Zennode/Zokumbsp-like (tree balance and depth) \n")
-	Log.Printf("	p= Priority for partition selection.\n")
-	Log.Printf("		0 Split minimization (default)\n")
+	Log.Printf("	p= Priority for partition selection (if applicable).\n")
+	Log.Printf("		0 Split minimization (default for AVR)\n")
 	Log.Printf("		1 Depth reduction\n")
-	Log.Printf("		2 Balanced tree\n")
+	Log.Printf("		2 Balanced tree (default for Zennode-like) \n")
 	Log.Printf("	m= Multi-tree mode (experimental, SLOW).\n")
 	Log.Printf("		0 Don't use, build single tree (default)\n")
 	Log.Printf("		1 Try every one-sided linedef as a possible root partition\n")
