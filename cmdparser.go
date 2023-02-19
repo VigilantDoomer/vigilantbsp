@@ -294,7 +294,7 @@ func (c *ProgramConfig) FromCommandLine() bool {
 	if c.CacheSideness == CACHE_SIDENESS_ALWAYS && c.PickNodeUser != PICKNODE_ZENLIKE {
 		Log.Printf("You requested to cache sideness, but partitioner algorithm is not:\n" +
 			"'Zennode/Zokumbsp-like (tree balance and depth)' and cannot take advantage of it.\n" +
-			"So sideness cache won't be build.\n")
+			"So sideness cache won't be built.\n")
 	}
 	c.EffectiveSecondary = c.SecondaryPriority
 	if c.SecondaryPriority == SECONDARY_PRIORITY_AUTO {

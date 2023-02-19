@@ -54,7 +54,8 @@ type Superblock struct {
 	secEquivs []uint16
 	// secMap allows us to build those arrays without duplicates
 	// NOTE didn't get improvements when substituting map for array, so kept map
-	secMap map[uint16]bool
+	secMap map[uint16]struct{}
+	nwlink *NodesWork
 }
 
 type BlocksHit struct {
@@ -86,15 +87,15 @@ func (s *Superblock) AddSegToSuper(seg *NodeSeg) {
 		// update sector counts, if needed
 		if block.sectors != nil {
 			sec := seg.sector
-			if !block.secMap[sec] {
+			if _, ex := block.secMap[sec]; !ex {
 				block.sectors = append(block.sectors, sec)
-				block.secMap[sec] = true
+				block.secMap[sec] = struct{}{}
 			}
 		} else if block.secEquivs != nil {
 			sec := seg.secEquiv
-			if !block.secMap[sec] {
+			if _, ex := block.secMap[sec]; !ex {
 				block.secEquivs = append(block.secEquivs, sec)
-				block.secMap[sec] = true
+				block.secMap[sec] = struct{}{}
 			}
 		}
 		if block.SuperIsLeaf() {
@@ -132,10 +133,9 @@ func (s *Superblock) AddSegToSuper(seg *NodeSeg) {
 		// if it doesn't already exist, and loop back to add the seg.
 
 		if block.subs[child] == nil {
-			sub := NewSuperBlock()
+			sub := s.nwlink.getNewSuperblock(s)
 			block.subs[child] = sub
 			sub.parent = block
-			sub.InitSectorsIfNeeded(block)
 
 			if block.x2-block.x1 >= block.y2-block.y1 {
 				if child == 1 {
@@ -171,10 +171,6 @@ func (s *Superblock) AddSegToSuper(seg *NodeSeg) {
 	}
 }
 
-func NewSuperBlock() *Superblock {
-	return &Superblock{}
-}
-
 // rounds the value _up_ to the nearest power of two.
 func RoundPOW2(x int) int {
 	if x <= 2 {
@@ -198,7 +194,7 @@ func (s *Superblock) InitSectorsIfNeeded(template *Superblock) {
 		s.secEquivs = make([]uint16, 0)
 	}
 	if template.secMap != nil {
-		s.secMap = make(map[uint16]bool)
+		s.secMap = make(map[uint16]struct{})
 	}
 }
 
@@ -342,7 +338,7 @@ func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
 			p1 = -p1
 			p2 = -p2
 		}
-	} else if int64(part.pdx)*int64(part.pdy) > 0 { // now handle the cases of positive and negative slope
+	} else if WideNumber(part.pdx)*WideNumber(part.pdy) > 0 { // now handle the cases of positive and negative slope
 		p1 = PointOnLineSide(part, x1, y2)
 		p2 = PointOnLineSide(part, x2, y1)
 	} else { // NEGATIVE

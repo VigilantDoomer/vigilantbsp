@@ -175,6 +175,7 @@ type NodesWork struct {
 	vertexCache      map[SimpleVertex]int // for nodes without extra precision
 	sidenessCache    *SidenessCache
 	zenScores        []DepthScoreBundle
+	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP idea to decrease allocations
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -1804,12 +1805,11 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	// split all of the segs into two lists (rightside & leftside).
 	var rights, lefts, strights, stlefts *NodeSeg // start empty
 
-	*rightsSuper = NewSuperBlock()
-	*leftsSuper = NewSuperBlock()
+	*rightsSuper = w.getNewSuperblock(super)
+	*leftsSuper = w.getNewSuperblock(super)
 	(*rightsSuper).SetBounds(bbox)
 	(*leftsSuper).SetBounds(bbox)
-	(*rightsSuper).InitSectorsIfNeeded(super)
-	(*leftsSuper).InitSectorsIfNeeded(super)
+	w.returnSuperblockToPool(super)
 
 	asector := -1 // track how many sectors there are
 
@@ -2202,6 +2202,8 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	// Divide node in two
 	w.totals.numNodes++
 	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
+	// NOTE after DivideSegs return, super may no longer be valid
+	super = nil
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
@@ -2217,6 +2219,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
 		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
@@ -2224,6 +2227,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 		res.nextL = CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
+	leftsSuper = nil
 
 	// These will form the right box
 	rightBox := FindLimits(rights)
@@ -2235,6 +2239,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
 		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
@@ -2242,6 +2247,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 		res.nextR = CreateNode(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	}
+	rightsSuper = nil
 
 	//CheckNodeBounds(bbox, leftBox, rightBox)
 
@@ -2481,17 +2487,23 @@ func (ni *NodesInput) applySectorEquivalence(allSegs []*NodeSeg, sectorEquiv []u
 
 // Create superblocks from initial list of segs before the start of partitioning
 func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *Superblock {
-	ret := NewSuperBlock()
+	ret := w.newSuperblockNoProto()
+	ret.nwlink = w
 	ret.SetBounds(rootBox)
-	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
-		ret.sectors = make([]uint16, 0)
-		ret.secMap = make(map[uint16]bool)
-	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
-		ret.secEquivs = make([]uint16, 0)
-		ret.secMap = make(map[uint16]bool)
-	}
 	for _, seg := range w.allSegs {
 		ret.AddSegToSuper(seg)
+	}
+	return ret
+}
+
+func (w *NodesWork) newSuperblockNoProto() *Superblock {
+	ret := &Superblock{}
+	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
+		ret.sectors = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
+	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
+		ret.secEquivs = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
 	}
 	return ret
 }
@@ -2599,6 +2611,8 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	newW.nonVoidCache = make(map[int]NonVoidPerAlias)
 	newW.blocksHit = make([]BlocksHit, 0)
 	newW.zenScores = make([]DepthScoreBundle, 0, cap(w.zenScores))
+
+	newW.qallocSupers = nil // never share between threads!
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -2837,6 +2851,55 @@ func (s *NodeSeg) getFlip() int16 {
 		return 1
 	}
 	return 0
+}
+
+func (w *NodesWork) getNewSuperblock(template *Superblock) *Superblock {
+	if w.qallocSupers == nil {
+		ret := &Superblock{}
+		ret.InitSectorsIfNeeded(template)
+		ret.nwlink = w
+		return ret
+	}
+	ret := w.qallocSupers
+	w.qallocSupers = w.qallocSupers.subs[0] // see returnSuperblockToPool
+	ret.subs[0] = nil
+	ret.nwlink = w
+	needMap := false
+	if ret.sectors != nil { // shall give same result as template.sectors != nil
+		ret.sectors = ret.sectors[:0]
+		needMap = true
+	}
+	if ret.secEquivs != nil { // shall give same result as template.secEquivs != nil
+		ret.secEquivs = ret.secEquivs[:0]
+		needMap = true
+	}
+	if needMap {
+		ret.secMap = make(map[uint16]struct{})
+	}
+	return ret
+}
+
+func (w *NodesWork) returnSuperblockToPool(block *Superblock) {
+	if block.segs == nil {
+		// pseudoSuperblock - don't touch! shared between threadds
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
+	block.segs = nil
+	block.secMap = nil
+	block.realNum = 0
+	block.parent = nil
+	block.nwlink = nil
+	// qallocSupers is pool of reusable (but limited to current thread)
+	// superblocks chained via subs[0]
+	block.subs[0] = w.qallocSupers
+	w.qallocSupers = block
 }
 
 /*---------------------------------------------------------------------------*

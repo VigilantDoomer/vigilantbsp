@@ -75,6 +75,7 @@ type ZExt_NodesWork struct {
 	vertexCache      map[SimpleVertex]int
 	sidenessCache    *SidenessCache
 	zenScores        []ZExt_DepthScoreBundle
+	qallocSupers     *ZExt_Superblock
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -947,12 +948,11 @@ func (w *ZExt_NodesWork) DivideSegsActual(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, l
 
 	var rights, lefts, strights, stlefts *ZExt_NodeSeg
 
-	*rightsSuper = ZExt_NewSuperBlock()
-	*leftsSuper = ZExt_NewSuperBlock()
+	*rightsSuper = w.getNewSuperblock(super)
+	*leftsSuper = w.getNewSuperblock(super)
 	(*rightsSuper).SetBounds(bbox)
 	(*leftsSuper).SetBounds(bbox)
-	(*rightsSuper).InitSectorsIfNeeded(super)
-	(*leftsSuper).InitSectorsIfNeeded(super)
+	w.returnSuperblockToPool(super)
 
 	asector := -1
 
@@ -1263,6 +1263,8 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 
 	w.totals.numNodes++
 	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
+
+	super = nil
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
@@ -1277,6 +1279,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
 		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
@@ -1284,6 +1287,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 		res.nextL = ZExt_CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
+	leftsSuper = nil
 
 	rightBox := ZExt_FindLimits(rights)
 	res.Rbox[BB_TOP] = int16(rightBox.Ymax)
@@ -1294,6 +1298,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
 		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
@@ -1301,6 +1306,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 		res.nextR = ZExt_CreateNode(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	}
+	rightsSuper = nil
 
 	return res
 }
@@ -1432,17 +1438,23 @@ func (ni *NodesInput) ZExt_applySectorEquivalence(allSegs []*ZExt_NodeSeg, secto
 }
 
 func (w *ZExt_NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *ZExt_Superblock {
-	ret := ZExt_NewSuperBlock()
+	ret := w.newSuperblockNoProto()
+	ret.nwlink = w
 	ret.SetBounds(rootBox)
-	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
-		ret.sectors = make([]uint16, 0)
-		ret.secMap = make(map[uint16]bool)
-	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
-		ret.secEquivs = make([]uint16, 0)
-		ret.secMap = make(map[uint16]bool)
-	}
 	for _, seg := range w.allSegs {
 		ret.AddSegToSuper(seg)
+	}
+	return ret
+}
+
+func (w *ZExt_NodesWork) newSuperblockNoProto() *ZExt_Superblock {
+	ret := &ZExt_Superblock{}
+	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
+		ret.sectors = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
+	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
+		ret.secEquivs = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
 	}
 	return ret
 }
@@ -1537,6 +1549,8 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	newW.blocksHit = make([]ZExt_BlocksHit, 0)
 	newW.zenScores = make([]ZExt_DepthScoreBundle, 0, cap(w.zenScores))
 
+	newW.qallocSupers = nil
+
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
 		*newW.zdoomVertexHeader = *w.zdoomVertexHeader
@@ -1598,6 +1612,54 @@ func (s *ZExt_NodeSeg) getFlip() int16 {
 		return 1
 	}
 	return 0
+}
+
+func (w *ZExt_NodesWork) getNewSuperblock(template *ZExt_Superblock) *ZExt_Superblock {
+	if w.qallocSupers == nil {
+		ret := &ZExt_Superblock{}
+		ret.InitSectorsIfNeeded(template)
+		ret.nwlink = w
+		return ret
+	}
+	ret := w.qallocSupers
+	w.qallocSupers = w.qallocSupers.subs[0]
+	ret.subs[0] = nil
+	ret.nwlink = w
+	needMap := false
+	if ret.sectors != nil {
+		ret.sectors = ret.sectors[:0]
+		needMap = true
+	}
+	if ret.secEquivs != nil {
+		ret.secEquivs = ret.secEquivs[:0]
+		needMap = true
+	}
+	if needMap {
+		ret.secMap = make(map[uint16]struct{})
+	}
+	return ret
+}
+
+func (w *ZExt_NodesWork) returnSuperblockToPool(block *ZExt_Superblock) {
+	if block.segs == nil {
+
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
+	block.segs = nil
+	block.secMap = nil
+	block.realNum = 0
+	block.parent = nil
+	block.nwlink = nil
+
+	block.subs[0] = w.qallocSupers
+	w.qallocSupers = block
 }
 
 type ZExt_SegMinorBundle struct {
@@ -3366,6 +3428,7 @@ func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
 		res.nextL = nil
 		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		w.returnSuperblockToPool(leftsSuper)
 	} else {
 		res.nextL = ZExt_CreateNodeForSingleSector(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
@@ -3379,6 +3442,7 @@ func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
 		res.nextR = nil
 		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		w.returnSuperblockToPool(rightsSuper)
 	} else {
 		res.nextR = ZExt_CreateNodeForSingleSector(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
@@ -3825,6 +3889,7 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 		res.nextL = ZExt_CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
+	leftsSuper = nil
 
 	rightBox := ZExt_FindLimits(rights)
 	res.Rbox[BB_TOP] = int16(rightBox.Ymax)
@@ -3842,6 +3907,7 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 		res.nextR = ZExt_CreateNode(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	}
+	rightsSuper = nil
 	return res
 }
 
@@ -4183,7 +4249,8 @@ type ZExt_Superblock struct {
 	sectors   []uint16
 	secEquivs []uint16
 
-	secMap map[uint16]bool
+	secMap map[uint16]struct{}
+	nwlink *ZExt_NodesWork
 }
 
 type ZExt_BlocksHit struct {
@@ -4210,15 +4277,15 @@ func (s *ZExt_Superblock) AddSegToSuper(seg *ZExt_NodeSeg) {
 
 		if block.sectors != nil {
 			sec := seg.sector
-			if !block.secMap[sec] {
+			if _, ex := block.secMap[sec]; !ex {
 				block.sectors = append(block.sectors, sec)
-				block.secMap[sec] = true
+				block.secMap[sec] = struct{}{}
 			}
 		} else if block.secEquivs != nil {
 			sec := seg.secEquiv
-			if !block.secMap[sec] {
+			if _, ex := block.secMap[sec]; !ex {
 				block.secEquivs = append(block.secEquivs, sec)
-				block.secMap[sec] = true
+				block.secMap[sec] = struct{}{}
 			}
 		}
 		if block.SuperIsLeaf() {
@@ -4251,10 +4318,9 @@ func (s *ZExt_Superblock) AddSegToSuper(seg *ZExt_NodeSeg) {
 		}
 
 		if block.subs[child] == nil {
-			sub := ZExt_NewSuperBlock()
+			sub := s.nwlink.getNewSuperblock(s)
 			block.subs[child] = sub
 			sub.parent = block
-			sub.InitSectorsIfNeeded(block)
 
 			if block.x2-block.x1 >= block.y2-block.y1 {
 				if child == 1 {
@@ -4290,10 +4356,6 @@ func (s *ZExt_Superblock) AddSegToSuper(seg *ZExt_NodeSeg) {
 	}
 }
 
-func ZExt_NewSuperBlock() *ZExt_Superblock {
-	return &ZExt_Superblock{}
-}
-
 func (s *ZExt_Superblock) InitSectorsIfNeeded(template *ZExt_Superblock) {
 	if template.sectors != nil {
 		s.sectors = make([]uint16, 0)
@@ -4302,7 +4364,7 @@ func (s *ZExt_Superblock) InitSectorsIfNeeded(template *ZExt_Superblock) {
 		s.secEquivs = make([]uint16, 0)
 	}
 	if template.secMap != nil {
-		s.secMap = make(map[uint16]bool)
+		s.secMap = make(map[uint16]struct{})
 	}
 }
 
@@ -4400,7 +4462,7 @@ func ZExt_BoxOnLineSide(box *ZExt_Superblock, part *ZExt_NodeSeg) int {
 			p1 = -p1
 			p2 = -p2
 		}
-	} else if int64(part.pdx)*int64(part.pdy) > 0 {
+	} else if ZWideNumber(part.pdx)*ZWideNumber(part.pdy) > 0 {
 		p1 = ZExt_PointOnLineSide(part, x1, y2)
 		p2 = ZExt_PointOnLineSide(part, x2, y1)
 	} else {

@@ -409,6 +409,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.nextL = CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
+	leftsSuper = nil
 
 	// These will form the right box
 	rightBox := FindLimits(rights)
@@ -427,6 +428,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.nextR = CreateNode(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	}
+	rightsSuper = nil
 	return res
 }
 
