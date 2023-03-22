@@ -33,9 +33,15 @@ and "precious" linedefs from BSP v5.2, faster scrollers from
 ZokumBSP) are also getting implemented.
 
 In future, support for GL nodes / UDMF format MAY be considered
-as well. 
+as well.
 
-Also, support for RMB effects is planned soon.
+Partial support for RMB effects is already implemented since
+version 0.74a. Eventually, most RMB effects are going to be
+supported.
+
+Since 0.75a, VigilantBSP can output non-GL nodes in Zdoom 
+extended and compressed nodes format besides vanilla and
+DeeP format. 
 
 ## Debt of gratitude
 
