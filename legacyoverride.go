@@ -1,4 +1,3 @@
-//go:build go1.16
 // +build go1.16
 
 // NOTE build annotation above MUST be followed by space line

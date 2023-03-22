@@ -200,13 +200,9 @@ type NodesWork struct {
 	vertexExists     int
 	sidenessCache    *SidenessCache
 	zenScores        []DepthScoreBundle
-<<<<<<< HEAD
 	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP ideato decrease allocations
 
 	stkExtra map[*NodeInProcess]StkNodeExtraData // TODO make a better implementation: map with a pointer key is not really a good thing
-=======
-	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP idea to decrease allocations
->>>>>>> origin/main
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -1474,10 +1470,8 @@ func (c *IntersectionContext) computeIntersection() (Number, Number) {
 // to the end. These allow a decent evaluation of the lines state.
 // bit 0,1,2 = checking lines starting point and bits 4,5,6 = end point
 // these bits mean 	0,4 = point is on the same line
-//
-//	1,5 = point is to the left of the line
-//	2,6 = point is to the right of the line
-//
+// 						1,5 = point is to the left of the line
+//						2,6 = point is to the right of the line
 // There are some failsafes in here, these mainly check for small errors in the
 // side checker.
 // VigilantDoomer: "small errors in side checker" - you see, PickNode_* doesn't
@@ -2405,11 +2399,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	var leftsSuper *Superblock
 	// Divide node in two
 	w.totals.numNodes++
-<<<<<<< HEAD
 	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper, nil)
-=======
-	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
->>>>>>> origin/main
 	// NOTE after DivideSegs return, super may no longer be valid
 	super = nil
 	res.X = int16(w.nodeX)
@@ -2838,14 +2828,11 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	newW.zenScores = make([]DepthScoreBundle, 0, cap(w.zenScores))
 
 	newW.qallocSupers = nil // never share between threads!
-<<<<<<< HEAD
 	newW.stkExtra = nil     // never share between threads!
 
 	if w.parts != nil {
 		newW.parts = make([]*NodeSeg, 0)
 	}
-=======
->>>>>>> origin/main
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -3137,7 +3124,6 @@ func (w *NodesWork) returnSuperblockToPool(block *Superblock) {
 	w.qallocSupers = block
 }
 
-<<<<<<< HEAD
 // first seg is not stored for Zdoom extended/compressed nodes - compute
 func getFirstSegExtended(ssubsectors []uint32, ssector uint32) uint32 {
 	cum := uint32(0)
@@ -3157,8 +3143,6 @@ func suppressErrorDueToExtraLogImport(ts *NodeSeg) {
 	log.Panic("Function that was not supposed to be called was called.\n")
 }
 
-=======
->>>>>>> origin/main
 /*---------------------------------------------------------------------------*
 
 	This message has been taken, complete, from OBJECTS.C in DEU5beta source.

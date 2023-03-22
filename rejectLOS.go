@@ -597,13 +597,15 @@ func FindObstacles(world *WorldInfo) bool {
 	return false
 }
 
+//
 // Find out which side of the poly-line the line is on
 //
-//	Return Values:
-//	    1 - above (not completely below) the poly-line
-//	    0 - intersects the poly-line
-//	   -1 - below the poly-line (one or both end-points may touch the poly-line)
-//	   -2 - can't tell start this segment
+//  Return Values:
+//      1 - above (not completely below) the poly-line
+//      0 - intersects the poly-line
+//     -1 - below the poly-line (one or both end-points may touch the poly-line)
+//     -2 - can't tell start this segment
+//
 func Intersects(p1, p2, t1, t2 *IntVertex) int {
 	var DX, DY, y1, y2 int
 

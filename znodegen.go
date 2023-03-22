@@ -89,11 +89,8 @@ type ZExt_NodesWork struct {
 	sidenessCache    *SidenessCache
 	zenScores        []ZExt_DepthScoreBundle
 	qallocSupers     *ZExt_Superblock
-<<<<<<< HEAD
 
 	stkExtra map[*NodeInProcess]StkNodeExtraData
-=======
->>>>>>> origin/main
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -1436,11 +1433,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 	var leftsSuper *ZExt_Superblock
 
 	w.totals.numNodes++
-<<<<<<< HEAD
 	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper, nil)
-=======
-	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
->>>>>>> origin/main
 
 	super = nil
 	res.X = int16(w.nodeX)
@@ -1755,14 +1748,11 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	newW.zenScores = make([]ZExt_DepthScoreBundle, 0, cap(w.zenScores))
 
 	newW.qallocSupers = nil
-<<<<<<< HEAD
 	newW.stkExtra = nil
 
 	if w.parts != nil {
 		newW.parts = make([]*ZExt_NodeSeg, 0)
 	}
-=======
->>>>>>> origin/main
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -2024,14 +2014,11 @@ func (w *ZExt_NodesWork) returnSuperblockToPool(block *ZExt_Superblock) {
 	w.qallocSupers = block
 }
 
-<<<<<<< HEAD
 func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
 
 	log.Panic("Function that was not supposed to be called was called.\n")
 }
 
-=======
->>>>>>> origin/main
 type ZExt_SegMinorBundle struct {
 	seg   *ZExt_NodeSeg
 	minor MinorCosts
