@@ -86,7 +86,7 @@ import (
 // in go documentation, see also https://github.com/golang/go/issues/13560
 const CODEGEN_SIGN = "// Code generated from other source files. DO NOT EDIT.\n"
 
-const COPYRIGHT_STR = `// Copyright (C) 2022, VigilantDoomer
+const COPYRIGHT_STR = `// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -868,9 +868,9 @@ func GetAllTypes(typeNotation ast.Expr) []string {
 		return res
 	case *ast.FuncType:
 		res := []string{}
-		// TypeParams - not supported before Go1.18, 
+		// TypeParams - not supported before Go1.18,
 		// syntax is not used in VigilantBSP code
-		// CollectFieldTypes(t.TypeParams, &res) 
+		// CollectFieldTypes(t.TypeParams, &res)
 		CollectFieldTypes(t.Params, &res)
 		CollectFieldTypes(t.Results, &res)
 		return res
@@ -941,7 +941,7 @@ func (p *PrefixOp) Rename(id *ast.Ident) {
 func CheckFuncAffected(rmap map[string]TypeRelation, x *ast.FuncDecl) (bool, bool) {
 	recvConv := FieldListHasType(rmap, x.Recv)
 	restConv := FieldListHasType(rmap, x.Type.Params) ||
-		// TypeParams -  not supported before Go1.18, 
+		// TypeParams -  not supported before Go1.18,
 		// syntax is not used in VigilantBSP code
 		// FieldListHasType(rmap, x.Type.TypeParams) ||
 		FieldListHasType(rmap, x.Type.Results)
@@ -1402,7 +1402,7 @@ func walkBeforeAfter(x interface{}, before, after func(interface{})) {
 	case *ast.IndexExpr:
 		walkBeforeAfter(&n.X, before, after)
 		walkBeforeAfter(&n.Index, before, after)
-	// IndexListExpr - not supported before Go1.18, 
+	// IndexListExpr - not supported before Go1.18,
 	// syntax is not used in VigilantBSP code
 	//case *ast.IndexListExpr:
 	//	walkBeforeAfter(&n.X, before, after)
@@ -1438,7 +1438,7 @@ func walkBeforeAfter(x interface{}, before, after func(interface{})) {
 	case *ast.StructType:
 		walkBeforeAfter(&n.Fields, before, after)
 	case *ast.FuncType:
-		// TypeParams - not supported before Go1.18, 
+		// TypeParams - not supported before Go1.18,
 		// syntax is not used in VigilantBSP code
 		//if n.TypeParams != nil {
 		//	walkBeforeAfter(&n.TypeParams, before, after)
@@ -1518,7 +1518,7 @@ func walkBeforeAfter(x interface{}, before, after func(interface{})) {
 		walkBeforeAfter(&n.Values, before, after)
 		walkBeforeAfter(&n.Names, before, after)
 	case *ast.TypeSpec:
-		// TypeParams - not supported before Go1.18, 
+		// TypeParams - not supported before Go1.18,
 		// syntax is not used in VigilantBSP code
 		//if n.TypeParams != nil {
 		//	walkBeforeAfter(&n.TypeParams, before, after)

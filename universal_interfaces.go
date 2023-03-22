@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -121,6 +121,9 @@ type WriteableLines interface {
 	Clone() WriteableLines
 	// assigns structure fields from the structure of the same underlying type
 	AssignFrom(src WriteableLines)
+	// rearranges vertices. Assumes vertices referenced by linedefs are NOT
+	// touched, or it will break badly
+	RearrangeVertices(translate []int)
 }
 
 // This is used to:
@@ -391,6 +394,17 @@ func (o *DoomLinedefs) GetSolidVersion() SolidLines {
 		linedefs: o.linedefs,
 		vertices: o.vertices,
 	}
+}
+
+func (o *DoomLinedefs) RearrangeVertices(translate []int) {
+	if len(translate) != len(o.vertices) {
+		Log.Panic("WriteableLines.RearrangeVertices: failed translation (length don't match)")
+	}
+	newVertices := make([]Vertex, len(o.vertices))
+	for i, _ := range o.vertices {
+		newVertices[translate[i]] = o.vertices[i]
+	}
+	o.vertices = newVertices
 }
 
 func (o *HexenLinedefs) GetAllXY(idx uint16) (int, int, int, int) {
@@ -811,6 +825,17 @@ func (o *HexenLinedefs) GetAllPolyobjLines(lidx uint16) []uint16 {
 		}
 	}
 	return ret
+}
+
+func (o *HexenLinedefs) RearrangeVertices(translate []int) {
+	if len(translate) != len(o.vertices) {
+		Log.Panic("WriteableLines.RearrangeVertices: failed translation (length don't match)")
+	}
+	newVertices := make([]Vertex, len(o.vertices))
+	for i, _ := range o.vertices {
+		newVertices[translate[i]] = o.vertices[i]
+	}
+	o.vertices = newVertices
 }
 
 func (o *DoomSolidLinedefs) GetAllXY(idx uint16) (int, int, int, int) {

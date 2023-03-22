@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -192,34 +192,34 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 }
 
 // Really banal bsp tree comparison. Tries to minimize subsector count first,
-// then bsp tree height difference, then bsp tree height itself, then seg count,
-// after that, if all things still equal, tree that came from earlier seg wins
+// then bsp tree height difference, then bsp tree height itself, then seg count
 // NOTE also added check for precious splits
-func MTP_IsBSPTreeBetter(oldResult *MTPWorker_Result, newResult *MTPWorker_Result) bool {
+func IsBSPTreeBetter(oldWD *NodesWork, oldNIP *NodeInProcess,
+	newWD *NodesWork, newNIP *NodeInProcess) int {
 	// Prefer trees where no precious segs or polyobj sector borders were split
 	// But, don't compare numbers itself as a lot of Hexen maps have setups that
 	// deviate from "convex sector" ideal and are not getting broken by those
 	// splits really
-	oldBad := oldResult.workData.totals.preciousSplit > 0
-	newBad := newResult.workData.totals.preciousSplit > 0
+	oldBad := oldWD.totals.preciousSplit > 0
+	newBad := newWD.totals.preciousSplit > 0
 	if oldBad && !newBad {
-		return true
+		return 1
 	} else if !oldBad && newBad {
-		return false
+		return -1
 	}
 	// Compare subsector count
-	oldSsectorsCnt := oldResult.workData.totals.numSSectors
-	newSSectorsCnt := newResult.workData.totals.numSSectors
+	oldSsectorsCnt := oldWD.totals.numSSectors
+	newSSectorsCnt := newWD.totals.numSSectors
 	if newSSectorsCnt < oldSsectorsCnt {
-		return true
+		return 1
 	} else if newSSectorsCnt > oldSsectorsCnt {
-		return false
+		return -1
 	}
 
 	// Subsector count equal
 	// Let's see BSP height
-	oldLeft, oldRight := getBSPHeights(oldResult.bspTree)
-	newLeft, newRight := getBSPHeights(newResult.bspTree)
+	oldLeft, oldRight := getBSPHeights(oldNIP)
+	newLeft, newRight := getBSPHeights(newNIP)
 	oldDiff := oldRight - oldLeft
 	if oldDiff < 0 {
 		oldDiff = -oldDiff
@@ -230,9 +230,9 @@ func MTP_IsBSPTreeBetter(oldResult *MTPWorker_Result, newResult *MTPWorker_Resul
 	}
 	// Smaller difference in BSP height wins
 	if newDiff < oldDiff {
-		return true
+		return 1
 	} else if newDiff > oldDiff {
-		return false
+		return -1
 	}
 
 	// Difference was equal, let's see the height itself
@@ -246,21 +246,34 @@ func MTP_IsBSPTreeBetter(oldResult *MTPWorker_Result, newResult *MTPWorker_Resul
 	}
 	// Smaller maximum BSP height wins
 	if newMaxHeight < oldMaxHeight {
-		return true
+		return 1
 	} else if newMaxHeight > oldMaxHeight {
-		return false
+		return -1
 	}
 
 	// Even maximum height was equal, wtf
 	// Ok, let's minimize seg count then
-	oldSegCnt := oldResult.workData.totals.numSegs
-	newSegCnt := newResult.workData.totals.numSegs
+	oldSegCnt := oldWD.totals.numSegs
+	newSegCnt := newWD.totals.numSegs
 	if newSegCnt < oldSegCnt {
-		return true
+		return 1
 	} else if newSegCnt > oldSegCnt {
+		return -1
+	}
+	return 0
+}
+
+// BSP tree comparison for plain multitree. If both trees are equally good, tree
+// that came from earlier seg wins (used to ensure determinism)
+func MTP_IsBSPTreeBetter(oldResult *MTPWorker_Result, newResult *MTPWorker_Result) bool {
+	ir := IsBSPTreeBetter(oldResult.workData, oldResult.bspTree,
+		newResult.workData, newResult.bspTree)
+	if ir > 0 {
+		return true
+	} else if ir < 0 {
 		return false
 	}
-
+	// else got ir = 0
 	// All things equal, smaller id (tree produced by seg that should have
 	// been tried earlier in single-threaded mode) wins. This makes the process
 	// deterministic
@@ -285,6 +298,7 @@ func getBSPHeights(rootNode *NodeInProcess) (int, int) {
 // Because of stateful nature of node workers, must clone all used records
 func MTPSentinel_Clone(w *NodesWork, bbox *NodeBounds) (*NodesWork, *NodeBounds) {
 	clonedWorkData := w.GetInitialStateClone()
+	clonedWorkData.mlog = CreateMiniLogger()
 	clonedBbox := new(NodeBounds)
 	*clonedBbox = *bbox
 	return clonedWorkData, clonedBbox

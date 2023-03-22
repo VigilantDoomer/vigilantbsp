@@ -19,6 +19,8 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strconv"
@@ -87,6 +89,8 @@ type NodesInput struct {
 	specialRootMode    int
 	detailFriendliness int
 	cacheSideness      bool
+	stkNode            bool
+	width              int
 }
 
 type Number int
@@ -104,6 +108,13 @@ type PickNodeFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeSeg
 // CreateNodeSSFunc exists.
 // SS stands for "single sector". In case you worried.
 type CreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeInProcess
+type StkCreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock, *StkQueue) *NodeInProcess
+
+// For stknode.go, so that StkCreateNode BFS part can also execute special
+// non-convex single-sector partitioner
+type SingleSectorDivisorFunc func(w *NodesWork, ts *NodeSeg, rs **NodeSeg,
+	ls **NodeSeg, bbox *NodeBounds, super *Superblock, rightsSuper,
+	leftsSuper **Superblock, partsegs *[]PartSeg)
 
 // Which secondary metric to use
 type MinorIsBetterFunc func(current, prev MinorCosts) bool
@@ -136,23 +147,34 @@ type NodesTotals struct {
 // multi-tree starts)! Be cautious to support this functionality when adding
 // new fields by modifying NodesWork method GetInitialStateClone()
 type NodesWork struct {
-	lines            WriteableLines
-	sides            []Sidedef
-	sectors          []Sector
-	allSegs          []*NodeSeg // internal format for calculations
-	subsectors       []SubSector
-	segs             []Seg // game format for actual SEGS lump
-	nodeX            int
-	nodeY            int
-	nodeDx           int
-	nodeDy           int
-	totals           *NodesTotals
-	vertices         []NodeVertex
-	nodes            []Node
-	nreverse         uint32
-	segAliasObj      *SegAliasHolder
-	pickNode         PickNodeFunc
-	createNodeSS     CreateNodeSSFunc // SS stands for "single sector". In case you worried.
+	// mlog - if any multi-trees are used, the verbose output will be retained
+	// only for the chosen tree, and displayed only after all trees are built
+	// This allows to use verbosity properly with multi-tree modes
+	// In single-tree mode, mlog should be nil, and calls executed on that
+	// (Go supports execution on nil objects) will be forwarded to global Log
+	// variable (central VigilantBSP logger)
+	mlog            *MiniLogger
+	lines           WriteableLines
+	sides           []Sidedef
+	sectors         []Sector
+	allSegs         []*NodeSeg // internal format for calculations
+	subsectors      []SubSector
+	segs            []Seg // game format for actual SEGS lump
+	nodeX           int
+	nodeY           int
+	nodeDx          int
+	nodeDy          int
+	totals          *NodesTotals
+	vertices        []NodeVertex
+	nodes           []Node
+	nreverse        uint32
+	segAliasObj     *SegAliasHolder
+	pickNode        PickNodeFunc
+	createNodeSS    CreateNodeSSFunc    // SS stands for "single sector". In case you worried.
+	stkCreateNodeSS StkCreateNodeSSFunc // to be replaced by use of stkDivisorSS
+
+	stkDivisorSS SingleSectorDivisorFunc // hard multi-tree uses this rather than createNodeSS
+
 	sectorHits       []uint8          // used by PickNode_Visplane* variants, keeps track of sectors on both sides
 	incidental       []IntVertexPairC // used by PickNode_visplaneVigilant, stores list segs collinear with partition line being evaluated to compute the length without overlap
 	solidMap         *Blockmap
@@ -169,13 +191,22 @@ type NodesWork struct {
 	pickNodeUser     int
 	minorIsBetter    MinorIsBetterFunc
 	doLinesIntersect DoLinesIntersectFunc
-	multipart        bool // whether multiple partition with same primary costs are considered (for depth evaluation)
+	multipart        bool       // whether multiple partition with same PRIMARY costs are considered (for depth evaluation, not to be confused for multi-tree)
+	parts            []*NodeSeg // this one is for HARD multi-tree - the list of partition candidates with same secondary costs as well
+	width            int        // and this is the width cap for HARD multi-tree, can be -1 (unlimited)
 	depthArtifacts   bool
 	nodeType         int
 	vertexCache      map[SimpleVertex]int // for nodes without extra precision
+	vertexExists     int
 	sidenessCache    *SidenessCache
 	zenScores        []DepthScoreBundle
+<<<<<<< HEAD
+	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP ideato decrease allocations
+
+	stkExtra map[*NodeInProcess]StkNodeExtraData // TODO make a better implementation: map with a pointer key is not really a good thing
+=======
 	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP idea to decrease allocations
+>>>>>>> origin/main
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -265,6 +296,7 @@ const VMAP_SAFE_MARGIN = 2.0 // Floating point garbage
 // as to what the exact consequences of choosing a very slightly different
 // vertex instead of exact match are. More investigation needed
 type VertexMap struct {
+	w          *NodesWork
 	Grid       [][]*FloatVertex
 	Snapshot   []int
 	BlocksWide int
@@ -431,6 +463,8 @@ func NodesGenerator(input *NodesInput) {
 		segAliasObj:      new(SegAliasHolder),
 		pickNode:         PickNodeFuncFromOption(input.pickNodeUser),
 		createNodeSS:     CreateNodeSSFromOption(input.pickNodeUser),
+		stkCreateNodeSS:  StkCreateNodeSSFromOption(input.pickNodeUser),
+		stkDivisorSS:     StkSingleSectorDivisorFromOption(input.pickNodeUser),
 		sectorHits:       make([]byte, whichLen),
 		incidental:       make([]IntVertexPairC, 0),
 		solidMap:         solidMap,
@@ -449,13 +483,14 @@ func NodesGenerator(input *NodesInput) {
 		sidenessCache: &SidenessCache{
 			maxKnownAlias: 0,
 		},
+		width: input.width,
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
 		workData.zdoomVertexHeader = &ZdoomNode_VertexHeader{
 			ReusedOriginalVertices: uint32(input.lines.GetVerticesCount()),
 		}
-		workData.vertexMap = CreateVertexMap(rootBox.Xmin, rootBox.Ymin,
+		workData.vertexMap = CreateVertexMap(&workData, rootBox.Xmin, rootBox.Ymin,
 			rootBox.Xmax, rootBox.Ymax)
 		PopulateVertexMap(workData.vertexMap, allSegs)
 	} else {
@@ -469,7 +504,7 @@ func NodesGenerator(input *NodesInput) {
 		// from the regular vertex map (which gets used for extended nodes) in
 		// many aspects.
 		lineBox := GetLineBounds(workData.lines)
-		dgVertexMap := CreateVertexMap(lineBox.Xmin, lineBox.Ymin,
+		dgVertexMap := CreateVertexMap(&workData, lineBox.Xmin, lineBox.Ymin,
 			lineBox.Xmax, lineBox.Ymax)
 		PopulateVertexMapFromLines(dgVertexMap, workData.lines)
 		workData.dgVertexMap = dgVertexMap
@@ -482,9 +517,18 @@ func NodesGenerator(input *NodesInput) {
 
 	// The main act
 	var rootNode *NodeInProcess
-	if input.multiTreeMode == MULTITREE_NOTUSED {
-		// This is a most commonly used single-tree mode
-		rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper) // recursively create nodes
+	if input.multiTreeMode == MULTITREE_NOTUSED { // This is a most commonly used single-tree mode
+		if input.stkNode {
+			// breadth-first node creation (for debug purposes, debug parameter
+			// --stknode, this variant is normally used for HARD multi-tree
+			// only and is only available for single-tree to make it easier
+			// compare results in deterministic mode and ensure they are
+			// identical)
+			rootNode = StkEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+		} else {
+			// classic recursive node creation (the default)
+			rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper)
+		}
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
 		// Create multiple trees - bruteforce ROOT node among all (one-sided,
 		// two-sided, or every - depending on input.specialRootMode), the REST
@@ -512,6 +556,11 @@ func NodesGenerator(input *NodesInput) {
 	// Ok, so now we are printing stats, checking limits, and reverting the
 	// tree to produce the final data
 
+	// Merge in (and print most stuff buffered) from the workData log (associated
+	// with respective tree)
+	Log.Merge(workData.mlog, "Merging buffered output (if any) from the chosen tree.\n")
+	workData.mlog = nil
+
 	// Debugging helper. Sits here just in case some programmer decides to use
 	// Log.Push() to debug things related to nodes (this is where they actually
 	// get printed)
@@ -537,6 +586,19 @@ func NodesGenerator(input *NodesInput) {
 	if rootNode.nextR != nil {
 		hRight = HeightOfNodes(rootNode.nextR) + 1
 	}
+
+	Log.Printf("Splits reused already created vertices to avoid duplicates: %d times\n", workData.vertexExists)
+
+	if input.stkNode && config.Deterministic { // reference to global: config
+		if input.nodeType == NODETYPE_VANILLA {
+			workData.RearrangeBSPVanilla(rootNode)
+		} else if input.nodeType == NODETYPE_DEEP {
+			workData.RearrangeBSPDeep(rootNode)
+		} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
+			workData.RearrangeBSPExtended(rootNode)
+		}
+	}
+
 	Log.Printf("Height of left and right subtrees = (%d,%d)\n", hLeft, hRight)
 	if input.nodeType == NODETYPE_VANILLA {
 		workData.reverseNodes(rootNode)
@@ -674,7 +736,8 @@ func PickNodeFuncFromOption(userOption int) PickNodeFunc {
 		}
 	default:
 		{
-			panic("Invalid argument")
+			Log.Panic("Invalid argument\n")
+			return nil
 		}
 	}
 }
@@ -684,6 +747,20 @@ func CreateNodeSSFromOption(userOption int) CreateNodeSSFunc {
 		return CreateNodeForSingleSector
 	}
 	return CreateNode
+}
+
+func StkCreateNodeSSFromOption(userOption int) StkCreateNodeSSFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return StkCreateNodeForSingleSector
+	}
+	return StkCreateNode
+}
+
+func StkSingleSectorDivisorFromOption(userOption int) SingleSectorDivisorFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return VigilantSingleSectorDivisor
+	}
+	return DefaultSingleSectorDivisor
 }
 
 func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
@@ -711,7 +788,8 @@ func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
 		}
 	default:
 		{
-			panic("Invalid argument")
+			Log.Panic("Invalid argument\n")
+			return nil
 		}
 	}
 }
@@ -1344,8 +1422,7 @@ func splitDist(lines AbstractLines, seg *NodeSeg) int {
 	}
 
 	if dx == 0 && dy == 0 {
-		// TODO stderr
-		Log.Printf("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.getFlip(), dx, dy)
+		Log.Error("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.getFlip(), dx, dy)
 	}
 	t := math.Sqrt((dx * dx) + (dy * dy))
 	return int(t)
@@ -1361,12 +1438,10 @@ func (c *IntersectionContext) computeIntersection() (Number, Number) {
 	dy2 := c.ley - c.lsy
 
 	if dx == 0 && dy == 0 {
-		// TODO stderr
-		Log.Printf("Trouble in computeIntersection dx,dy\n")
+		Log.Error("Trouble in computeIntersection dx,dy\n")
 	}
 	if dx2 == 0 && dy2 == 0 {
-		// TODO stderr
-		Log.Printf("Trouble in computeIntersection dx2,dy2\n")
+		Log.Error("Trouble in computeIntersection dx2,dy2\n")
 	}
 	// Truncation was introduced because this is how BSP v5.2 computed this
 	// On regular/Deep nodes, I keep it, but it is not performed for extended
@@ -1399,8 +1474,10 @@ func (c *IntersectionContext) computeIntersection() (Number, Number) {
 // to the end. These allow a decent evaluation of the lines state.
 // bit 0,1,2 = checking lines starting point and bits 4,5,6 = end point
 // these bits mean 	0,4 = point is on the same line
-// 						1,5 = point is to the left of the line
-//						2,6 = point is to the right of the line
+//
+//	1,5 = point is to the left of the line
+//	2,6 = point is to the right of the line
+//
 // There are some failsafes in here, these mainly check for small errors in the
 // side checker.
 // VigilantDoomer: "small errors in side checker" - you see, PickNode_* doesn't
@@ -1599,11 +1676,7 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 				val := w.doLinesIntersect(&c)
 				if val&34 != 0 {
 					if nonConvexityMode == NONCONVEX_ONESECTOR {
-						Log.DumpSegs(ts)
-						// It was implemented. Not a breakthrough as I hoped,
-						// but it was implemented
-						//Log.Verbose(3, "Non-convex subtree has one sector only (%d). Consider implementing a special case to partition it in as few convex subsectors as possible.\n",
-						//	sector)
+						w.mlog.DumpSegs(ts)
 					}
 					return nonConvexityMode // MUST SPLIT
 				}
@@ -1613,6 +1686,46 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 
 	// no need to split the list: these Segs can be put in a SSector
 	return CONVEX_SUBSECTOR
+}
+
+// Zennode (the nodebuilder, not the algo inspired by it) does special
+// optimization for convex multi-sectors. But what are they in first place
+func (w *NodesWork) IsConvexMultiSector(ts *NodeSeg) bool {
+	multisector := false
+	sector := ts.sector
+	for check := ts; check != nil; check = check.next {
+		if check.sector != sector {
+			multisector = true
+			break
+		}
+	}
+	if !multisector { // had only single sector
+		return false
+	}
+
+	// all of the segs must be on the same side all the other segs
+	var c IntersectionContext
+	for line := ts; line != nil; line = line.next {
+		c.psx = line.StartVertex.X
+		c.psy = line.StartVertex.Y
+		c.pex = line.EndVertex.X
+		c.pey = line.EndVertex.Y
+		c.pdx = c.psx - c.pex // Partition line DX,DY
+		c.pdy = c.psy - c.pey
+		for check := ts; check != nil; check = check.next {
+			if line != check {
+				c.lsx = check.StartVertex.X
+				c.lsy = check.StartVertex.Y
+				c.lex = check.EndVertex.X
+				c.ley = check.EndVertex.Y
+				val := w.doLinesIntersect(&c)
+				if val&34 != 0 { // non-convex
+					return false
+				}
+			}
+		}
+	}
+	return true // convex MULTI-sector
 }
 
 // Adds a subsector. This version handles only deep and vanilla nodes format.
@@ -1681,11 +1794,13 @@ func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
 	rec := SimpleVertex{int(x), int(y)}
 	idx, exists := w.vertexCache[rec]
 	if exists { // happens rather rarely, and not at all on some maps
+		w.vertexExists++
+		//w.mlog.Printf("Vertex that existed: %d\n", idx)
 		return &(w.vertices[idx])
 	}
 	idx = len(w.vertices)
 	if w.lines.AddVertex(int(x), int(y)) != idx {
-		panic("Inconsistent state in NodesWork.AddVertex")
+		Log.Panic("Inconsistent state in NodesWork.AddVertex\n")
 	}
 	w.vertices = append(w.vertices, NodeVertex{
 		X:   x,
@@ -1738,7 +1853,7 @@ func (w *NodesWork) SetNodeCoords(part *NodeSeg, bbox *NodeBounds,
 
 	if w.nodeDx <= 32767 && w.nodeDy <= 32767 && w.nodeDx >= -32768 &&
 		w.nodeDy >= -32768 {
-		Log.Verbose(1, "Prevented partition line coords overflow (from segment of linedef %d).\n",
+		w.mlog.Verbose(1, "Prevented partition line coords overflow (from segment of linedef %d).\n",
 			part.Linedef)
 		return
 	}
@@ -1748,7 +1863,7 @@ func (w *NodesWork) SetNodeCoords(part *NodeSeg, bbox *NodeBounds,
 	// the angle would be different and that should be probably considered when
 	// sorting/splitting segs to each side?
 
-	Log.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from segment of linedef %d) can not be represented correctly due to (-32768,32767) signed int16 range limit in format. Parts of map will not be rendered correctly in any port.\n",
+	w.mlog.Verbose(1, "Overflow: partition line DX=%d, DY=%d (from segment of linedef %d) can not be represented correctly due to (-32768,32767) signed int16 range limit in format. Parts of map will not be rendered correctly in any port.\n",
 		w.nodeDx, w.nodeDy, part.Linedef)
 }
 
@@ -1762,19 +1877,99 @@ func GCD(a, b int) int {
 	return a
 }
 
+// Hard multi-tree needs a stable way to identify segs to use as partitions
+// Segs are normally divided many times, and are unique to their threads
+// Where as PartSeg is an identifier that would work across threads
+func (w *NodesWork) GetPartSegs(ts *NodeSeg, best *NodeSeg, receiver *[]PartSeg) {
+	wasNil := false
+	if len(w.parts) == 0 {
+		if w.parts == nil { // just in case
+			w.parts = make([]*NodeSeg, 0)
+			wasNil = true
+		}
+		w.parts = append(w.parts, best)
+	}
+	if *receiver == nil {
+		*receiver = make([]PartSeg, 0)
+	}
+
+	limit := w.width
+	if limit < 0 { // unlimited
+		limit = len(w.parts)
+	} else if limit > len(w.parts) {
+		// limit is greater, but the way I am going to use the value I need to
+		// lower it to actual length to avoid go panicking
+		limit = len(w.parts)
+	}
+
+	for _, v := range w.parts[:limit] {
+		partseg := getPartSeg(ts, v)
+		*receiver = append(*receiver, partseg)
+	}
+	fold := false
+	for _, v := range *receiver {
+		if v.Occurence == -1 {
+			fold = true
+			break
+		}
+	}
+	if fold {
+		// receiver contained unrecognised segs - replace with just one
+		// unrecognised marker (signaling "wtf" condition)
+		// TODO might actually be a normal condition sometime later when
+		// not all partitions are from segs, but currently very suspicious as
+		// all partitioners currently only build partitions from segs
+		w.mlog.Printf("Best partition didn't come from seg\n")
+		*receiver = (*receiver)[:0]
+		*receiver = append(*receiver, PartSeg{
+			Linedef:   0,
+			Occurence: -1,
+		})
+	}
+	if wasNil {
+		w.parts = nil
+	} else {
+		w.parts = w.parts[:0]
+	}
+}
+
+func getPartSeg(ts *NodeSeg, target *NodeSeg) PartSeg {
+	ldef := target.Linedef
+	occurence := 0
+	for tmps := ts; tmps != nil; tmps = tmps.next {
+		if tmps.Linedef == ldef {
+			occurence++
+		}
+		if tmps == target {
+			return PartSeg{
+				Linedef:   ldef,
+				Occurence: occurence,
+			}
+		}
+	}
+	return PartSeg{
+		Linedef:   0,
+		Occurence: -1, // marker that was not found
+	}
+}
+
 // Split a list of segs (ts) into two using the method described at bottom of
 // file, this was taken from OBJECTS.C in the DEU5beta source. Well, the actual
 // splitting was refactored to DivideSegsActual (called at the end of this
 // method), because a twin named "DivideSegsForSingleSector" exists in
 // convexity.go
 func (w *NodesWork) DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg, bbox *NodeBounds,
-	super *Superblock, rightsSuper, leftsSuper **Superblock) {
+	super *Superblock, rightsSuper, leftsSuper **Superblock, partsegs *[]PartSeg) {
 	// Pick best node to use
 	best := w.pickNode(w, ts, bbox, super)
 
 	if best == nil {
 		// To programmers: write PickNode so it never happens
-		panic("Couldn't pick nodeline!")
+		Log.Panic("Couldn't pick nodeline!\n")
+	}
+
+	if partsegs != nil {
+		w.GetPartSegs(ts, best, partsegs)
 	}
 
 	c := &IntersectionContext{
@@ -1838,9 +2033,18 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 				// sorry, and goodbye - going to different subtrees
 				tmps.partner.partner = nil
 				tmps.partner = nil
-				if tmps == best { // best came before best.partner, next loop iteration must skip both
-					tmps = tmps.next
-				}
+				// 20230307 Now that I have experimented with algorithms that
+				// could indeed lead to satisfying tmps == best.partner before
+				// tmps == best, I know that tmps = tmps.next assignment must
+				// be done unconditionally
+				tmps = tmps.next
+				// let's see why
+				// if tmps == best is what occurs, the layout is
+				// [..., best == tmps, best.next == best.partner ...]
+				// so we do both at once and then skip
+				// if tmps == best.partner is what occurs, we have
+				// [..., smth == tmps, smth.next == smth.partner == best, ...]
+				// once again, standing on tmps we do both and must skip both
 			}
 		}
 		tmpsNext = tmps.next
@@ -1852,7 +2056,7 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	if strights == nil {
 		// VigilantDoomer - this branch must never happen (seg from which
 		// partition is derived is hardcored to go right)
-		panic("Should have had partition at the right side (hardcoded to go there).")
+		Log.Panic("Should have had partition at the right side (hardcoded to go there).\n")
 	}
 
 	if stlefts == nil { // This one definitely happens often enough
@@ -1867,7 +2071,7 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 		// performance, but still prevents some extreme cases with too many
 		// sectors all clustered at one side.
 		if asector > 0 {
-			Log.Verbose(1, "No left side, moving partition into left side (single sector #%d)\n",
+			w.mlog.Verbose(1, "No left side, moving partition into left side (single sector #%d)\n",
 				asector)
 		} else {
 			if config.VerbosityLevel >= 3 { // reference to global: config
@@ -1883,9 +2087,9 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 				if s != "" { // should be always true
 					s = s[1:] // remove "," at the beginning (",3,4,5" => "3,4,5")
 				}
-				Log.Verbose(1, "No left side, moving partition into left side (sectors %s)\n", s)
+				w.mlog.Verbose(1, "No left side, moving partition into left side (sectors %s)\n", s)
 			} else {
-				Log.Verbose(1, "No left side, moving partition into left side (multiple sectors in this node)\n")
+				w.mlog.Verbose(1, "No left side, moving partition into left side (multiple sectors in this node)\n")
 			}
 		}
 		lefts = best
@@ -1965,7 +2169,7 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 	// assumption for future
 	atmps := *tmps
 	if atmps.partner != nil && atmps.partner != atmps.next {
-		panic("Partnership was not kept up to date!")
+		Log.Panic("Partnership was not kept up to date!\n")
 	}
 	c.lsx = atmps.StartVertex.X
 	c.lsy = atmps.StartVertex.Y
@@ -2149,7 +2353,7 @@ func (w *NodesWork) recomputeSegs(originSeg, newSeg *NodeSeg) {
 	w.recomputeOneSeg(newSeg)
 	if oldAngle != originSeg.Angle || oldAngle != newSeg.Angle {
 		// Happens often enough btw
-		Log.Verbose(3, "Angle changed after splitting seg:  %d -> (%d ; %d)",
+		w.mlog.Verbose(3, "Angle changed after splitting seg:  %d -> (%d ; %d)\n",
 			oldAngle, originSeg.Angle, newSeg.Angle)
 	}
 }
@@ -2201,7 +2405,11 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	var leftsSuper *Superblock
 	// Divide node in two
 	w.totals.numNodes++
+<<<<<<< HEAD
+	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper, nil)
+=======
 	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
+>>>>>>> origin/main
 	// NOTE after DivideSegs return, super may no longer be valid
 	super = nil
 	res.X = int16(w.nodeX)
@@ -2224,6 +2432,9 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	} else {
+		if config.VerbosityLevel >= 1 && w.IsConvexMultiSector(lefts) { // reference to global: config
+			w.dumpMultiSectorSegs(lefts)
+		}
 		res.nextL = CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
@@ -2244,6 +2455,9 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	} else {
+		if config.VerbosityLevel >= 1 && w.IsConvexMultiSector(rights) { // reference to global: config
+			w.dumpMultiSectorSegs(rights)
+		}
 		res.nextR = CreateNode(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	}
@@ -2254,15 +2468,20 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	return res
 }
 
-/*func CheckNodeBounds(box, leftBox, rightBox *NodeBounds) {
-	good := box.Xmax >= leftBox.Xmax && box.Xmax >= rightBox.Xmax &&
-		box.Xmin <= leftBox.Xmin && box.Xmin <= rightBox.Xmin &&
-		box.Ymax >= leftBox.Ymax && box.Ymax >= rightBox.Ymax &&
-		box.Ymin <= leftBox.Ymin && box.Ymin <= rightBox.Ymin
-	if !good {
-		Log.Printf("Bad node (box doesn't encompass child boxes) found.\n")
+func (w *NodesWork) dumpMultiSectorSegs(ts *NodeSeg) {
+	if config.VerbosityLevel < 1 { // reference to global: config
+		return
 	}
-}*/
+	var buf bytes.Buffer
+	buf.WriteString("Multiple sectors detected that form something CONVEX!\n")
+	for check := ts; check != nil; check = check.next {
+		buf.WriteString(fmt.Sprintf(
+			"  Sector: %v Linedef: %v Flip: %v (%v,%v) - (%v, %v)\n",
+			check.sector, check.Linedef, check.getFlip(),
+			check.psx, check.psy, check.pex, check.pey))
+	}
+	w.mlog.Verbose(1, buf.String())
+}
 
 func HeightOfNodes(node *NodeInProcess) int {
 	lHeight := 1
@@ -2560,6 +2779,10 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	// (use reflection etc. to do deep tests about references). There shall be
 	// NO shared data
 
+	if w.mlog != nil {
+		newW.mlog = CreateMiniLogger()
+	}
+
 	newW.sides = make([]Sidedef, len(w.sides))
 	for i := 0; i < len(newW.sides); i++ {
 		newW.sides[i] = w.sides[i]
@@ -2596,10 +2819,12 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 
 	if w.vertexMap != nil {
 		newW.vertexMap = w.vertexMap.Clone()
+		newW.vertexMap.w = newW
 	}
 
 	if w.dgVertexMap != nil {
 		newW.dgVertexMap = w.dgVertexMap.Clone()
+		newW.dgVertexMap.w = newW
 	}
 
 	newW.segAliasObj = w.segAliasObj.Clone()
@@ -2613,6 +2838,14 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	newW.zenScores = make([]DepthScoreBundle, 0, cap(w.zenScores))
 
 	newW.qallocSupers = nil // never share between threads!
+<<<<<<< HEAD
+	newW.stkExtra = nil     // never share between threads!
+
+	if w.parts != nil {
+		newW.parts = make([]*NodeSeg, 0)
+	}
+=======
+>>>>>>> origin/main
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -2656,7 +2889,7 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	return newW
 }
 
-func CreateVertexMap(minx, miny, maxx, maxy int) *VertexMap {
+func CreateVertexMap(w *NodesWork, minx, miny, maxx, maxy int) *VertexMap {
 	// Mitigation for a possible crash when producing line traces against solid
 	// lines (void and non-void differentiation) in advanced visplane reduction
 	// for, apparently, bent segs (previously split segs whose angle is
@@ -2668,6 +2901,7 @@ func CreateVertexMap(minx, miny, maxx, maxy int) *VertexMap {
 	maxy = maxy + VMAP_SAFE_MARGIN
 
 	vm := &VertexMap{
+		w:    w,
 		MinX: float64(minx),
 		MinY: float64(miny),
 		BlocksWide: int((float64(maxx-minx+1)*
@@ -2689,6 +2923,7 @@ func (vm *VertexMap) Clone() *VertexMap {
 	}
 	newVm := &VertexMap{}
 	*newVm = *vm
+	newVm.w = nil
 	newVm.Grid = make([][]*FloatVertex, 0, len(vm.Grid))
 	for _, it := range vm.Grid {
 		cpit := make([]*FloatVertex, 0, len(it))
@@ -2722,7 +2957,7 @@ func (vm *VertexMap) GetBlock(x, y float64) int {
 		(uint((y-vm.MinY)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT)*
 			uint(vm.BlocksWide))
 	if ret < 0 || ret >= len(vm.Grid) {
-		Log.Verbose(1, "Vertex map index out of range, source values: x=%f, y=%f xmin,ymin=(%f,%f) xmax,ymax=(%f,%f)\n",
+		vm.w.mlog.Verbose(1, "Vertex map index out of range, source values: x=%f, y=%f xmin,ymin=(%f,%f) xmax,ymax=(%f,%f)\n",
 			x, y, vm.MinX, vm.MinY, vm.MaxX, vm.MaxY)
 		// Allow vertex map to function without panic in such cases, should they
 		// happen
@@ -2902,6 +3137,28 @@ func (w *NodesWork) returnSuperblockToPool(block *Superblock) {
 	w.qallocSupers = block
 }
 
+<<<<<<< HEAD
+// first seg is not stored for Zdoom extended/compressed nodes - compute
+func getFirstSegExtended(ssubsectors []uint32, ssector uint32) uint32 {
+	cum := uint32(0)
+	for i := uint32(0); i < ssector; i++ {
+		cum += ssubsectors[i]
+	}
+	return cum
+}
+
+// suppressErrorDueToExtraLogImport is never called
+// znodegen.go gets "log" import added to it as the result of
+// code generation, but nothing uses it, and unused imports cause build
+// to fail, as go is very strict about it. So this stupid function will be
+// copied to znodegen and use up the import
+func suppressErrorDueToExtraLogImport(ts *NodeSeg) {
+	// Notice it is lower case "log" that I never use in actually called code
+	log.Panic("Function that was not supposed to be called was called.\n")
+}
+
+=======
+>>>>>>> origin/main
 /*---------------------------------------------------------------------------*
 
 	This message has been taken, complete, from OBJECTS.C in DEU5beta source.

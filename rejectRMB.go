@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -19,7 +19,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 )
 
@@ -46,6 +45,77 @@ const (
 	LINE_EFFECT_RIGHT
 )
 
+// LoadGroups loads sector groups, defined by GROUP commands in RMB source file.
+// Needs to be done before other options could be applied, and affects general
+// reject generation as well
+func (fr *RMBFrame) LoadGroups(numSectors int) (bool, []RejGroup) {
+	// Initially, groups are equivalent to sectors (every sector is in its own
+	// group).
+	ret := make([]RejGroup, numSectors)
+	for i, _ := range ret {
+		ret[i].legal = true
+		ret[i].sectors = make([]int, 1)
+		ret[i].sectors[0] = i
+		ret[i].parent = i
+	}
+	return fr.loadGroupsForFrame(ret), ret
+}
+
+func (fr *RMBFrame) loadGroupsForFrame(groups []RejGroup) bool {
+	if fr == nil {
+		return false
+	}
+	b1 := false
+	b2 := fr.Parent.loadGroupsForFrame(groups)
+	for i, cmd := range fr.Commands {
+		if cmd.Type == RMB_GROUP {
+			grI := fr.Commands[i].Data[0]
+			dupChecker := make(map[int]bool)
+			if grI >= len(groups) {
+				fr.Commands[i].Error("Map doesn't contain sector %d, it only has %d sectors\n",
+					grI, len(groups))
+				continue
+			}
+			if !groups[grI].legal {
+				fr.Commands[i].Error("Sector %d can't define a group, because it is already part of group %d\n",
+					grI, groups[grI].parent)
+				continue // ignore this command
+			}
+			sectors := fr.Commands[i].List[0]
+			for _, v := range sectors {
+				if v == grI {
+					// TODO do I need to output a message for this?
+					// What would original RMB program reaction be?
+					fr.Commands[i].Error("You need not explicitly list sector in its own group - every group always includes sector with the same index\n")
+					continue // because each group already includes corresponding sector
+				}
+				if v >= len(groups) {
+					fr.Commands[i].Error("Map doesn't contain sector %d, it only has %d sectors\n",
+						v, len(groups))
+					continue
+				}
+				if !groups[v].legal {
+					fr.Commands[i].Error("Sector %d can't join group %d, because it is already part of group %d\n",
+						v, grI, groups[v].parent)
+					continue // ignore this sector
+				}
+				if dupChecker[v] {
+					fr.Commands[i].Error("Sector %d is specified more than once\n",
+						v)
+					continue // ignore duplicate
+				}
+				b1 = true
+				groups[grI].sectors = append(groups[grI].sectors, v)
+				groups[v].legal = false
+				groups[v].parent = grI
+				dupChecker[v] = true
+			}
+		}
+
+	}
+	return b1 || b2
+}
+
 // Check if RMB contains command that need table of distances where distances
 // are measured in NUMBER OF SECTORS (think LENGTH rmb option, not DISTANCE)
 // Fully analogues to Zennode's function of the same name in ZenReject.cpp
@@ -63,6 +133,24 @@ func (fr *RMBFrame) NeedDistances() bool {
 	}
 	// If this frame doesn't contain these options, check parent one
 	return fr.Parent.NeedDistances()
+}
+
+// If RMB option GROUP is present with one of these options, reject builder
+// needs to uphold "sectors in a group are effectively joined as one" during
+// physical LOS computations
+func (fr *RMBFrame) HasOptionTrickyForGroups() bool {
+	if fr == nil {
+		return false
+	}
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_DISTANCE, RMB_LINE:
+			{
+				return true
+			}
+		}
+	}
+	return fr.Parent.HasOptionTrickyForGroups()
 }
 
 // Scans frame for LENGTH option and returns the LAST encountered value
@@ -83,10 +171,10 @@ func (fr *RMBFrame) GetLENGTHValue() (bool, uint16) {
 				// increasing the memory size for distanceTable etc. + very hard
 				// to reach even this number of sectors, much less arrange
 				// them so that you could produce such length at the same time
-				Log.Error("RMB: LENGTH greater than 65535 is truncated to 65535.\n")
+				fr.Commands[i].Error("LENGTH greater than 65535 is truncated to 65535.\n")
 				chk = 65535
 			} else if chk < 0 {
-				Log.Error("RMB: Negative LENGTH truncated to 0\n")
+				fr.Commands[i].Error("Negative LENGTH truncated to 0\n")
 				chk = 0
 			}
 			return true, uint16(chk)
@@ -155,11 +243,11 @@ func (fr *RMBFrame) processDistanceUsingOptions(r *RejectWork,
 	// Populate sectors array with the BLIND/SAFE information
 	for _, command := range fr.Commands {
 		if command.Type == RMB_BLIND {
-			prepareBlind(command, sectors)
+			r.prepareBlind(command, sectors)
 		}
 
 		if command.Type == RMB_SAFE {
-			prepareSafe(command, sectors)
+			r.prepareSafe(command, sectors)
 		}
 	}
 
@@ -179,79 +267,102 @@ func (fr *RMBFrame) processDistanceUsingOptions(r *RejectWork,
 	}
 }
 
-func prepareBlind(command RMBCommand, sectors []SectorRMB) {
+func (r *RejectWork) prepareBlind(command RMBCommand, sectors []SectorRMB) {
 	if command.Band {
 		for _, num := range command.List[0] {
-			sector := rmbGetSector(sectors, num, command)
-			if sector == nil {
-				continue
+			group := r.rmbGetGroup(sectors, num, command)
+			for _, si := range group {
+				sector := rmbGetSector(sectors, si, command)
+				if sector == nil {
+					continue
+				}
+				if command.Invert {
+					sector.Blind = 7
+				} else {
+					sector.Blind = 4
+				}
+				sector.BlindLo = command.Data[0]
+				sector.BlindHi = command.Data[1]
 			}
-			if command.Invert {
-				sector.Blind = 7
-			} else {
-				sector.Blind = 4
-			}
-			sector.BlindLo = command.Data[0]
-			sector.BlindHi = command.Data[1]
 		}
 	} else {
 		for _, num := range command.List[0] {
-			sector := rmbGetSector(sectors, num, command)
-			if sector == nil {
-				continue
-			}
-			if sector.Blind < 4 {
-				if command.Invert {
-					sector.Blind |= 2
-					sector.BlindHi = command.Data[0]
-				} else {
-					sector.Blind |= 1
-					sector.BlindLo = command.Data[0]
+			group := r.rmbGetGroup(sectors, num, command)
+			for _, si := range group {
+				sector := rmbGetSector(sectors, si, command)
+				if sector == nil {
+					continue
+				}
+				if sector.Blind < 4 {
+					if command.Invert {
+						sector.Blind |= 2
+						sector.BlindHi = command.Data[0]
+					} else {
+						sector.Blind |= 1
+						sector.BlindLo = command.Data[0]
+					}
 				}
 			}
 		}
 	}
 }
 
-func prepareSafe(command RMBCommand, sectors []SectorRMB) {
+func (r *RejectWork) prepareSafe(command RMBCommand, sectors []SectorRMB) {
 	if command.Band {
 		for _, num := range command.List[0] {
-			sector := rmbGetSector(sectors, num, command)
-			if sector == nil {
-				continue
+			group := r.rmbGetGroup(sectors, num, command)
+			for _, si := range group {
+				sector := rmbGetSector(sectors, si, command)
+				if sector == nil {
+					continue
+				}
+				if command.Invert {
+					sector.Safe = 7
+				} else {
+					sector.Safe = 4
+				}
+				sector.SafeLo = command.Data[0]
+				sector.SafeHi = command.Data[1]
 			}
-			if command.Invert {
-				sector.Safe = 7
-			} else {
-				sector.Safe = 4
-			}
-			sector.SafeLo = command.Data[0]
-			sector.SafeHi = command.Data[1]
 		}
 	} else {
 		for _, num := range command.List[0] {
-			sector := rmbGetSector(sectors, num, command)
-			if sector == nil {
-				continue
-			}
-			if sector.Safe < 4 {
-				if command.Invert {
-					sector.Safe |= 2
-					sector.SafeHi = command.Data[0]
-				} else {
-					sector.Safe |= 1
-					sector.SafeLo = command.Data[0]
+			group := r.rmbGetGroup(sectors, num, command)
+			for _, si := range group {
+				sector := rmbGetSector(sectors, si, command)
+				if sector == nil {
+					continue
+				}
+				if sector.Safe < 4 {
+					if command.Invert {
+						sector.Safe |= 2
+						sector.SafeHi = command.Data[0]
+					} else {
+						sector.Safe |= 1
+						sector.SafeLo = command.Data[0]
+					}
 				}
 			}
 		}
 	}
+}
+
+func (r *RejectWork) rmbGetGroup(sectors []SectorRMB, num int, command RMBCommand) []int {
+	asector := rmbGetSector(sectors, num, command)
+	if asector == nil {
+		return nil
+	}
+	if r.hasGroups && !r.groups[num].legal {
+		command.Error("command issued on sector %d but it is part of group. Will substitute it for group instead%d\n",
+			num, r.groups[num].parent)
+		num = r.groups[num].parent
+	}
+	return r.groups[num].sectors
 }
 
 func rmbGetSector(sectors []SectorRMB, i int, command RMBCommand) *SectorRMB {
 	if i >= len(sectors) || i < 0 {
-		// TODO should refer to source file
-		Log.Error("Reject: RMB specified sector number out of range: %d at line %d\n", i,
-			command.SrcLine)
+		command.Error("specified sector number out of range: %d\n", i)
 		return nil
 	}
 	return &(sectors[i])
@@ -259,9 +370,7 @@ func rmbGetSector(sectors []SectorRMB, i int, command RMBCommand) *SectorRMB {
 
 func (r *RejectWork) rmbCheckSectorInRange(i int, command RMBCommand) bool {
 	if i >= r.numSectors || i < 0 {
-		// TODO should refer to source file
-		Log.Error("Reject: RMB specified sector number out of range: %d at line %d\n", i,
-			command.SrcLine)
+		command.Error("specified sector number out of range: %d\n", i)
 		return false
 	}
 	return true
@@ -276,25 +385,31 @@ func (r *RejectWork) applyBlind(sector SectorRMB, i int) {
 	}
 
 	for j := 0; j < r.numSectors; j++ {
+		// Note: groups are already accounted through these two operations:
+		// 1. Computing distance table (sectors in same group have zero
+		// distance between each other, neigbors of each sector in group have
+		// a distance of 1 to any sector of the group, etc.)
+		// 2. Creating SectorRMB records (prepareBlind)
+		// So here can just use rejectTableIJ directly
 		if sector.Blind&1 == 1 {
 			// Handle normal BLIND
 			// Also handles first half of inverse BAND BLIND
 			if int(*r.distanceTableIJ(i, j)) >= sector.BlindLo {
-				*r.rejectTableIJ(i, j) |= VIS_RMB_HIDDEN
+				*r.rejectTableIJ(i, j) = VIS_HIDDEN
 			}
 		}
 		if sector.Blind&2 == 2 {
 			// Handle inverse BLIND
 			// Also handles second half of inverse BAND BLIND
 			if int(*r.distanceTableIJ(i, j)) < sector.BlindHi {
-				*r.rejectTableIJ(i, j) |= VIS_RMB_HIDDEN
+				*r.rejectTableIJ(i, j) = VIS_HIDDEN
 			}
 		}
 		if sector.Blind == 4 {
 			// Handle normal BAND BLIND
 			if int(*r.distanceTableIJ(i, j)) >= sector.BlindLo &&
 				int(*r.distanceTableIJ(i, j)) < sector.BlindHi {
-				*r.rejectTableIJ(i, j) |= VIS_RMB_HIDDEN
+				*r.rejectTableIJ(i, j) = VIS_HIDDEN
 			}
 
 		}
@@ -310,25 +425,31 @@ func (r *RejectWork) applySafe(sector SectorRMB, i int) {
 	}
 
 	for j := 0; j < r.numSectors; j++ {
+		// Note: groups are already accounted through these two operations:
+		// 1. Computing distance table (sectors in same group have zero
+		// distance between each other, neigbors of each sector in group have
+		// a distance of 1 to any sector of the group, etc.)
+		// 2. Creating SectorRMB records (prepareSafe)
+		// So here can just use rejectTableIJ directly
 		if sector.Safe&1 == 1 {
 			// Handle normal SAFE
 			// Also handles first half of inverse BAND SAFE
 			if int(*r.distanceTableIJ(i, j)) >= sector.SafeLo {
-				*r.rejectTableIJ(j, i) |= VIS_RMB_HIDDEN
+				*r.rejectTableIJ(j, i) = VIS_HIDDEN
 			}
 		}
 		if sector.Safe&2 == 2 {
 			// Handle inverse SAFE
 			// Also handles second half of inverse BAND SAFE
 			if int(*r.distanceTableIJ(i, j)) < sector.SafeHi {
-				*r.rejectTableIJ(j, i) |= VIS_RMB_HIDDEN
+				*r.rejectTableIJ(j, i) = VIS_HIDDEN
 			}
 		}
 		if sector.Safe == 4 {
 			// Handle normal BAND SAFE
 			if int(*r.distanceTableIJ(i, j)) >= sector.SafeLo &&
 				int(*r.distanceTableIJ(i, j)) < sector.SafeHi {
-				*r.rejectTableIJ(j, i) |= VIS_RMB_HIDDEN
+				*r.rejectTableIJ(j, i) = VIS_HIDDEN
 			}
 		}
 	}
@@ -350,7 +471,24 @@ func (fr *RMBFrame) processINCLUDEs(r *RejectWork) {
 					if !r.rmbCheckSectorInRange(j, cmd) {
 						continue
 					}
-					*(r.rejectTableIJ(i, j)) |= VIS_RMB_VISIBLE
+					// in case no groups are used, equivalent to
+					// *(r.rejectTableIJ(i, j)) = VIS_VISIBLE
+					// -- VigilantDoomer:
+					// Zennode's implementation, even per its rationale of still
+					// allowing INCLUDE to override other RMB effects while
+					// not being able to override non-RMB invisibility, was
+					// incorrect: it didn't allow INCLUDE to force back
+					// visibility on sectors hidden by distance.
+					// So now INCLUDE simply unconditionally forces visibility,
+					// because
+					// 1) this is the sanest way to avoid the bug.
+					// 2) I don't think users need to be prevented from forcing
+					// visibility on something non-RMB bits of algorithm presume
+					// to be invisible, even if the algorithm is supposedly
+					// accurate (and Zennode's is certainly not accurate,
+					// because can't compute visibility of/to self-referencing
+					// sectors).
+					r.forceVisibility(i, j, VIS_VISIBLE)
 				}
 			}
 		}
@@ -376,7 +514,9 @@ func (fr *RMBFrame) processEXCLUDEs(r *RejectWork) {
 					// Yes, overwrite with VIS_HIDDEN - intentional
 					// because EXCLUDE has the highest priority of all RMB
 					// options
-					*(r.rejectTableIJ(i, j)) = VIS_HIDDEN
+					// in case no groups are used, equivalent to
+					// *(r.rejectTableIJ(i, j)) = VIS_HIDDEN
+					r.forceVisibility(i, j, VIS_HIDDEN)
 				}
 			}
 		}
@@ -401,8 +541,6 @@ func (r *RejectWork) CreateDistanceTable() {
 		r.distanceTable[i] = 65535 // maximum possible value for uint16
 	}
 
-	length := uint16(0)
-
 	// Problem definition:
 	// All-pairs shortest paths (path lengths) for unweighted undirected
 	// graph (vertexes = sectors, edges = neighborship relation)
@@ -410,6 +548,13 @@ func (r *RejectWork) CreateDistanceTable() {
 	// point.
 	numSectors := r.numSectors
 	queue := CreateRingU16(uint32(numSectors))
+	if r.hasGroups {
+		// In this case, BFS needs to work on group graph not sector graph
+		r.maxLength = r.distanceTableFromGroups(r.distanceTable, queue,
+			numSectors)
+		return
+	}
+	length := uint16(0)
 	for i := 0; i < numSectors; i++ {
 		itLength := r.BFS(r.distanceTable[r.numSectors*i:r.numSectors*(i+1)],
 			uint16(i), queue)
@@ -456,6 +601,77 @@ func (r *RejectWork) BFS(distanceRow []uint16, source uint16,
 	return length
 }
 
+func (r *RejectWork) distanceTableFromGroups(distanceTable []uint16,
+	queue *RingU16, numSectors int) uint16 {
+	length := uint16(0)
+	for i := 0; i < numSectors; i++ {
+		if !r.groups[i].legal {
+			// Skip rows for sectors grouped under other sectors
+			continue
+		}
+		distanceRow := r.distanceTable[r.numSectors*i : r.numSectors*(i+1)]
+		itLength := r.GroupBFS(distanceRow, uint16(i), queue)
+		for grI, _ := range r.groups {
+			// After GroupBFS is done, now fill the slots of all "not legal"
+			// groups using data from legal groups they are a part of. That is,
+			// get the data for sectors that belong to groups heralded by other
+			// sector from that herald, for the computations were done on
+			// heralds only
+			if !r.groups[grI].legal {
+				distanceRow[grI] = distanceRow[r.groups[grI].parent]
+			}
+		}
+		if length < itLength {
+			length = itLength
+		}
+		// Resetting queue for reuse - probably not needed, since Queue should
+		// be empty always by the end of BFS
+		queue.Reset()
+	}
+	// Now, similar to how cols in rows were copied from others, do some row
+	// copying
+	for i := 0; i < numSectors; i++ {
+		if !r.groups[i].legal {
+			herald := r.groups[i].parent
+			srcRow := r.distanceTable[r.numSectors*herald : r.numSectors*(herald+1)]
+			destRow := r.distanceTable[r.numSectors*i : r.numSectors*(i+1)]
+			copy(destRow, srcRow)
+		}
+	}
+	return length
+}
+
+// A BFS that works on groups instead of sectors. It uses group relations
+// instead of sector relations
+// Because groups neighbors feature only legal groups (this method is called
+// only on legal groups as well, btw), certain items in distanceRow are not
+// reached by this method. The caller will instead set values to those items
+// from others in the row
+func (r *RejectWork) GroupBFS(distanceRow []uint16, source uint16,
+	queue *RingU16) uint16 {
+	visited := make([]bool, r.numSectors)
+	visited[source] = true
+	distanceRow[source] = 0
+	length := uint16(0)
+	queue.Enqueue(source)
+	for !queue.Empty() {
+		item := queue.Dequeue()
+		for _, neighbor := range r.groups[item].neighbors {
+			nIndex := uint16(neighbor)
+			if !visited[nIndex] {
+				visited[nIndex] = true
+				queue.Enqueue(nIndex)
+				newDist := distanceRow[item] + 1
+				distanceRow[nIndex] = newDist
+				if length < newDist {
+					length = newDist
+				}
+			}
+		}
+	}
+	return length
+}
+
 func (r *RejectWork) ApplyDistanceLimits() {
 	ok, maxLength := r.rmbFrame.GetLENGTHValue()
 	if ok {
@@ -469,18 +685,20 @@ func (r *RejectWork) ApplyDistanceLimits() {
 	}
 
 	if r.maxLength == 65535 { // distanceTable cell can never exceed this value
-		Log.Verbose(2, "Effective maxlength ended up being 65535 and therefore is redundant.\n")
+		Log.Verbose(2, "Reject: effective maxlength ended up being 65535 and therefore is redundant.\n")
 		return
 	}
 
-	Log.Verbose(2, "Maxlength in effect is %d\n", r.maxLength)
+	Log.Verbose(2, "Reject: maxlength in effect is %d\n", r.maxLength)
 
 	for i := 0; i < r.numSectors; i++ {
 		for j := i + 1; j < r.numSectors; j++ {
+			// No need to refer to groups here: groups were accounted for when
+			// building distanceTable in first place
 			if *(r.distanceTableIJ(i, j)) > r.maxLength {
-				// Yes, markVisibility, Anything hacked to be visible in
+				// Yes, markVisibilitySector, anything hacked to be visible in
 				// eliminateTrivialCases is going to stay that way
-				r.markVisibility(i, j, VIS_HIDDEN)
+				markVisibilitySector(r, i, j, VIS_HIDDEN)
 			}
 		}
 	}
@@ -492,7 +710,7 @@ func (r *RejectWork) distanceTableIJ(i, j int) *uint16 {
 }
 
 func (r *RejectWork) linesTooFarApart(srcLine, tgtLine *TransLine) bool {
-	if r.maxDistance != uint64(0xFFFFFFFFFFFFFFFF) &&
+	if r.maxDistance != UNLIMITED_DISTANCE &&
 		r.pointTooFar(srcLine.start, tgtLine) &&
 		r.pointTooFar(srcLine.end, tgtLine) &&
 		r.pointTooFar(tgtLine.start, srcLine) &&
@@ -547,7 +765,7 @@ func (r *RejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
 		if cmd.Type == RMB_REPORT {
 			ret = true
 			if int(uint16(cmd.Data[0])) != cmd.Data[0] {
-				Log.Error("Distance specified for REPORT command is out of range (must be 0 <= %d <= 65535), will be ignored\n",
+				cmd.Error("Distance specified for REPORT command is out of range (must be 0 <= %d <= 65535), will be ignored\n",
 					cmd.Data[0])
 				continue
 			}
@@ -566,8 +784,8 @@ func (r *RejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
 }
 
 func (r *RejectWork) reportDoForDistance(w io.Writer, distance uint16) {
-	w.Write([]byte(fmt.Sprintf("# %s All sectors with LOS distance>%d are reported\n",
-		r.mapName, distance)))
+	r.printfln(w, "# %s All sectors with LOS distance>%d are reported",
+		r.mapName, distance)
 	for i := 0; i < r.numSectors; i++ {
 		for j := i + 1; j < r.numSectors; j++ {
 			// According to manual, only _mutually_ visible sectors that
@@ -575,11 +793,14 @@ func (r *RejectWork) reportDoForDistance(w io.Writer, distance uint16) {
 			if *(r.distanceTableIJ(i, j)) > distance &&
 				!isHidden(*(r.rejectTableIJ(i, j))) &&
 				!isHidden(*(r.rejectTableIJ(j, i))) {
-				w.Write([]byte(fmt.Sprintf("%d,%d\n",
-					i, j)))
+				r.printfln(w, "%d,%d", i, j)
 			}
 		}
 	}
+}
+
+func (r *RejectWork) printfln(w io.Writer, format string, a ...interface{}) {
+	WriterPrintfln(w, r.rmbFrame.RMB.CRLF, format, a...)
 }
 
 // (re)creates *.rpt file if it was not created/open yet, putting
@@ -599,7 +820,7 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 	// produce the file. This is so that I might change format in the future,
 	// the line might act as identificator for other tools (say, written by
 	// other people) that want to parse the file for their own needs
-	wri.WriteString(fmt.Sprintf("# %s %s\n", PROG_CAPIT_NAME, VERSION))
+	r.printfln(wri, "# %s %s", PROG_CAPIT_NAME, VERSION)
 	return wri
 }
 
@@ -611,6 +832,8 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 // NOTE functionality DISABLED for v0.74 release because I am having doubts
 // about whether LINE should have this quirk for self-referencing sectors.
 // NOTE remains DISABLED for v0.75a release as well
+// NOTE remained DISABLED for v0.78a release which already happened
+// NOTE remains DISABLED for v0.82a release???
 func (r *RejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
 	// Temporarily ignoring LINE, has effect of not implementing it
 	return false

@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -46,6 +46,7 @@ package main
 // CreateNodeForSingleSector processes a list of segs all formed from linedefs
 // of one sector only, the list is NOT a convex a polygon else we would have a
 // subsector already
+// This also has a twin in stknode.go
 func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeInProcess {
 	res := new(NodeInProcess)
@@ -56,7 +57,8 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	// Divide node in two
 	w.totals.numNodes++
 	w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super, &rightsSuper,
-		&leftsSuper)
+		&leftsSuper, nil)
+	super = nil // NOTE after DivideSegs return, super may no longer be valid
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
@@ -100,12 +102,16 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // DivideSegsForSingleSector is like DivideSegs, but nodepicker is different
 func (w *NodesWork) DivideSegsForSingleSector(ts *NodeSeg, rs **NodeSeg,
 	ls **NodeSeg, bbox *NodeBounds, super *Superblock, rightsSuper,
-	leftsSuper **Superblock) {
+	leftsSuper **Superblock, partsegs *[]PartSeg) {
 	// Pick best node to use
 	best := PickNode_SingleSector(w, ts, bbox, super)
 
 	if best == nil { // To programmers: write PickNode so it never happens
 		panic("Couldn't pick nodeline!")
+	}
+
+	if partsegs != nil {
+		w.GetPartSegs(ts, best, partsegs)
 	}
 
 	c := &IntersectionContext{
@@ -132,6 +138,9 @@ func PickNode_SingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	best := ts                        // make sure always got something to return
 	bestcost := int(INITIAL_BIG_COST) //
 	cnt := 0
+	if w.parts != nil { // hard multi-tree support
+		w.parts = w.parts[:0]
+	}
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
 		cnt++
@@ -218,7 +227,9 @@ func PickNode_SingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 						rightcnt++
 					}
 					if (val&1 != 0) && (val&16 != 0) {
-						check.alias = part.alias
+						if check.alias != part.alias && vetAliasTransfer(c) {
+							check.alias = part.alias
+						}
 						if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
 							leftside = true
 							leftcnt++
@@ -258,6 +269,12 @@ func PickNode_SingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// We have a new better choice
 			bestcost = cost
 			best = part // Remember which Seg
+			if w.parts != nil {
+				w.parts = w.parts[:0]
+				w.parts = append(w.parts, part)
+			}
+		} else if cost == bestcost && w.parts != nil {
+			w.parts = append(w.parts, part)
 		}
 	}
 

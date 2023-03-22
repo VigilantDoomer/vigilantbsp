@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -94,6 +94,9 @@ const VERSION = "0.82a"
 		s+ will temporarily be interpreted as s=1
 	m Process RMB option file (.rej)
 
+-m (example -m:map01+map03) Rebuild only specific maps
+	if it is instead written -!m:map01+map03, the meaning is inverse.
+
 -v Add verbosity to text output. Use multiple times for increased verbosity.
 
 */
@@ -161,6 +164,7 @@ const (
 const (
 	MULTITREE_NOTUSED = iota
 	MULTITREE_ROOT_ONLY
+	MULTITREE_HARD
 )
 
 // below constants must be chosen so that
@@ -240,11 +244,15 @@ type ProgramConfig struct {
 	PenalizeDiagonality int  // whether and when the penalty is applied
 	DepthArtifacts      bool // whether to enable Zennode/ZokumBSP factual deviations from algorithm described in their docs
 
-	// FilterLevel is a list of level names to rebuild. All levels not in this list
-	// are to be copied along, not rebuilt. If list is nil or has zero size,
-	// there is no filter: all levels have to be rebuild.
+	// FilterLevel is a list of level names to rebuild. All levels not in this
+	// list are to be copied along, not rebuilt (unless FilterProhibitsLevels
+	// is also set, which inverts the meaning). If list is nil or has zero size,
+	// there is no filter: all levels have to be rebuilt.
 	FilterLevel [][]byte
-	UseRMB      bool
+	// FilterProhibitsLevels signals whether the meaning of FilterLevel is
+	// inverted and levels in FilterLevel are the ones NOT getting rebuilt
+	FilterProhibitsLevels bool
+	UseRMB                bool
 	// Multi-tree mode
 	MultiTreeMode   int
 	SpecialRootMode int // used when MultiTreeMode = MULTITREE_ROOT_ONLY
@@ -254,9 +262,11 @@ type ProgramConfig struct {
 	RemoveNonCollideable   bool // dangerous option. Tries to reason about which lines are not necessary to be included in blockmap and removes then. Prone to break advanced maps and maps not for Doom
 	NodeDetailFriendliness int  // whether to use detailed version of doLinesIntersect when building non-extended nodes
 	//
-	CacheSideness      int // whether to use cache for WhichSide (for algorithms that use it)
-	SecondaryPriority  int // (since 0.82a) Secondary metric for picking a partition
-	EffectiveSecondary int // derivative value of SecondaryPriority that never has AUTO value
+	CacheSideness      int  // whether to use cache for WhichSide (for algorithms that use it)
+	SecondaryPriority  int  // (since 0.82a) Secondary metric for picking a partition
+	EffectiveSecondary int  // derivative value of SecondaryPriority that never has AUTO value
+	StkNode            bool // whether to use stknode in conjuction MULTITREE_NOTUSED (multi-trees ignore this parameter)
+	TreeWidth          int  // width of hard tree
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -315,6 +325,9 @@ func init() {
 		CacheSideness:          CACHE_SIDENESS_AUTO,
 		SecondaryPriority:      SECONDARY_PRIORITY_AUTO,
 		EffectiveSecondary:     SECONDARY_PRIORITY_BALANCE, // will be overridden in config.FromCommandLine
+		StkNode:                false,
+		TreeWidth:              0, // auto
+		FilterProhibitsLevels:  false,
 	})
 }
 
@@ -392,6 +405,7 @@ func PrintHelp() {
 	Log.Printf("		3 Try every linedef as a possible root partition\n")
 	Log.Printf("	t= Number of threads to use for multi-tree\n")
 	Log.Printf("		(defaults to number of cores available)\n")
+	//Log.Printf("	w= Width for HARD multi-tree (default: 2)\n")
 	Log.Printf("	i= Cull (don't create segs from) invisible linedefs.\n")
 	Log.Printf("		0 Don't cull (default)\n")
 	Log.Printf("		1 Cull, use faulty check to preserve self-referencing sectors.\n")
@@ -420,6 +434,7 @@ func PrintHelp() {
 	Log.Printf("	m Process RMB option file (.rej)\n")
 	Log.Printf("\n")
 	Log.Printf("-m (example -m:map01+map03) Rebuild only specific maps\n")
+	Log.Printf("	if it is instead written -!m:map01+map03, the meaning is inverse.\n")
 	Log.Printf("\n")
 	Log.Printf("-v Add verbosity to text output. Use multiple times for increased verbosity.\n")
 	Log.Printf("\n")

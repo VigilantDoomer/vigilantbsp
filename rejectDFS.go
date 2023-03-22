@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -21,7 +21,7 @@ package main
 // All the jazz related to speeding up reject builder with graphs goes into
 // this file.
 
-func DFS(graph *RejGraph, sector *RejSector) int {
+func (w *RejectWork) DFS(graph *RejGraph, sector *RejSector) int {
 	// Initialize the sector
 	sector.graph = graph
 	sector.indexDFS = graph.numSectors
@@ -34,12 +34,14 @@ func DFS(graph *RejGraph, sector *RejSector) int {
 
 	numChildren := 0
 
-	for i := 0; i < sector.numNeighbors; i++ {
-		child := sector.neighbors[i]
+	for _, child := range w.DFSGetNeighborsAndGroupsiblings(sector) {
+		if child == nil {
+			break
+		}
 		if child.graph != graph {
 			numChildren++
 			child.graphParent = sector
-			DFS(graph, child)
+			w.DFS(graph, child)
 			if child.loDFS < sector.loDFS {
 				sector.loDFS = child.loDFS
 			}
@@ -66,7 +68,7 @@ func (w *RejectWork) CreateGraph(root *RejSector) *RejGraph {
 	graph.numSectors = 0
 
 	root.graphParent = nil
-	if DFS(graph, root) > 1 {
+	if w.DFS(graph, root) > 1 {
 		root.isArticulation = true
 	} else {
 		root.isArticulation = false
@@ -149,8 +151,11 @@ func (w *RejectWork) InitializeGraphs(numSectors int) {
 			sec := graph.sectors[j]
 			sum := 0
 			left := graph.numSectors - 1
-			for x := 0; x < sec.numNeighbors; x++ {
-				child := sec.neighbors[x]
+			for _, child := range w.DFSGetNeighborsAndGroupsiblings(sec) {
+				if child == nil {
+					break
+				}
+
 				if child.graphParent != sec {
 					continue
 				}
@@ -181,7 +186,7 @@ func (w *RejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
 	}
 }
 
-func AddGraph(graph *RejGraph, sector *RejSector) {
+func (w *RejectWork) AddGraph(graph *RejGraph, sector *RejSector) {
 	// Initialize the sector
 	sector.graph = graph
 	sector.indexDFS = graph.numSectors
@@ -192,11 +197,13 @@ func AddGraph(graph *RejGraph, sector *RejSector) {
 	graph.numSectors++
 
 	// Add all this nodes children that aren't already in the graph
-	for i := 0; i < sector.numNeighbors; i++ {
-		child := sector.neighbors[i]
+	for _, child := range w.DFSGetNeighborsAndGroupsiblings(sector) {
+		if child == nil {
+			break
+		}
 		if child.graph == sector.baseGraph {
 			child.graphParent = sector
-			AddGraph(graph, child)
+			w.AddGraph(graph, child)
 			if child.loDFS < sector.loDFS {
 				sector.loDFS = child.loDFS
 			}
@@ -223,7 +230,7 @@ func (w *RejectWork) QuickGraph(root *RejSector) *RejGraph {
 
 	root.graphParent = nil
 
-	AddGraph(graph, root)
+	w.AddGraph(graph, root)
 
 	return graph
 }
@@ -466,3 +473,53 @@ func (x reSectors_SorterWithGraphs) Less(i, j int) bool {
 	return reSectorsCompare_WithGraphs(x, i, j) < 0
 }
 func (x reSectors_SorterWithGraphs) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+func (w *RejectWork) setupMixer() {
+	w.extra.mixer = make([]byte, len(w.rejectTable))
+	copy(w.extra.mixer, w.rejectTable)
+}
+
+func (w *RejectWork) mergeAndDestroyMixer() {
+	for i, v := range w.rejectTable {
+		if v == VIS_UNKNOWN && w.extra.mixer[i] != VIS_UNKNOWN {
+			w.rejectTable[i] = w.extra.mixer[i]
+		}
+	}
+	w.extra.mixer = nil
+}
+
+// Returns not just sector's neighbors, but also sectors in the same group as
+// this one, IF in reject builder configuration groupShareVis == true.
+// Doesn't return their neighbors, though
+func (r *RejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {
+	if !r.groupShareVis {
+		return s.neighbors
+	}
+	group := r.groups[r.groups[s.index].parent]
+	if len(group.sectors) == 1 {
+		return s.neighbors
+	}
+	ret := make([]*RejSector, 0, len(s.neighbors)+len(group.sectors))
+	filt := make(map[int]bool)
+	for _, sec := range s.neighbors {
+		// No test for duplicates here - there already must be none
+		if sec == nil {
+			// weird stuff like this exists because some questionable things
+			// were ported over from Zennode's C++ code
+			break
+		}
+		filt[sec.index] = true
+		ret = append(ret, sec)
+	}
+	for _, si := range group.sectors {
+		// but group siblings are likely to coincide with neighbors, as per
+		// original intent of old RMB program. Also don't include self in list,
+		// of course
+		if s.index != si && !filt[si] {
+			sec := &(r.sectors[si])
+			ret = append(ret, sec)
+			filt[si] = true
+		}
+	}
+	return ret
+}

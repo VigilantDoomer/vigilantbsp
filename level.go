@@ -16,7 +16,8 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go;zensideness.go"
+//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go;zensideness.go;stknode.go"
+//go:generate go run gen/codegen.go -- --target=rejectFAST.go --include="reject.go;rejectRMB.go;rejectDFS.go;rejectLOS.go;rejectdefs.go"
 
 import (
 	"bytes"
@@ -319,7 +320,15 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				config.CacheSideness != CACHE_SIDENESS_NEVER &&
 				(config.CacheSideness == CACHE_SIDENESS_ALWAYS ||
 					config.MultiTreeMode != MULTITREE_NOTUSED)
-			nodeType := config.NodeType // global config
+			nodeType := config.NodeType   // global config
+			treeWidth := config.TreeWidth // global config
+			if treeWidth == 0 {           // was auto mode
+				if config.MultiTreeMode == MULTITREE_HARD {
+					treeWidth = 2 // minimum possible width cap
+				} else if config.MultiTreeMode == MULTITREE_NOTUSED && config.StkNode {
+					treeWidth = -1 // here partitions are just collected for debug output, so uncapped is ok
+				}
+			}
 			nodesInput := &NodesInput{
 				lines:      l.newLines,
 				solidLines: solidLines,
@@ -343,6 +352,10 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 
 				detailFriendliness: config.NodeDetailFriendliness, // global config
 				cacheSideness:      cacheSideness,
+				stkNode: (config.MultiTreeMode == MULTITREE_NOTUSED &&
+					config.StkNode) ||
+					(config.MultiTreeMode == MULTITREE_HARD), // global config
+				width: treeWidth,
 			}
 			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA {
 

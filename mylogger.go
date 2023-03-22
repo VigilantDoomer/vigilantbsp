@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -33,6 +33,18 @@ type MyLogger struct {
 	segs  bytes.Buffer
 	// Mutex is used to order writes to stdin and stderr, as well as Sync call
 	mu sync.Mutex
+}
+
+// Logs specific to thread, or even just one task (one task is always worked on
+// by a single thread and never shared with other threads until complete, but a
+// single thread may work on many tasks - each of them will have their own
+// logger). Their output is not forwarded to the stdout or stdin, but is instead
+// buffered until (usually just one of them) is merged into main log of MyLogger
+// type. Most of such logs are instead getting discarded altogether
+type MiniLogger struct {
+	buf   bytes.Buffer
+	slots []string
+	segs  bytes.Buffer
 }
 
 func CreateLogger() *MyLogger {
@@ -117,7 +129,7 @@ func (log *MyLogger) DumpSegs(ts *NodeSeg) {
 	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
 	for tmps := ts; tmps != nil; tmps = tmps.next {
 		log.segs.WriteString(fmt.Sprintf(
-			"  Linedef: %d Flip: %d (%d,%d) - (%d, %d)",
+			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
 			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
 			tmps.EndVertex.X, tmps.EndVertex.Y))
 		if tmps.sector != allSector {
@@ -138,4 +150,90 @@ func (log *MyLogger) GetDumpedSegs() string {
 func (log *MyLogger) Sync() {
 	log.mu.Lock()
 	log.mu.Unlock()
+}
+
+func (log *MyLogger) Merge(mlog *MiniLogger, preface string) {
+	if mlog == nil {
+		return
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if len(preface) > 0 {
+		syslog.Printf(preface)
+	}
+	content := mlog.buf.String()
+	if len(content) > 0 {
+		syslog.Printf(content)
+	}
+	segs := mlog.segs.String()
+	if len(segs) > 0 {
+		log.segs.WriteString(segs)
+	}
+	if len(mlog.slots) > 0 {
+		log.slots = append(log.slots, mlog.slots...)
+	}
+
+}
+
+func (mlog *MiniLogger) Printf(s string, a ...interface{}) {
+	if mlog == nil {
+		Log.Printf(s, a...)
+		return
+	}
+	mlog.buf.WriteString(fmt.Sprintf(s, a...))
+}
+
+func (mlog *MiniLogger) Verbose(verbosityLevel int, s string, a ...interface{}) {
+	if mlog == nil {
+		Log.Verbose(verbosityLevel, s, a...)
+		return
+	}
+	if verbosityLevel <= config.VerbosityLevel {
+		mlog.buf.WriteString(fmt.Sprintf(s, a...))
+	}
+}
+
+func (mlog *MiniLogger) Push(slotNumber int, s string, a ...interface{}) {
+	if mlog == nil {
+		Log.Push(slotNumber, s, a...)
+		return
+	}
+	for slotNumber >= len(mlog.slots) {
+		mlog.slots = append(mlog.slots, "")
+	}
+	mlog.slots[slotNumber] = fmt.Sprintf(s, a...)
+}
+
+func (mlog *MiniLogger) DumpSegs(ts *NodeSeg) {
+	if mlog == nil {
+		Log.DumpSegs(ts)
+	}
+	if !config.DumpSegsFlag || ts == nil { // reference to global: config
+		return
+	}
+	// Assume all come from same sector
+	allSector := ts.sector
+	mlog.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
+	for tmps := ts; tmps != nil; tmps = tmps.next {
+		mlog.segs.WriteString(fmt.Sprintf(
+			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
+			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.EndVertex.X, tmps.EndVertex.Y))
+		if tmps.sector != allSector {
+			// Is not supposed to write stuff from multiple sectors. You'll have
+			// to rewrite code in this function to adjust it to your use case
+			mlog.segs.WriteString(fmt.Sprintf(" BAD! Sector = %d\n", tmps.sector))
+		} else {
+			mlog.segs.WriteString("\n")
+		}
+	}
+}
+
+func CreateMiniLogger() *MiniLogger {
+	var b bytes.Buffer
+	var b2 bytes.Buffer
+	mlog := new(MiniLogger)
+	mlog.segs = b
+	mlog.buf = b2
+	return mlog
 }

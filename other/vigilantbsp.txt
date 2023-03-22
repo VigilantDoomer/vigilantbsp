@@ -1,12 +1,20 @@
 Author
 ======
 
-(c) 2022 VigilantDoomer
+(c) 2022-2023 VigilantDoomer
 
 Document note
 =============
-This document is currently under construction. Information may be
-missing, and some text may be hard to comprehend. 
+
+This document is under constant revision as new versions of
+VigilantBSP are released. Be sure to refer to the document
+distributed with the release of VigilantBSP. 
+
+Document version
+================
+
+The current document is up-to-date with 0.82a version of
+VigilantBSP.
 
 Description
 ===========
@@ -177,6 +185,7 @@ is either a suboption of option above it, or a possible value:
 	m Process RMB option file (.rej)
 		
 -m (example -m:map01+map03) Rebuild only specific maps
+	if it is instead written -!m:map01+map03, the meaning is inverse.
 		
 -v Add verbosity to text output. Use multiple times for increased verbosity.
 
@@ -228,7 +237,7 @@ are optional, or not expected to present a detrimental effect on overall
 results even in case of failure.
 
 Support for RMB options file (*.rej) also places demand to identify
-self-referencing secgtors and their surroundings rather robustly,
+self-referencing sectors and their surroundings rather robustly,
 to make sure RMB effects that depend on distance between sectors 
 to be applied correctly.
 
@@ -877,7 +886,11 @@ By nodes we actually mean a data structure representing BSP (binary space
 partition) tree which is distributed across three lumps: SEGS, SSECTORS, 
 NODES. Rebuilding nodes causes all three lumps to be written/modified, as 
 well as vertices added to VERTEXES lump. This is because vertices are used
-not only in LINEDEFS but also SEGS.
+not only in LINEDEFS but also SEGS, and splitting segs requires new vertices
+to be created. Occassionally, splits might have generate a vertex at the
+very same coords as some other, since v0.78a VigilantBSP is wise to detect 
+all such instances and reuse existing vertices instead of creating 
+duplicates. 
 
 BSP has always a single root node. Each node, including the root one,
 is recursively subdivided into two children which can be either nodes or
@@ -978,12 +991,25 @@ Introduced in v0.82a.
 Algorithm based on the scoring system found in Zennode family of 
 nodebuilders, this aims to produce BSP trees that have high run-time
 performance in game engine over other concerns, but is still 
-better visplane-wise than at least non-visplane aware algorithms. 
+better visplane-wise than seg balancing / maelstrom algorithms. 
 It is best used on detailed maps that require advanced source ports 
 to run, but is often the slowest of the currently offered
 algorithms (up to 3 times slower than advanced visplane 
 reduction, although occassionally can be faster). There are plans
 to improve its performance in future versions.
+
+From technical perspective, this algorithm does NOT have explicit
+provisions towards _visplane_ reduction, it only tends to achieve
+that by not creating excessive number of subsectors. Minimizing
+the number of subsectors or balancing the tree does not, by itself,
+obtain the best result visplane-wise, but it certainly does better
+than algorithms that analyze only segs and not sectors, and, 
+as anecdotal evidence suggests, on most maps this produces results 
+comparable to deliberately visplane-aware algorithms but with less 
+segs and better tree balance. (i.e. there exists maps where
+visplane-aware algorithms fail to eliminate more vpos than this 
+algorithm does, although there also exist maps when at least
+ dvanced visplane reduction eliminates more vpos).
 
 The results produced by this algorithms are most similar, but not
 identical, to the depth algorithm of Zennode/ZokumBSP (also
@@ -1076,16 +1102,8 @@ several candidates with the same primary metric have been selected.
 Using advanced visplane reduction with this priority option 
 selected gives results that are midway between advanced visplane
 reduction with other options and partition algorithm based on 
-Zennode, while taking less time to compute than the latter. 
-
-This was intended to be implemented way before, but I made some 
-typos in the original implementation which, being unnoticed, 
-led me to errorneously conclude that this approach is pointless,
-and thus I used to make this option unreachable through interface
-although still present in source code. When I was implementing
-entire partition selection algorithm based on Zennode's scoring
-system, I reused that disabled code, fixing bugs in process,
-which made this viable again. 
+Zennode, while (most usually) taking less time to compute
+than the latter. 
 
 Also, advanced visplane reduction with this option selected
 for secondary priority will also be affected by variables
@@ -1206,19 +1224,36 @@ This approach might miss condition when some VPO spot in the map could
 be eliminated by raising visplane count (but not reaching visplane 
 limit) elsewhere, so this is why we should call this "best" and not 
 best. Improving on it is the task for the future, I can tell you that 
-computing visplanes for all spots in entire map at once is hard task,
-and even Visplane Explorer doesn't provide 100% accuracy as far as I
-know (not to say that if I were to implement something similar, may
-be difficult to define which is "best" really unless there is 
-clear-as-day improvement). ZokumBSP doesn't compute visplanes either,
-and there are other areas to fix or improve in VigilantBSP beside
-multi-tree that will have an effect on this.
+computing visplanes for all spots in entire map at once is hard task.
+Visplane Explorer doesn't provide 100% accuracy (it tests only a 
+limited amount of angles), and can't possibly know which actual height
+changes can happen in the actual playthrough of the map, and that is
+not even starting on how to actually compare the two "heat" maps and
+determine the best one in general case (where both contain VPOs, or
+both don't report any, but visplane counts are bigger in some area
+on one partition result but in some other area on the other).
+ZokumBSP doesn't compute visplanes either, and there are other areas 
+to fix or improve in VigilantBSP beside multi-tree that will have 
+an effect on this.
+
+Also, minimizing subsector count is not the same as minimizing 
+visplanes, it just so happens that vastly greater subsector count
+correlates with excessive amount of visplanes.
 
 By the way, you CAN actually use this mode even with partition 
 selection other than visplane reduction types, and also can use it to
 generate DeeP nodes or on non-vanilla maps, but doing this has little 
 practical value. This mode was designed for vanilla maps and advanced
 visplane reduction (or at least Killough's).
+
+Since version 0.82a, this can now be sanely used with verbose output,
+as all the details about node creations will be printed only after
+all trees are built, and only the ones pertaining to the chosen tree
+will be printed. This means that if each individual tree takes long
+to build, the progress is not hidden by all the details of 
+nodebuilding rushing to the screen. Also, this of course means that
+making output verbose will not slow down the process as much as 
+before.
 
 07:04 't' - Number of threads to use for multi-tree
 ---------------------------------------------------
@@ -1344,7 +1379,7 @@ ports that treat certain fields as unsigned integers),
 VigilantBSP will not only print a warning but also empty NODES,
 SUBSECTORS, and SEGS lumps (rather than write incorrect values)
 
-c=d - Deep nodes format (limited recognition amount source ports) 
+c=d - Deep nodes format (limited recognition among source ports) 
 
 Also called "standard V4", this is the format invented by DeepBSP.
 It is supported by at least PrBoom-Plus (todo: which version it began
@@ -1371,7 +1406,7 @@ to linedef) are absolutely impossible to represent.
 PrBoom-Plus and some other relatively advanced ports do implement
 support for this (TODO provide more detail). The lists of ports
 that support DeeP nodes and Zdoom extended nodes overlap, although 
-not identical if I recall correctly.
+it is not identical if I recall correctly.
 
 c=z - Zdoom compressed nodes format (most limited recognition)
 
@@ -1445,22 +1480,13 @@ while explicitly specifying 0 will disable it even for Hexen levels.
 Besides the need to eliminate more VPOs still, there is a need to
 achieve smaller lump sizes (fewer segs, lower BSP tree depth) to
 improve both performance (which can be useful for advanced ports
-as well) and keep map under the limits more often. ZokumBSP 
-currently beats VigilantBSP in that department. My own experimental
-adjustments to advanced visplane reduction algorithm were able to
-get some progress in that regard but negatively affected the
-visplane count - increasing it in some areas - which led me to
-so far discard those adjustments as VPO reducing is a priority. 
-After more tweaking, I decided to implement "secondary score 
-selection" for advanced visplane reduction algorithm ONLY in 
-v0.69a, but my satisfaction with it remains low. The insight can't
-be easily gained from studying ZokumBSP either, because the source
-code of that nodebuilder is very hard to comprehend.
-
-I am not giving up on it but will have to invent something really
-novel it seems, maybe using the results of reject computation (and
-that one, even with its slowness, has still areas where it's 
-accuracy can be improved)
+as well) and keep map under the limits more often. The 0.82a version
+of VigilantBSP introduces partitioning algorithm similar to the one 
+used in Zokumbsp that addresses those issues, although it's visplane
+reducing capacities are sometimes behind advanced visplane reduction.
+The race to do even better, nonetheless, continues, as neither of
+these algorithms is enough in some situations, and every single one
+of them loses in some department to the other.
 
 Section 08: Reject builder
 ==========================
@@ -1476,8 +1502,12 @@ The algorithm as used by VigilantBSP is, at its core, the same one as in
 Zennode/ZokumBSP. However, some bugs where discovered and fixed, memory
 usage decreased, etc. 
 
-The RMB option file is not currently supported, but this support is 
-planned in future versions of VigilantBSP.
+Starting with version 0.74a, VigilantBSP supports an RMB option file, but
+the support is not yet complete (not all options are supported). The work
+to support more options is ongoing, and improves from version to version 
+(the complicating factor being that the author of original RMB program is
+no longer active within community, and he never released his program's
+source code).
 
 08:01 'z' - Insert empty REJECT resource
 ----------------------------------------
@@ -1646,6 +1676,7 @@ BAND
 BLIND
 DISTANCE
 EXCLUDE
+GROUP
 INCLUDE
 INVERT
 LENGTH
@@ -1660,7 +1691,9 @@ NOTE options that rely on sector distances in
 sector count units (example: BAND, BLIND, LENGTH, SAFE)
 or map units (DISTANCE) will force -rs=2 (pedantic
 determination of self-referencing sectors visibility)
-as well.
+as well. This does not depend on distance passed to
+this options - using BLIND/SAFE with 0 distance will
+still trigger this behavior.
 
 NOTE File produced by report option looks a bit differently,
 specifically: there is additional comment line
@@ -1669,6 +1702,73 @@ is processed and the list of sector pairs relevant
 for each map is preceeded by a comment line specifying
 which map it is, sector pairs are sorted by sector
 numbers (I am not aware how RMB sorts them), etc.
+
+NOTE Since version v0.82a, when generating REPORT,
+VigilantBSP will use the same line break format
+that the source RMB options file used. For example, 
+Windows program Notepad recognises only CRLF line
+breaks, whereas many text editor programs in
+GNU/Linux generate LF line breaks by default. So
+if you text program can display RMB options file
+correctly, the same program will display report
+file correctly as well.
+
+NOTE Since version 0.82a, INCLUDE will force 
+visibility in ALL cases except when EXCLUDE removes
+it (EXCLUDE has highest priority per RMB 
+documentation). This is the correct behavior: the
+one prescribed by RMB documentation AND how the 
+original RMB program behaves in practice. Before
+this correction was made, a bug also existed in 
+interaction between INCLUDE and DISTANCE: INCLUDE
+failed to force back visibility on sectors hidden
+by DISTANCE RMB option. Again, this did not match
+the documentation or the actual RMB program 
+behavior and is now fixed. In both cases, the 
+mistakes were due to trust placed in original 
+Zennode's implementation (found in its source
+code, since Zennode forgets to actually apply 
+RMB options anyway), which implementation was 
+wrong.
+
+NOTE Combining GROUP option with options that
+affect physical LOS computation (like DISTANCE)
+may cause noticeable slow down for technical
+reasons. Unlike RMB, VigilantBSP tries to 
+avoid copying visibility between sectors in one
+group unless it would take effect on gameplay
+and thus would be absolutely necessary, and those 
+slowdowns will happen when indeed such copying
+is absolutely necessary. Stricter observance of 
+"sectors in the same group share visibility"
+partially undoes graph optimization among other 
+things. The purpose of this note is to explain
+this is a known issue, and the note should
+not be misinterpreted as "I don't recommend
+using GROUP / combining it with DISTANCE, etc.".
+However, it is true that in VigilantBSP groups
+cannot speed up things (unlike the original RMB
+program, but that program is slow to begin with)
+and would rather achieve the opposite 
+performance-wise, so they should be instead
+considered useful when they are useful for the
+end result alone - the effect they have when they
+interact with other options (and certainly 
+using DISTANCE alone produces distinct result
+gameplay-wise than combining DISTANCE and GROUP:
+in the latter case, VigilantBSP does take to heart 
+the RMB documentation statement that a group is
+basically joined into one sector, so the distance 
+would be measured against the group, not the 
+individual sectors, resulting in less sectors
+hidden due to being at "distance greater than 
+max"). On the other hand, if RMB options file
+contains nothing but groups (no other options),
+then those groups are effectively no-op, whereas
+original RMB program would just drop reject 
+efficiency here, flagging a lot more sectors 
+as visible than the game engine needs to actually
+check.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================
@@ -1683,17 +1783,34 @@ Examples:
 
 1) vigilantbsp mylvlset.wad -m:e1m1 
 
-rebuilds only E1M1 map in mylvlset.wads
+rebuilds only E1M1 map in mylvlset.wad
 
 2) vigilantbsp D2lvlset.wad -m:map03+map05+map07 -o testD2.wad
 
 copies contents from D2lvlset.wad to testD2.wad but rebuilds
 maps MAP03, MAP05, MAP07, while others remain intact.
 
-NOTE: building a mapset in deterministic mode and then rebuilding
-only one map, also in deterministic mode, even with the same arguments,
-may not produce the same byte-for-byte results, although lump
-content is identical. This has to do with the order in which lumps
+Since version v0.82a, you can also invert the meaning and exclude
+specific maps from rebuilding. You do this by adding exclamation 
+mark between "-" and "m", like this: 
+
+3) vigilantbsp mylvlset.wad -!m:e2m2
+
+rebuilds all maps in mylvlset.wad, except for E2M2
+
+4) vigilantbsp D2lvlset.wad -!m:map21+map32 -o testwhatever.wad
+copies contents from D2lvlset.wad to testwhatever.wad, but 
+rebuilds every map except MAP21 and MAP32
+
+You can specify a map list only once, so repeating the -m or
+-!m option, or combining them together, is not possible.
+
+NOTE: if you build an entire mapset in determistic mode,
+and let's say output file was wad01.wad, and then rebuild
+only one map in it, also in deterministic mode, with output
+to wad02.wad, you won't receive the same byte-for-byte results
+between wad01.wad and wad02.wad, even when all other arguments are 
+the same. This has to do with the order in which lumps
 are written (not the order in which they are listed, but the actual
 byte regions referenced by those lumps), this order being different
 for rebuilt levels from how lumps are listed when you open wad in editor
@@ -1764,7 +1881,7 @@ this option is probably condemned to obscurity.
 
 
 --detailnodes=<n>, where n is a number
-This controls whether nodes will be build with increased precision,
+This controls whether nodes will be built with increased precision,
 with options being such as always, never, or conditionally etc.
 NOTE: It has no effect and will be ignored when building Zdoom
 extended or compressed nodes - they are always built to a much 
@@ -1799,7 +1916,7 @@ Options are:
 	VigilantBSP 0.75a didn't build this map correctly with extended 
 	nodes either, but that is fixed in 0.78a+.
 	
-	--detailednodes=2
+	--detailnodes=2
 	(alternative way to specify: --detailnodes+ )
 	Always use detailed algorithm whether building vanilla or DeeP nodes.
 	Might not be a good idea for vanilla maps pushing limits but that
@@ -1807,12 +1924,13 @@ Options are:
 	be possible to build a vanilla map that needs this, so if heuristic
 	fails to detect that case you can force increased precision.
 	
-	--detailednodes=3
+	--detailnodes=3
 	Use heuristic to see if increased precision is to be used, whether
 	building vanilla format nodes or DeeP.
 	
 If heuristic is used, the decision made should be included in verbose
 output lvl 1 (pass -v option).
+
 
 --sidecache=<n>, where n is a number
 Introduced in v0.82a, together with Zennode-like partition algorithm.

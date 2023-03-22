@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -58,6 +58,7 @@ type ParseContext struct {
 	command     []byte // converted to upper case
 	getParseDef func(tblIdx int) *ParseDef
 	wordScanner *bufio.Scanner
+	CRLF        bool // whether source used windows-style line breaks
 }
 
 // Workaround to prevent Go compiler claiming there is definition "loop"
@@ -85,7 +86,7 @@ var RMB_PARSE_TABLE = []ParseDef{
 	{[]byte("DOOR"), []byte("N"), RMB_DOOR, ParseGeneric, false},
 	{[]byte("E*M*") /*string unused*/, nil, RMB_EXMY_MAP, ParseMap, true},
 	{[]byte("EXCLUDE"), []byte("LL"), RMB_EXCLUDE, ParseGeneric, true},
-	{[]byte("GROUP"), []byte("NL"), RMB_GROUP, ParseGeneric, false},
+	{[]byte("GROUP"), []byte("NL"), RMB_GROUP, ParseGeneric, true}, // FIXME not finished yet, actually. Revert to false if fail to finish before release
 	{[]byte("INCLUDE"), []byte("LL"), RMB_INCLUDE, ParseGeneric, true},
 	{[]byte("INVERT"), nil, RMB_INVERT, ParseINVERT, true},
 	{[]byte("LEFT"), []byte("N"), RMB_LEFT, ParseGeneric, false},
@@ -429,7 +430,10 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 	if fname[0] == '"' {
 		// Name is specified in double quotes, can contain spaces
 		// Damn, this can't be solved with this cursed scanner!
-		context.LogError("filename in quotes is not supported yet. Will be fixed in next release")
+		// FIXME actually fix this, was promised in "next release" in previous
+		// message redaction, but I bet a release already happened without it
+		// being fixed... ah wait this whole function is not yet supported xD
+		context.LogError("filename in quotes is not supported yet.")
 		return false
 	}
 
@@ -516,6 +520,7 @@ func LoadRMB(src []byte, fname string) (bool, *LoadedRMB) {
 		allFrames:   allFrames,
 		fname:       fname,
 		getParseDef: GetParseDef,
+		CRLF:        isCRLF(src),
 	}
 	for sc.Scan() {
 		liNum++ // lines start at 1
@@ -544,6 +549,14 @@ func LoadRMB(src []byte, fname string) (bool, *LoadedRMB) {
 		return false, nil
 	}
 	return true, rmbParseContextToLoadedRMB(&context)
+}
+
+func isCRLF(src []byte) bool {
+	i := bytes.IndexByte(src, '\n')
+	if i <= 0 {
+		return false
+	}
+	return src[i-1] == '\r'
 }
 
 // Removes global RMB frame if there are no commands in it
@@ -576,10 +589,23 @@ func rmbParseContextToLoadedRMB(context *ParseContext) *LoadedRMB {
 	}
 	res := &LoadedRMB{
 		mapFrames: context.idToFrame,
+		srcFile:   context.fname,
+		CRLF:      context.CRLF,
 	}
 	if frames[0].Id.Type == RMB_FRAME_GLOBAL {
 		res.globalFrame = &(frames[0])
-	} // otherwise globalFrame remains nil
+		res.globalFrame.RMB = res
+		for i, _ := range res.globalFrame.Commands {
+			res.globalFrame.Commands[i].Frame = res.globalFrame
+		}
+	}
+
+	for _, v := range res.mapFrames {
+		v.RMB = res
+		for i, _ := range v.Commands {
+			v.Commands[i].Frame = v
+		}
+	}
 	return res
 }
 

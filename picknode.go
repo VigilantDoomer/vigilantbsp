@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -173,6 +173,9 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		PreciousSplit: int(INITIAL_BIG_COST),
 	}
 	cnt := 0
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
 		cnt++
@@ -239,12 +242,34 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// will keep being "best", yes. Other partitioners have this quirk,
 			// too
 			cost += diff
-			if cost < bestcost || (cost == bestcost &&
-				minorIsBetter_Precious(minors, bestMinors)) {
-				// We have a new better choice
-				bestcost = cost
-				best = part // Remember which Seg
-				bestMinors = minors
+			if w.parts == nil { // default path (for modes other than hard multi-tree)
+				if cost < bestcost || (cost == bestcost &&
+					minorIsBetter_Precious(minors, bestMinors)) {
+					// We have a new better choice
+					bestcost = cost
+					best = part // Remember which Seg
+					bestMinors = minors
+				}
+			} else { // hard multi-tree
+				strictlyBetter := false
+				if cost < bestcost {
+					strictlyBetter = true
+				} else if cost == bestcost {
+					if minorIsBetter_Precious(minors, bestMinors) {
+						strictlyBetter = true
+					} else if !minorIsBetter_Precious(bestMinors, minors) {
+						// it's a tie!
+						w.parts = append(w.parts, part)
+					}
+				}
+
+				if strictlyBetter {
+					bestcost = cost
+					best = part
+					bestMinors = minors
+					w.parts = w.parts[:0]
+					w.parts = append(w.parts, part)
+				}
 			}
 		}
 
@@ -422,6 +447,9 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		PreciousSplit: int(INITIAL_BIG_COST),
 	}
 	cnt := 0
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
 		cnt++
@@ -536,7 +564,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 		cost += diff
 		if cost > bestcost || (cost == bestcost &&
-			!minorIsBetter_Precious(minors, bestMinors)) {
+			w.parts == nil && !minorIsBetter_Precious(minors, bestMinors)) {
 			continue
 		}
 
@@ -558,15 +586,41 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		if slen < l {
 			cost += w.pickNodeFactor
 			if cost > bestcost || (cost == bestcost &&
-				!minorIsBetter_Precious(minors, bestMinors)) {
+				w.parts == nil && !minorIsBetter_Precious(minors, bestMinors)) {
 				continue
 			}
 		}
 
-		// We have a new better choice
-		bestcost = cost
-		best = part // Remember which Seg
-		bestMinors = minors
+		if w.parts == nil { // default path - taken except for hard multi-tree
+
+			// We have a new better choice
+			bestcost = cost
+			best = part // Remember which Seg
+			bestMinors = minors
+
+		} else { // hard multi-tree says hello
+
+			strictlyBetter := false
+			if cost < bestcost {
+				strictlyBetter = true
+			} else { // should be cost == bestcost already
+				if minorIsBetter_Precious(minors, bestMinors) {
+					// new one has better secondaries, so there is no tie
+					strictlyBetter = true
+				} else if !minorIsBetter_Precious(bestMinors, minors) {
+					// minors are equal quality - it's a tie
+					w.parts = append(w.parts, part)
+				} // else it was worse
+			}
+			if strictlyBetter {
+				bestcost = cost
+				best = part
+				bestMinors = minors
+				w.parts = w.parts[:0]
+				w.parts = append(w.parts, part)
+			}
+
+		}
 	}
 	return best // All finished, return best Seg
 }
@@ -729,10 +783,17 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		Unmerged:      int(INITIAL_BIG_COST),
 	}
 	var parts []SegMinorBundle
-	if w.multipart {
+	if w.multipart { // zenscore used for secondary - not to be confused for multi-tree
 		parts = make([]SegMinorBundle, 0)
 	}
 	cnt := 0
+	if w.parts != nil { // and this one is for HARD multi-tree, oh yes
+		w.parts = w.parts[:0]
+		// Of note, if there is only one appropriate candidate, w.parts is not
+		// required to contain it - it will be automatically filled in
+		// w.DivideSegs*. Thus exiting this function with empty non-nil w.parts
+		// is not an error
+	}
 
 	for part := ts; part != nil; part = part.next { // Count once and for all
 		cnt++
@@ -872,7 +933,8 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// other approach ...
 			minors.Unmerged = unmerged
 		}
-		if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+		if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+			!w.minorIsBetter(minors, bestMinors)) {
 			continue
 		}
 
@@ -887,7 +949,8 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// rather where it is in other functions.
 			if w.diagonalPenalty != 0 && (part.pdx != 0 && part.pdy != 0) {
 				cost += w.diagonalPenalty
-				if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+				if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+					!w.minorIsBetter(minors, bestMinors)) {
 					continue
 				}
 			}
@@ -906,8 +969,8 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			if l == 0 {
 				// Glaring error - got zero non-void length, but obviously
 				// partition crosses this node and has non-zero length
-				l = GetFullPartitionLength(part, bbox)
-				Log.Verbose(2, "Recomputing partition length the old way, because I got zero length doing it the new way.\n")
+				l = GetFullPartitionLength(w, part, bbox)
+				w.mlog.Verbose(2, "Recomputing partition length the old way, because I got zero length doing it the new way.\n")
 			}
 
 			// part II - Remove overlaps from slen
@@ -922,7 +985,7 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 				// total overlap length from the total length. For alpha version the
 				// logic will stay in place; for squeezing the last bit of performance,
 				// consider a rewrite
-				Log.Verbose(2, "Oops, got negative length after removing overlaps! Must have overflowed somewhere.\n")
+				w.mlog.Verbose(2, "Oops, got negative length after removing overlaps! Must have overflowed somewhere.\n")
 				slen = 0
 			}
 
@@ -935,7 +998,8 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			// than 1/2 of its length cutting through open (not void) space.
 			if slen < l {
 				cost += w.pickNodeFactor
-				if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+				if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+					!w.minorIsBetter(minors, bestMinors)) {
 					continue
 				}
 			}
@@ -954,27 +1018,65 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// upon as accurate
 		if !hasLeft && w.VigilantGuard_IsBadPartition(part, ts, cnt) {
 			cost += w.pickNodeFactor * ONESIDED_MULTIPLY
-			if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+			if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+				!w.minorIsBetter(minors, bestMinors)) {
 				continue
 			}
 		}
 
-		// We have a new better choice
-		if parts != nil { // multipart == true
-			if bestcost != cost {
-				// Different (lesser cost) found
-				// Forget all parts for previous bestcost
-				parts = parts[:0]
+		if w.parts == nil || parts != nil { // default
+			// w.parts pertains to HARD multi-tree, and parts pertains to
+			// zenscore as secondary metric
+			// So, since we are here, either it's not HARD multi-tree, or
+			// zenscore is used as secondary, or both.
+			// In the case of zenscore + HARD multi-tree, w.parts for HARD
+			// multi-tree will be  filled outside of the loop, after going
+			// through zenscore module.
+			// Note that if parts != nil, w.minorIsBetter return true always
+			// (it is assigned to minorIsBetter_Always callback), so if
+			// w.parts also != nil (we skipped comparing the minors), we still
+			// don't owe to compare minors here
+
+			// We have a new better choice
+			if parts != nil { // multipart == true
+				if bestcost != cost {
+					// Different (lesser cost) found
+					// Forget all parts for previous bestcost
+					parts = parts[:0]
+				}
+				parts = append(parts, SegMinorBundle{
+					seg:   part,
+					minor: minors,
+				})
 			}
-			parts = append(parts, SegMinorBundle{
-				seg:   part,
-				minor: minors,
-			})
+			bestcost = cost
+			bestMinors = minors
+			best = part // Remember which Seg
+			executed = true
+
+		} else { // hard multi-tree salutes you (and zenscore is not used, apparently)
+			strictlyBetter := false
+			if cost < bestcost {
+				strictlyBetter = true
+			} else {
+				if w.minorIsBetter(minors, bestMinors) {
+					strictlyBetter = true
+				} else if !w.minorIsBetter(bestMinors, minors) {
+					// a tie
+					if minors.SectorsSplit > 0 || minors.SegsSplit > 0 {
+						w.parts = append(w.parts, part)
+					} // not notable otherwise (hypothesis) - decreases amount of trees to try
+				} // else it was worse
+			}
+			if strictlyBetter {
+				bestcost = cost
+				bestMinors = minors
+				best = part // Remember which Seg
+				executed = true
+				w.parts = w.parts[:0]
+				w.parts = append(w.parts, part)
+			}
 		}
-		bestcost = cost
-		bestMinors = minors
-		best = part // Remember which Seg
-		executed = true
 	}
 	w.incidental = w.incidental[:0]
 	if len(parts) > 1 {
@@ -986,26 +1088,45 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		ZenPickBestScore(depthScores)
 		if depthScores[0].scoreSeg != VERY_BAD_SCORE {
 			best = depthScores[0].seg
-			tst1, tst2, tst3, tst4 := depthScores[0].preciousSplit,
-				depthScores[0].scoreTotal,
-				depthScores[0].equivSplit,
-				depthScores[0].segSplit
-			track := 1
-			for i := 1; i < len(depthScores); i++ {
-				if tst1 == depthScores[i].preciousSplit &&
-					tst2 == depthScores[i].scoreTotal &&
-					tst3 == depthScores[i].equivSplit &&
-					tst4 == depthScores[i].segSplit {
-					track++
-				} else {
-					break
-				}
+			if w.parts != nil {
+				w.parts = append(w.parts, best)
 			}
-			if track > 1 {
-				// The frequency of this makes me wonder if Zennode's method
-				// was just a deterministic shuffle, like simulating random
-				// selection of a partition (except for few bad candidates)
-				Log.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+			if w.parts != nil || config.VerbosityLevel >= 4 { // reference to global: config
+				// Either need to grab all same-scoring stuff for hard multi-tree,
+				// or have high enough verbosity level to show ambiguity rank to
+				// user
+				tst1, tst2, tst3, tst4 := depthScores[0].preciousSplit,
+					depthScores[0].scoreTotal,
+					depthScores[0].equivSplit,
+					depthScores[0].segSplit
+				if tst3 > 0 || tst4 > 0 {
+					//if tst3 > 1 || tst4 > 2 {
+					// Yes, you got it right - I decided to disallow multi-tree
+					// branch when there is no more than 1 equivSplit and no
+					// more than 2 segSplit. It seems that when these values
+					// are less, our candidates often form a convex loop on
+					// the outer edge. Even with values greater, though, we often
+					// have a symmetric setup nonetheless
+					track := 1
+					for i := 1; i < len(depthScores); i++ {
+						if tst1 == depthScores[i].preciousSplit &&
+							tst2 == depthScores[i].scoreTotal &&
+							tst3 == depthScores[i].equivSplit &&
+							tst4 == depthScores[i].segSplit {
+							if w.parts != nil {
+								w.parts = append(w.parts, depthScores[i].seg)
+							}
+							track++
+						} else {
+							break
+						}
+					}
+					if track > 1 {
+						w.mlog.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+						/*Log.Verbose(1, "track = %d cnt = %d precSplit=%d scoreTotal=%d equivSplit=%d segSplit=%d\n",
+						track, cnt, tst1, tst2, tst3, tst4)*/
+					}
+				}
 			}
 		}
 	}
@@ -1120,7 +1241,9 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 				// a=0 && b=0 => co-linear, must share alias then
 				// partners are supposed to be co-linear, so they also get
 				// covered here.
-				check.alias = part.alias
+				if check.alias != part.alias && vetAliasTransfer2(part, check) {
+					check.alias = part.alias
+				}
 				*slen += check.len
 				// add to incidental list. Will be used to correct slen
 				// contribution above
@@ -1265,7 +1388,7 @@ func GetPartitionLength_LegacyWay(part *NodeSeg, bbox *NodeBounds) Number {
 
 // Returns full partition line length within the bounds, not excluding void
 // space, but using floating point math for accuracy
-func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) Number {
+func GetFullPartitionLength(w *NodesWork, part *NodeSeg, bbox *NodeBounds) Number {
 	var l Number       // length of partition line
 	if part.pdx == 0 { // vertical line
 		l = Number(bbox.Ymax - bbox.Ymin)
@@ -1280,7 +1403,7 @@ func GetFullPartitionLength(part *NodeSeg, bbox *NodeBounds) Number {
 		c.pey = partSegCoords.EndVertex.Y
 		c.pdx = c.pex - c.psx
 		c.pdy = c.pey - c.psy
-		contextStart, contextEnd, _ := PartitionInBoundary(part, &c, bbox.Xmax,
+		contextStart, contextEnd, _ := PartitionInBoundary(w, part, &c, bbox.Xmax,
 			bbox.Ymax, bbox.Xmin, bbox.Ymin, partSegCoords)
 		if contextStart == nil {
 			// Backup
@@ -1303,8 +1426,8 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 	// We run computation once per alias, and store it in cache
 	if part.alias == 0 {
 		// Programmer error
-		Log.Verbose(2, "What? Alias should not be zero here. Falling back to old way of computing partition length. (Programmer error)")
-		return GetFullPartitionLength(part, bbox)
+		w.mlog.Verbose(2, "What? Alias should not be zero here. Falling back to old way of computing partition length. (Programmer error)")
+		return GetFullPartitionLength(w, part, bbox)
 	}
 	nonVoidStruc, ok := w.nonVoidCache[part.alias]
 	if !ok {
@@ -1314,24 +1437,24 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		w.nonVoidCache[part.alias] = nonVoidStruc
 	}
 	if !nonVoidStruc.success {
-		//Log.Verbose(2, "Computing old value...\n")
-		return GetFullPartitionLength(part, bbox)
+		//w.mlog.Verbose(2, "Computing old value...\n")
+		return GetFullPartitionLength(w, part, bbox)
 	}
 
-	//Log.Verbose(2, "Computing NEW value...\n")
+	//w.mlog.Verbose(2, "Computing NEW value...\n")
 	// Apply bbox boundaries now. Damn, this means messing with OrientedVertex's
 	// again. Fuck.
-	contextStart, contextEnd, _ := PartitionInBoundary(part,
+	contextStart, contextEnd, _ := PartitionInBoundary(w, part,
 		&(nonVoidStruc.c), bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 		nonVoidStruc.partSegCoords)
 	if contextStart == nil || contextEnd == nil {
 		// No worry, this error shouldn't happen anymore
-		Log.Verbose(2, "This cannot be! Got so far but now failing (got all the segments of line on the map to see when it goes through the void and when it does not, but failed to determine the edges of line touching the current node's bounding box)\n")
-		return GetFullPartitionLength(part, bbox)
+		w.mlog.Verbose(2, "This cannot be! Got so far but now failing (got all the segments of line on the map to see when it goes through the void and when it does not, but failed to determine the edges of line touching the current node's bounding box)\n")
+		return GetFullPartitionLength(w, part, bbox)
 	}
 
 	if contextStart.equalToWithEpsilon(contextEnd) {
-		Log.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
+		w.mlog.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
 			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 			contextStart.X, contextStart.Y, contextEnd.X, contextEnd.Y)
@@ -1366,12 +1489,12 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 	if hitStart < 0 || hitStop < 0 {
 		// Really, how can this be? We had this seg within our bounds, but my
 		// deconstruction didn't see it there
-		Log.Verbose(2, "to below: %s", nonVoidStruc.original.toString())
-		Log.Verbose(2, "More dropouts! %v %v %s\n  ...... %d [%s-%s]\n",
+		w.mlog.Verbose(2, "to below: %s", nonVoidStruc.original.toString())
+		w.mlog.Verbose(2, "More dropouts! %v %v %s\n  ...... %d [%s-%s]\n",
 			hitStart, hitStop,
 			CollinearVertexPairCByCoord(nonVoid).toString(), part.Linedef,
 			contextStart.toString(), contextEnd.toString())
-		return GetFullPartitionLength(part, bbox)
+		return GetFullPartitionLength(w, part, bbox)
 	}
 
 	/* // Doesn't actually happen. But length is yielded zero. How?
@@ -1403,15 +1526,15 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 		if !precomputedInvalid { // whole of current interval goes in
 			L = L + nonVoid[i].len
 			if nonVoid[i].len == 0 {
-				Log.Verbose(2, "non-void interval computed with zero length (precomputed)\n")
+				w.mlog.Verbose(2, "non-void interval computed with zero length (precomputed)\n")
 			} else if nonVoid[i].len < 0 {
-				Log.Verbose(2, "what? non-void interval computed with NEGATIVE length (precomputed)\n")
+				w.mlog.Verbose(2, "what? non-void interval computed with NEGATIVE length (precomputed)\n")
 			}
 		} else { // only part of current interval goes in
 			dx := thisEnd.X - thisStart.X
 			dy := thisEnd.Y - thisStart.Y
 			/*if part.Linedef == 1897 && hitStart == 3 && hitStop == 3 {
-				Log.Printf("debug %v %v %s-%s context:%s-%s\n", dx, dy, thisStart.toString(), thisEnd.toString(),
+				w.mlog.Printf("debug %v %v %s-%s context:%s-%s\n", dx, dy, thisStart.toString(), thisEnd.toString(),
 					contextStart.toString(), contextEnd.toString())
 			}*/
 			l0 := Number(math.Sqrt(dx*dx + dy*dy))
@@ -1419,16 +1542,16 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 			if l0 == 0 {
 				// ok, this is a normal occurence, actually. Range can cut the
 				// interval right at the end point
-				/*Log.Verbose(2, "part of non-void interval REcomputed with zero length against current nodebox %s - %s (%d)\n ....... %s ............... range (%d,%d)-(%d,%d)\n",
+				/*w.mlog.Verbose(2, "part of non-void interval REcomputed with zero length against current nodebox %s - %s (%d)\n ....... %s ............... range (%d,%d)-(%d,%d)\n",
 				thisStart.toString(), thisEnd.toString(), part.Linedef, Future_CollinearVertexPairCByCoord(nonVoid).toString(),
 				bbox.Xmin, bbox.Ymin, bbox.Xmax, bbox.Ymax)*/
 			} else if l0 < 0 {
-				Log.Verbose(2, "what? sqrt yieled NEGATIVE value after cast?\n")
+				w.mlog.Verbose(2, "what? sqrt yieled NEGATIVE value after cast?\n")
 			}
 		}
 	}
 	if L == 0 {
-		Log.Verbose(2, "returning 0 (sad)\n ........... %d %s ........ range (%d,%d) - (%d, %d) hit: %d,%d \n",
+		w.mlog.Verbose(2, "returning 0 (sad)\n ........... %d %s ........ range (%d,%d) - (%d, %d) hit: %d,%d \n",
 			part.Linedef, CollinearVertexPairCByCoord(nonVoid).toString(),
 			bbox.Xmin, bbox.Ymin, bbox.Xmax, bbox.Ymax,
 			hitStart, hitStop)
@@ -1444,6 +1567,9 @@ func subPickNode_fast(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	var bestH, bestV *NodeSeg
 	oldDistH := Number(-1)
 	oldDistV := Number(-1)
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	midX := (bbox.Xmax + bbox.Xmin) >> 1
 	midY := (bbox.Ymax + bbox.Ymin) >> 1
@@ -1529,6 +1655,14 @@ func subPickNode_fast(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 				// We have a new better choice
 				bestcost = cost
 				best = part // Remember which Seg
+				if w.parts != nil {
+					w.parts = w.parts[:0]
+					w.parts = append(w.parts, part)
+				}
+			} else if cost == bestcost {
+				if w.parts != nil {
+					w.parts = append(w.parts, part)
+				}
 			}
 		}
 	}
@@ -1702,10 +1836,8 @@ func (w *NodesWork) PartIsPolyobjSide(part, check *NodeSeg) bool {
 func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	super *Superblock) *NodeSeg {
 	best := ts // make sure always got something to return
-	cnt := 0
-
-	for part := ts; part != nil; part = part.next { // Count once and for all
-		cnt++
+	if w.parts != nil {
+		w.parts = w.parts[:0]
 	}
 
 	var previousPart *NodeSeg // keep track of previous partition - test only one seg per partner pair
@@ -1810,8 +1942,36 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	}
 	if len(w.zenScores) > 0 {
 		ZenPickBestScore(w.zenScores)
-		// Log.Printf("\n", w.zenScores[0]) // debug
 		best = w.zenScores[0].seg
+		if w.parts != nil {
+			w.parts = append(w.parts, best)
+		}
+		if w.parts != nil || config.VerbosityLevel >= 4 { // reference to global: config
+			// Either need to grab all same-scoring stuff for hard multi-tree,
+			// or have high enough verbosity level to show ambiguity rank to
+			// user
+			tst1, tst2, tst3, tst4 := w.zenScores[0].preciousSplit,
+				w.zenScores[0].scoreTotal,
+				w.zenScores[0].equivSplit,
+				w.zenScores[0].segSplit
+			track := 1
+			for i := 1; i < len(w.zenScores); i++ {
+				if tst1 == w.zenScores[i].preciousSplit &&
+					tst2 == w.zenScores[i].scoreTotal &&
+					tst3 == w.zenScores[i].equivSplit &&
+					tst4 == w.zenScores[i].segSplit {
+					if w.parts != nil {
+						w.parts = append(w.parts, w.zenScores[i].seg)
+					}
+					track++
+				} else {
+					break
+				}
+			}
+			if track > 1 {
+				w.mlog.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+			}
+		}
 	}
 	return best // All finished, return best Seg
 }

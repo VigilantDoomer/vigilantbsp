@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -361,9 +361,9 @@ func SetValiditySocket(lumpName string, reference []string, validitySub *[]int,
 }
 
 // Returns whether a level should be rebuilt based on current configuration
-// If user supplied arguments specifying precise levels that should be rebuilt,
-// they must have been stored in configuration in upper case, or this will fail
-// to work as intended
+// If user supplied arguments specifying precise levels that should be (not)
+// rebuilt, they must have been stored in configuration in upper case, or this
+// will fail to work as intended
 func CanRebuildThisLevel(levelName []byte) bool {
 	// Go treats nil (null) array as having zero size
 	if len(config.FilterLevel) == 0 {
@@ -372,11 +372,19 @@ func CanRebuildThisLevel(levelName []byte) bool {
 
 	for _, entry := range config.FilterLevel {
 		if bytes.Equal(entry, levelName) {
-			return true
+			if config.FilterProhibitsLevels {
+				// filter excludes specific levels
+				return false
+			} else {
+				// filter includes specific levels
+				return true
+			}
 		}
 	}
 
-	return false
+	// if filter was inclusive, return false, if it was excluding levels from
+	// being rebuilt, return true
+	return config.FilterProhibitsLevels
 }
 
 // So, we have an input wad directory, and must return an output wad directory
@@ -625,9 +633,13 @@ func main() {
 	// syntax.
 	if config.UseRMB {
 		RMB = LoadAssociatedRMB(config.InputFileName, &mainFileControl)
+		if RMB != nil {
+			Log.Printf("Successfully loaded RMB file %s\n",
+				mainFileControl.rmbFileName)
+		}
 	}
 
-	// Try open it
+	// Try open input wad
 	f, err := mainFileControl.OpenInputFile(config.InputFileName)
 	if err != nil {
 		Log.Error("An error has occured while trying to read %s: %s\n",
@@ -1038,5 +1050,21 @@ func GetBounds(vertices []Vertex) LevelBounds {
 		Ymin: Ymin,
 		Xmax: Xmax,
 		Ymax: Ymax,
+	}
+}
+
+// Print with platform-specific linebreaks indicated by CRLF argument
+func WriterPrintfln(w io.Writer, CRLF bool, format string, a ...interface{}) {
+	if len(format) > 0 && format[len(format)-1] == '\n' {
+		format = string([]byte(format)[:len(format)-1])
+	}
+	w.Write([]byte(appendCRLF(CRLF, fmt.Sprintf(format, a...))))
+}
+
+func appendCRLF(CRLF bool, s string) string {
+	if CRLF {
+		return s + "\r\n"
+	} else {
+		return s + "\n"
 	}
 }

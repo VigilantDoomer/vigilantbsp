@@ -63,7 +63,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
 
-	partStart, partEnd, bside := PartitionInBoundary(part, &c, blXMax,
+	partStart, partEnd, bside := PartitionInBoundary(w, part, &c, blXMax,
 		blYMax, blXMin, blYMin, partSegCoords)
 	if partStart == nil || partEnd == nil {
 		// Damnation!
@@ -94,7 +94,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		MOVE_SAFE_MARGIN)
 	partOrient := c.getIntersectionPoint_InfiniteLines()
 	if partOrient == nil {
-		Log.Verbose(2, "Failed to compute a special vertex for clockwise-triangle checking.\n")
+		w.mlog.Verbose(2, "Failed to compute a special vertex for clockwise-triangle checking.\n")
 	}
 
 	// Chapter II
@@ -161,7 +161,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 		// vertex as the linedef! Solved by using linedef coords instead of
 		// seg coords in extended mode
 		/*if aline == 2819 && part.Linedef == 2820 {
-			Log.Printf("part %d aline %d part_alias %d part_coords %s-%s pt1 = %s, pt2 = %s\n .......... ic (%f,%f)-(%f,%f)",
+			w.mlog.Printf("part %d aline %d part_alias %d part_coords %s-%s pt1 = %s, pt2 = %s\n .......... ic (%f,%f)-(%f,%f)",
 				part.Linedef, aline, part.alias, partStart.toString(), partEnd.toString(), pt1.toString(), pt2.toString(),
 				c.psx, c.psy, c.pex, c.pey)
 		}*/
@@ -173,7 +173,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	if len(pts) < 2 {
 		// Need at least two points: one where map is entered, another one
 		// where it is exited
-		Log.Verbose(2, "Failed to produce a solid hits array: %d items (need at least two)\n",
+		w.mlog.Verbose(2, "Failed to produce a solid hits array: %d items (need at least two)\n",
 			len(pts))
 		return NonVoidPerAlias{
 			success: false,
@@ -197,7 +197,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 				pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
 				partEnd.X, partEnd.Y)
 		}
-		Log.Verbose(2, "Failed to produce a solid hits array for partition line %d: %t %t %s.\n",
+		w.mlog.Verbose(2, "Failed to produce a solid hits array for partition line %d: %t %t %s.\n",
 			part.Linedef, startBound, endBound, tailStr)
 		// Bail out, damn it
 		return NonVoidPerAlias{
@@ -245,14 +245,14 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	if !fluger {
 		// Output warning, but persist nonetheless (instead of failing), unless
 		// PersistThroughInsanity was set to false
-		// Log.Verbose(2, "Sanity check failed! Evaluated partition line (%d,%d)-(%d,%d) doesn't consistently go in/out of the void when crossing solid lines. %s\nOld content: %s",
+		// w.mlog.Verbose(2, "Sanity check failed! Evaluated partition line (%d,%d)-(%d,%d) doesn't consistently go in/out of the void when crossing solid lines. %s\nOld content: %s",
 		// part.psx, part.psy, part.pex, part.pey, pts.toString(), ptsOld.toString())
-		Log.Verbose(2, "... for the next line - old content: %s",
+		w.mlog.Verbose(2, "... for the next line - old content: %s",
 			ptsOld.toString())
-		Log.Verbose(2, "Sanity check failed! Evaluated partition line %d (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines (incidence count: %d). %s\n",
+		w.mlog.Verbose(2, "Sanity check failed! Evaluated partition line %d (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines (incidence count: %d). %s\n",
 			part.Linedef, part.psx, part.psy, part.pex, part.pey, cntIncident, pts.toString()) //pts[1:len(pts)-1].toString())
 		/*if part.Linedef == 13993 && len(pts) >= 6 {
-			Log.Printf("%s=%s: %t %t %t (%3.10f,%3.10f)-(%3.10f,%3.10f)\n", pts[3].toString(), pts[4].toString(), pts[3].v == pts[4].v,
+			w.mlog.Printf("%s=%s: %t %t %t (%3.10f,%3.10f)-(%3.10f,%3.10f)\n", pts[3].toString(), pts[4].toString(), pts[3].v == pts[4].v,
 				pts[3].v.X == pts[4].v.X, pts[3].v.Y == pts[4].v.Y,
 				pts[3].v.X, pts[3].v.Y, pts[4].v.X, pts[4].v.Y)
 		}*/ // see parameters for building Water Spirit in valuesEqual
@@ -288,7 +288,7 @@ func (w *NodesWork) ComputeNonVoid(part *NodeSeg) NonVoidPerAlias {
 	}
 
 	if len(nonVoid) == 0 {
-		Log.Verbose(2, "part %d trace produced ZERO non-void intervals\n",
+		w.mlog.Verbose(2, "part %d trace produced ZERO non-void intervals\n",
 			part.Linedef)
 	}
 
@@ -317,7 +317,7 @@ func RoundToFixed1616(v *FloatVertex) {
 // line and a bounding box represented by blXMax, blYMax, blXMin, blYMin.
 // Argument part is only used for log output (linedef index etc.), the values
 // are computed using c (IntersectionContext) and partSegCoords instead
-func PartitionInBoundary(part *NodeSeg, c *FloatIntersectionContext,
+func PartitionInBoundary(w *NodesWork, part *NodeSeg, c *FloatIntersectionContext,
 	blXMax, blYMax, blXMin, blYMin int, partSegCoords VertexPairC) (*FloatVertex, *FloatVertex, int) {
 
 	partStart := new(FloatVertex)
@@ -360,7 +360,7 @@ func PartitionInBoundary(part *NodeSeg, c *FloatIntersectionContext,
 				if sideIdx < 2 {
 					side[sideIdx] = linesTried
 				} else {
-					Log.Verbose(2, "More than 2 intersection points between line and a box - error.\n")
+					w.mlog.Verbose(2, "More than 2 intersection points between line and a box - error.\n")
 					return nil, nil, 0
 				}
 			}
@@ -374,13 +374,13 @@ func PartitionInBoundary(part *NodeSeg, c *FloatIntersectionContext,
 			// before casting to int. Now, I don't seem to get this anymore on
 			// my big test map - good progress I made
 			// Hid behind verbose lvl2 (reason: message lack of clarity level / technical speak)
-			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
+			w.mlog.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
 				len(intersectPoints), linesTried)
-			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
+			w.mlog.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
 				part.Linedef, part.getFlip(), part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
-				Log.Verbose(2, "Intersection#%d: (%v, %v)",
+				w.mlog.Verbose(2, "Intersection#%d: (%v, %v)",
 					i, intersectPoints[i].X, intersectPoints[i].Y)
 			}
 			// Bail out
@@ -741,7 +741,6 @@ func (x *CollinearOrientedVertices) Coalesce() bool {
 			}
 			i = dropStart - 1 // so that next iteration starts on i = dropStart of current
 			*x = (*x)[:l]
-			// Log.Printf("iter: %s\n", x.toString())
 		}
 	}
 	a := (*x)[:l]
@@ -794,7 +793,6 @@ func (x *CollinearOrientedVertices) seekPastEqualsAndNoteSign(ov *OrientedVertex
 	a += leftCnt + rightCnt - 2
 	hasDominant := leftCnt != rightCnt
 	dominantDir := hasDominant && (leftCnt > rightCnt) // true means left, right otherwise
-	// Log.Printf("v = %s, len = %d, l: %d, r: %d, d? %t, d=%t\n", ov.toString(), a-startPos+1, leftCnt, rightCnt, hasDominant, dominantDir)
 	return a, hasDominant, dominantDir
 }
 

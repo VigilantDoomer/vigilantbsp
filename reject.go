@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -33,13 +33,24 @@ import (
 // to say those two even differ between themselves). It has to do with the fact
 // that reject computation depends on blockmap computation, and the algorithm
 // used is different, as it was derived from ZDBSP's code not zennodes' one.
+// NOTE Unlike what happens in RMB program, GROUP in VigilantBSP is effectively
+// a no-op unless other RMB options are present with which it must cooperate
+// then. Certain RMB options (example: DISTANCE, LINE) modify reject building
+// part rather directly, though, instead of being applied before/after main
+//  course, as the result these will force VigilantBSP to use "slow path"
+// instead of "fast path". But some other RMB options can still be combined with
+// GROUP in a "fast path"
 
 const VIS_UNKNOWN uint8 = 0x00
-const VIS_VISIBLE uint8 = 0x01     // At least 1 valid LOS found
-const VIS_HIDDEN uint8 = 0x02      // No actual LOS exists
+const VIS_VISIBLE uint8 = 0x01 // At least 1 valid LOS found
+const VIS_HIDDEN uint8 = 0x02  // No actual LOS exists
+/* Stuff from zennode dropped for actually making things worse and introducing
+bugs when DISTANCE and INCLUDE were used
 const VIS_RMB_VISIBLE uint8 = 0x04 // Special - ignores VIS_RMB_HIDDEN
 const VIS_RMB_HIDDEN uint8 = 0x08  // Special - force sector to be hidden
-const VIS_RMB_MASK uint8 = 0x0C    // Special - RMB option present
+const VIS_RMB_MASK uint8 = 0x0C    // Special - RMB option present*/
+
+const UNLIMITED_DISTANCE uint64 = 0xFFFFFFFFFFFFFFFF
 
 // Group of consts that decides what happens if self-referencing pedantic
 // mode fails. This is important when RMB contains certain effects that might
@@ -51,8 +62,25 @@ const (
 	PEDANTIC_FAIL_REPORTED         // screwed and encountered already
 )
 
+// Replaced with an empty struct in fast path
+type RejectExtraData struct {
+	// mixer intercepts VIS_HIDDEN directed at sectors which are part of some
+	// groups (produced by RMB effect GROUP) when DFS tries to aggressively hide
+	// sectors. This allows positive visibility to propagate between sectors in
+	// the same group during DFS. Mixer is merged after DFS is complete, by
+	// those VIS_HIDDEN values from mixer allowed to take over only VIS_UNKNOWN
+	// values, but not VIS_VISIBLE values in reject table
+	// Using mixer can and will result in significant slowdown, so even groups
+	// by default don't use it. Need both GROUP and DISTANCE effect to be
+	// present to justify the use of this, as GROUP must affect how distance
+	// in map units is counted.
+	mixer []byte
+}
+
 // RejectWork stands for reject work data
 type RejectWork struct {
+	// the stuff that goes into "extra" field disappears in "fast path"
+	extra       RejectExtraData
 	numSectors  int
 	rejectTable []byte
 	input       *RejectInput
@@ -76,6 +104,15 @@ type RejectWork struct {
 	src, tgt       TransLine        // memory optimization: used in testLinePair, which is not reentrant. Allocate once, reuse every time.
 	p1, p2, p3, p4 IntVertex        // memory optimization: used in rejectLOS.go -> initializeWorld, another non-reentrant function
 	seenLines      [65536 / 8]uint8 // replaces checkLine bool array, here we use unsigned bytes to store them compactly
+	// groups
+	hasGroups bool       // whether actual group functionality is on
+	groups    []RejGroup // length should ALWAYS equal number of sectors
+	// groupShareVis == true means groups need - faithful to RMB documentation -
+	// confer visibility between groupsiblings to produce reject consistent with
+	// RMB options.
+	// groupShareVis == true implies groups == true, but implication does not
+	// hold in reverse
+	groupShareVis bool
 	// rejectDFS.go junk
 	graphTable GraphTable
 	// misc
@@ -166,10 +203,79 @@ type Neighboring struct {
 	bigIndex   int
 }
 
+// A group is initially created for every sector and includes that sector
+// In fact, it continues to include it even after that sector joins some other
+// group (in this case, the group with the same index as sector is changing
+// attributes the following way:
+// 1. legal becomes false;
+// 2. parent lists the index of group that sector has joined)
+type RejGroup struct {
+	// legal is true in either of two conditions:
+	// 1. the sector hasn't joined a group, so this group actually references to
+	// a lone sector
+	// 2. this is the sector under which grouping occurs (the number of sectors
+	// is >= 2)
+	// legal is false if sector belongs to a group that has different index than
+	// the sector
+	legal   bool
+	sectors []int
+	// parent - if legal == false, the index which group it belongs to.
+	// if legal == true, equal to its own index
+	parent int
+	// can be nil, which means neighbors weren't computed. Else expected to be
+	// up to date (derived from sectors neighbors). Neighbors of groups are
+	// always legal groups, and group index is index in RejectWork.groups
+	neighbors []int
+}
+
 // goroutine
 func RejectGenerator(input RejectInput) {
 	start := time.Now()
-	r := &RejectWork{
+
+	if !input.rmbFrame.isEmpty() {
+		Log.Printf("Reject: RMB options present.\n")
+	} else if config.UseRMB {
+		Log.Printf("Reject: no RMB options applicable to current map.\n")
+	}
+
+	// If true, must use more complicated / more difficult to optimize (for
+	// compiler) algorithms
+	needSlowPath := false
+	// If true, a certain premise stated in RMB documentation DOES make a
+	// difference here and so must be ensured: if any sector in the group is
+	// visible (or sees some other sector), then all sectors in the same group
+	// must also be visible (or see that same sector)
+	groupShareVis := false
+
+	// Load RMB sector groups
+	hasGroups, groups := input.rmbFrame.LoadGroups(len(input.sectors))
+	if hasGroups && input.rmbFrame.HasOptionTrickyForGroups() {
+		Log.Verbose(1, "Reject: GROUP option is present together with some of trickier options. I won't be able to take shortcuts.\n")
+		needSlowPath = true
+		groupShareVis = true
+	}
+
+	// Select interface depending on whether certain effects are used
+	var intf RejectWorkIntf
+	if needSlowPath {
+		// This can handle anything, but slower
+		Log.Verbose(1, "Reject: using heavy interface (without shortcuts).\n")
+		intf = getRejectWorkIntf()
+	} else {
+		// Fast performance that covers 99% of use cases. Certain things here
+		// are inlined by Go compiler (see rejectdefs.go, markVisibilityFast)
+		Log.Verbose(1, "Reject: using default interface (with shortcuts).\n")
+		intf = getFastRejectWorkIntf()
+	}
+	data := intf.main(input, hasGroups, groupShareVis, groups)
+
+	Log.Printf("Reject took %s\n", time.Since(start))
+	input.rejectChan <- data
+}
+
+func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
+	groups []RejGroup) []byte {
+	*r = RejectWork{
 		numSectors:    len(input.sectors),
 		input:         &input,
 		linesToIgnore: input.linesToIgnore,
@@ -180,6 +286,9 @@ func RejectGenerator(input RejectInput) {
 		PedanticFailMode: PEDANTIC_FAIL_NOTMATTER,
 		fileControl:      input.fileControl,
 		mapName:          input.mapName,
+		hasGroups:        hasGroups,
+		groups:           groups,
+		groupShareVis:    groupShareVis,
 	}
 
 	// Check if any RMB options make use of "distance in SECTOR COUNT" values
@@ -207,7 +316,7 @@ func RejectGenerator(input RejectInput) {
 			Log.Printf("Forcing pedantic mode for self-referencing sectors because DISTANCE is present in RMB options")
 		}
 	} else {
-		r.maxDistance = 0xFFFFFFFFFFFFFFFF
+		r.maxDistance = UNLIMITED_DISTANCE
 	}
 
 	r.prepareReject()
@@ -215,6 +324,9 @@ func RejectGenerator(input RejectInput) {
 		r.ScheduleSolidBlockmap()
 		// Blockmap will be needed a little bit later, do other tasks meanwhile
 		r.createSectorInfo()
+		if r.hasGroups {
+			r.computeGroupNeighbors()
+		}
 		r.finishLineSetup()
 		r.eliminateTrivialCases()
 
@@ -233,6 +345,11 @@ func RejectGenerator(input RejectInput) {
 
 		if config.UseGraphsForLOS {
 			// --- Graphs code starts here
+			mixerSetup := false
+			if r.groupShareVis {
+				r.setupMixer()
+				mixerSetup = true
+			}
 			r.InitializeGraphs(r.numSectors)
 			// Try to order lines to maximize our chances of culling child sectors (zennode)
 			// VigilantDoomer: we use a different sort function in graphs branch
@@ -253,6 +370,9 @@ func RejectGenerator(input RejectInput) {
 			for i := 0; i < r.numSectors; i++ {
 				//UpdateProgress ( 1, 100.0 * ( double ) i / ( double ) noSectors );
 				r.ProcessSector(r.reSectors[i])
+			}
+			if mixerSetup {
+				r.mergeAndDestroyMixer()
 			}
 			// --- Graphs code ends here
 		} else {
@@ -297,12 +417,9 @@ func RejectGenerator(input RejectInput) {
 			for j := i + 1; j < r.numSectors; j++ {
 				Log.Printf("Sector %d <-> %d : %t\n", i, j, !isHidden(*r.rejectTableIJ(i, j)))
 			}
-		}
-	*/
+		}*/
 
-	data := r.getResult()
-	Log.Printf("Reject took %s\n", time.Since(start))
-	input.rejectChan <- data
+	return r.getResult()
 }
 
 // This may do one of the following two things:
@@ -385,8 +502,21 @@ func (r *RejectWork) createSolidBlockmapNow() {
 }
 
 func isHidden(vis uint8) bool {
-	// zennode does it this way
-	return !(vis&VIS_VISIBLE == VIS_VISIBLE) || (vis&VIS_RMB_MASK == VIS_RMB_HIDDEN)
+	// simpler, than in Zennode... because Zennode did it wrong.
+	// Zennode used bits to track RMB visibility, so that visibility set
+	// through RMB by INCLUDE option could not apply to sectors hidden by
+	// normal visibility computations. But, it didn't account for the fact that
+	// "normal" visibility computations take DISTANCE rmb effect, if specified,
+	// into account nonetheless (due to technical design), and that - both per
+	// documentation (INCLUDE has second highest priority) and per how RMB
+	// program behaves - INCLUDE must be able to force visibility back on sector
+	// hidden due to DISTANCE effect.
+	// And the only use for tracking "it came from RMB" bits in Zennode was just
+	// to limit INCLUDE, as Zennode erroneously believed its non-RMB parts of
+	// algorithm to be correct (despite not caring about self-referencing
+	// sectors), after removal of this bug-introducing limitation, those bits
+	// have no use
+	return vis&VIS_VISIBLE != VIS_VISIBLE
 }
 
 func (r *RejectWork) prepareReject() {
@@ -1067,7 +1197,9 @@ func (r *RejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighbo
 	sec2.numNeighbors++
 }
 
-func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
+// marks two sectors visible. This is the original markVisibility, until groups
+// were introduced
+func markVisibilitySector(r *RejectWork, i, j int, visibility uint8) {
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
@@ -1079,6 +1211,54 @@ func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
 	}
 }
 
+// NOTE this function is replaced with a faster one in FastRejectWork variant,
+// which is exactly like markVisibilitySector
+func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
+	if !r.hasGroups || (r.sectorIsNotGroup(i) && r.sectorIsNotGroup(j)) {
+		cell1 := r.rejectTableIJ(i, j)
+		if *cell1 == VIS_UNKNOWN {
+			*cell1 = visibility
+		}
+
+		cell2 := r.rejectTableIJ(j, i)
+		if *cell2 == VIS_UNKNOWN {
+			*cell2 = visibility
+		}
+	} else {
+		markVisibilityGroup(r, i, j, visibility)
+	}
+}
+
+func (r *RejectWork) sectorIsNotGroup(i int) bool {
+	return r.groups[i].legal && len(r.groups[i].sectors) == 1
+}
+
+// This is a bit complicated: locates groups which sectors i and j are part of,
+// and then makes those two groups visible to each other (every sector in first
+// group can see every sector in second group, and vice versa)
+func markVisibilityGroup(r *RejectWork, i, j int, visibility uint8) {
+	groupI := r.groups[r.groups[i].parent].sectors
+	groupJ := r.groups[r.groups[j].parent].sectors
+	if visibility == VIS_HIDDEN && r.extra.mixer != nil {
+		// Intercepted by mixer. Some other sector might still conduit
+		// visibility
+
+		for _, s1 := range groupI {
+			for _, s2 := range groupJ {
+				r.mixerSetVisibility(s1, s2, visibility)
+				r.mixerSetVisibility(s2, s1, visibility)
+			}
+		}
+		return
+	}
+	for _, s1 := range groupI {
+		for _, s2 := range groupJ {
+			markVisibilitySector(r, s1, s2, visibility)
+			markVisibilitySector(r, s2, s1, visibility)
+		}
+	}
+}
+
 func (r *RejectWork) markPairVisible(srcLine, tgtLine *TransLine) {
 	// there is a direct LOS between the two lines - mark all affected sectors (zennode)
 	// that is, mark both sectors of one line as visible from both of another and vice versa
@@ -1086,11 +1266,26 @@ func (r *RejectWork) markPairVisible(srcLine, tgtLine *TransLine) {
 	r.markVisibility(int(srcLine.backSector), int(tgtLine.frontSector), VIS_VISIBLE)
 	r.markVisibility(int(srcLine.frontSector), int(tgtLine.backSector), VIS_VISIBLE)
 	r.markVisibility(int(srcLine.backSector), int(tgtLine.backSector), VIS_VISIBLE)
+}
 
+func (r *RejectWork) mixerSetVisibility(i, j int, visibility uint8) {
+	cell1 := r.mixerIJ(i, j)
+	if *cell1 == VIS_UNKNOWN {
+		*cell1 = visibility
+	}
+
+	cell2 := r.mixerIJ(j, i)
+	if *cell2 == VIS_UNKNOWN {
+		*cell2 = visibility
+	}
 }
 
 func (r *RejectWork) rejectTableIJ(i, j int) *uint8 {
 	return &(r.rejectTable[i*r.numSectors+j])
+}
+
+func (r *RejectWork) mixerIJ(i, j int) *uint8 {
+	return &(r.extra.mixer[i*r.numSectors+j])
 }
 
 func (r *RejectWork) eliminateTrivialCases() {
@@ -1100,6 +1295,26 @@ func (r *RejectWork) eliminateTrivialCases() {
 		// substituted for the real map of which sectors contain such lines)
 		r.slyLinesInSector = make(map[uint16]bool)
 	}
+
+	if r.groupShareVis {
+		// GROUP is being combined with some of the trickier RMB options
+		// (like DISTANCE)
+		// So we have to make sectors within same group see each other, can't
+		// bail out of it
+		for _, g := range r.groups {
+			if !g.legal || len(g.sectors) == 1 {
+				// parse each group only once, and don't bother with groups
+				// consisting of one sector
+				continue
+			}
+			for _, s1 := range g.sectors {
+				for _, s2 := range g.sectors {
+					*(r.rejectTableIJ(s1, s2)) = VIS_VISIBLE
+				}
+			}
+		}
+	}
+
 	for i := 0; i < r.numSectors; i++ {
 		// each sector can see itself
 		*(r.rejectTableIJ(i, i)) = VIS_VISIBLE
@@ -1113,7 +1328,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 			sly, _ := r.slyLinesInSector[uint16(i)]
 			if !sly {
 				for j := 0; j < r.numSectors; j++ {
-					r.markVisibility(i, j, VIS_HIDDEN)
+					markVisibilitySector(r, i, j, VIS_HIDDEN)
 				}
 			} else {
 				// If any non-solid lines with both references set to same
@@ -1150,6 +1365,26 @@ func (r *RejectWork) eliminateTrivialCases() {
 			}
 		}
 	}
+}
+
+// Returns true if all sectors in group which the given sector belongs to
+// have no transient lines, and no self-referencing effects are suspected in
+// either. If at least one sector is suspected to be self-referencing or
+// has transient lines, returns false
+func (r *RejectWork) entireGroupHiddenNoSly(sector int) bool {
+	if r.sectors[sector].numLines != 0 {
+		return false
+	}
+
+	for _, sec := range r.groups[r.groups[sector].parent].sectors {
+		if r.sectors[sec].numLines != 0 {
+			return false
+		}
+		if r.slyLinesInSector[uint16(sec)] {
+			return false
+		}
+	}
+	return true
 }
 
 func reSectorsCompare(x reSectorsType, i, j int) int {
@@ -1249,12 +1484,11 @@ func (r *RejectWork) dontBother(srcLine, tgtLine *TransLine) bool {
 }
 
 // adjustLinePair adjusts the two lines so that:
-//   1) If one line bisects the other:
-//      a) The bisecting line is tgt
-//      b) The point farthest from src is made both start & end
-//   2) tgt is on the left side of src
-//   3) src and tgt go in 'opposite' directions
-//
+//  1. If one line bisects the other:
+//     a) The bisecting line is tgt
+//     b) The point farthest from src is made both start & end
+//  2. tgt is on the left side of src
+//  3. src and tgt go in 'opposite' directions
 func adjustLinePair(src, tgt *TransLine, bisects *bool) bool {
 
 	// Rotate & Translate so that src lies along the +X asix
@@ -1448,4 +1682,62 @@ func SetupLineMap(lineMap []*TransLine, reSectors []*RejSector, numSectors int) 
 	}
 
 	return maxIndex
+}
+
+// Overwrites visibility. Both i and j can refer to a group, or a sector,
+// even if that sector is part of some other group. In the latter case,
+// the effect would be applied only to that specific sector. If i or j refer to
+// the index under which grouping has occured, the effect will be applied to
+// whole group and not just the sector with the same index
+func (r *RejectWork) forceVisibility(i, j int, visibility uint8) {
+	if !r.hasGroups {
+		*(r.rejectTableIJ(i, j)) = visibility
+		return
+	}
+	groupI := r.groups[i].sectors
+	groupJ := r.groups[j].sectors
+	for _, i2 := range groupI {
+		for _, j2 := range groupJ {
+			*(r.rejectTableIJ(i2, j2)) = visibility
+		}
+	}
+}
+
+// Has same quirks as forceVisibility, but doesn't override visibility, but
+// instead toggles a corresponding bit set on
+func (r *RejectWork) orMaskVisibility(i, j int, visibility uint8) {
+	if !r.hasGroups {
+		*(r.rejectTableIJ(i, j)) |= visibility
+		return
+	}
+	groupI := r.groups[i].sectors
+	groupJ := r.groups[j].sectors
+	for _, i2 := range groupI {
+		for _, j2 := range groupJ {
+			*(r.rejectTableIJ(i2, j2)) |= visibility
+		}
+	}
+}
+
+func (r *RejectWork) computeGroupNeighbors() {
+	if r.groups[0].neighbors != nil {
+		Log.Error("computeGroupNeighbors called after group neighbors were already computed. (Programmer error)\n")
+		return
+	}
+	for i, _ := range r.groups {
+		r.groups[i].neighbors = make([]int, 0)
+		dupChecker := make(map[int]bool)
+		for _, si := range r.groups[i].sectors {
+			for _, nei := range r.sectors[si].neighbors {
+				if nei == nil {
+					break
+				}
+				gi := r.groups[nei.index].parent
+				if gi != i && !dupChecker[gi] {
+					r.groups[i].neighbors = append(r.groups[i].neighbors, gi)
+					dupChecker[gi] = true
+				}
+			}
+		}
+	}
 }

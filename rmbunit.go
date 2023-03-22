@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -20,6 +20,7 @@ package main
 // need to deal with RMB: reject code and parser code.
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -69,7 +70,8 @@ type RMBCommand struct {
 	Data [2]int   // stores integer(s) specified for this option
 	List [2][]int // stores list(s) of sectors specified for this option
 	//
-	WadFileName []byte // for NOPROCESS command, this can exist - the wad to get reject from
+	WadFileName []byte    // for NOPROCESS command, this can exist - the wad to get reject from
+	Frame       *RMBFrame // which frame this belongs to. Only assigned at the end of LoadRMB
 }
 
 type RMBFrameId struct {
@@ -86,12 +88,15 @@ type RMBFrameId struct {
 type RMBFrame struct {
 	Id       RMBFrameId
 	Commands []RMBCommand
-	Parent   *RMBFrame // nil for global. Map's frame may have global frame as its parent, if one exists
+	Parent   *RMBFrame  // nil for global. Map's frame may have global frame as its parent, if one exists
+	RMB      *LoadedRMB // which RMB this belongs too. Only assigned at the end of LoadRMB
 }
 
 type LoadedRMB struct {
 	mapFrames   map[RMBFrameId]*RMBFrame
 	globalFrame *RMBFrame
+	srcFile     string
+	CRLF        bool
 }
 
 // Caution, may return a non-nil frame for non-existent map, if global frame
@@ -142,4 +147,29 @@ func (l *LoadedRMB) LookupRMBFrameForMapMarker(marker []byte) *RMBFrame {
 		}
 	}
 	return l.LookupRMBFrameForMap(frameId)
+}
+
+func (l *RMBCommand) Error(s string, a ...interface{}) {
+	fmtS := fmt.Sprintf("RMB %s%d error: %s", l.getFile(), l.SrcLine, s)
+	Log.Error(fmtS, a...)
+}
+
+// returns filename with a colon appended at the end, or empty string if
+// filename is empty or couldn't be determined
+func (l *RMBCommand) getFile() string {
+	if l.Frame == nil { // shouldn't happen
+		return ""
+	}
+	if l.Frame.RMB == nil { // shouldn't happen
+		return ""
+	}
+	ret := l.Frame.RMB.srcFile
+	if len(ret) > 0 {
+		return ret + ":"
+	}
+	return ret
+}
+
+func (f *RMBFrame) isEmpty() bool {
+	return f == nil || (len(f.Commands) == 0 && f.Parent.isEmpty())
 }

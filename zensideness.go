@@ -23,7 +23,9 @@ import (
 
 // zensideness module is about optimization of zenlike algorithm for multi-tree
 // mode.
-// TODO expand why only preferred for multi-tree
+// This is only useful for multi-tree (although can be forced for single-tree
+// via a debug parameter), because the time to build cache is significant,
+// while superblocks technology eliminates quite a lot of possible queries to it
 
 // Speeds up repeated access to WhichSide* values for Zennode-like partitioners
 // (effective when multi-tree is used)
@@ -398,6 +400,28 @@ func getGlobalFlip(part *NodeSeg) bool {
 // For this reason, it is also not recommended to use cache when partition
 // actually occurs (DivideSegs) as opposed to merely evaluated
 func vetAliasTransfer(c *IntersectionContext) bool {
+	val := ZdoLinesIntersect_Proto(c)
+	return (val&1 != 0) && (val&16 != 0)
+}
+
+// Similar, but for partitioners that use even less precise check than
+// doLinesIntersect by default and so don't have intersection context ready
+func vetAliasTransfer2(part, check *NodeSeg) bool {
+	if check.len >= 4 {
+		return true
+	}
+	c := &IntersectionContext{
+		psx: part.psx,
+		psy: part.psy,
+		pex: part.pex,
+		pey: part.pey,
+	}
+	c.pdx = c.psx - c.pex
+	c.pdy = c.psy - c.pey
+	c.lsx = check.psx
+	c.lsy = check.psy
+	c.lex = check.pex
+	c.ley = check.pey
 	val := ZdoLinesIntersect_Proto(c)
 	return (val&1 != 0) && (val&16 != 0)
 }

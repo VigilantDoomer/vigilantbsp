@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -244,6 +244,23 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					if yused {
 						config.DepthArtifacts = false
 					}
+				} else if bytes.HasPrefix([]byte(arg), []byte("--stknode")) {
+					ns, _ := readNumeric("--stknode=", []byte(arg)[len("--stknode=")-1:])
+					if ns.whichType == ARG_ENABLED {
+						c.StkNode = true
+					} else if ns.whichType == ARG_DISABLED {
+						c.StkNode = false
+					} else {
+						switch ns.value {
+						case 0:
+							c.StkNode = false
+						case 1:
+							c.StkNode = true
+						default:
+							Log.Error("Unrecognised value %s, expected 0 or 1\n", arg)
+							return false
+						}
+					}
 				} else {
 					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
 					return false
@@ -256,14 +273,37 @@ func (c *ProgramConfig) FromCommandLine() bool {
 			}
 		case 'm':
 			{
-				// -m:mapxx parameter
+				// -m:mapxx parameter, explicit list of maps to rebuild
 				if c.FilterLevel != nil {
+					// Yes, -m and -!m also can't be used together
 					Log.Error("You can't specify map list twice.\n")
 					return false
 				}
-				if !c.parseMapList([]byte(arg[2:])) {
+				if !c.parseMapList("", []byte(arg[2:])) {
 					Log.Error("There were errors parsing map list - aborting.\n")
 					return false
+				}
+			}
+		case '!':
+			if len(arg) < 3 {
+				Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
+				return false
+			}
+			switch arg[2] {
+			case 'm':
+				{
+					// -!m:mapxx parameter, list of maps to NOT rebuild while
+					// rebuilding everything else
+					if c.FilterLevel != nil {
+						// Yes, -m and -!m also can't be used together
+						Log.Error("You can't specify map list twice.\n")
+						return false
+					}
+					if !c.parseMapList("!", []byte(arg[3:])) {
+						Log.Error("There were errors parsing map list - aborting.\n")
+						return false
+					}
+					c.FilterProhibitsLevels = true
 				}
 			}
 		default:
@@ -322,13 +362,31 @@ func (c *ProgramConfig) FromCommandLine() bool {
 	default:
 		Log.Panic("Secondary priority value not recognized (programmer error).\n")
 	}
+	switch c.MultiTreeMode {
+	case MULTITREE_NOTUSED:
+		if c.TreeWidth != 0 && c.TreeWidth != 1 && !c.StkNode {
+			Log.Printf("Width (-nw) parameter can have no effect on single-tree nodebuilding mode unless --stknode is passed.\n")
+		}
+	case MULTITREE_ROOT_ONLY:
+		if c.TreeWidth != 0 {
+			Log.Printf("Width (-nw) parameter is not used by plain multi-tree mode (as opposed to multi-tree hard)")
+		}
+	case MULTITREE_HARD:
+		if c.TreeWidth == 1 {
+			Log.Printf("Width (-nw) parameter is set to 1, which means multi-tree will not be actually used.\n")
+			c.MultiTreeMode = MULTITREE_NOTUSED
+		} else if c.TreeWidth == -1 {
+			Log.Printf("You chose to not limit hard multi-tree width. The results may take eternity to compute.\n")
+		}
+	}
 
 	return true
 }
 
-func (c *ProgramConfig) parseMapList(p []byte) bool {
+func (c *ProgramConfig) parseMapList(exclMark string, p []byte) bool {
 	if len(p) == 0 || p[0] != ':' {
-		Log.Error("Missing a colon: map list should be specified like this -m:map01+map02\n")
+		Log.Error("Missing a colon: map list should be specified like this -%sm:map01+map02\n",
+			exclMark)
 		return false
 	}
 	c.FilterLevel = make([][]byte, 0)
@@ -349,7 +407,8 @@ func (c *ProgramConfig) parseMapList(p []byte) bool {
 				return false
 			}
 		} else {
-			Log.Error("'-m:' argument is missing a level name following or preceeding one of the separators.\n")
+			Log.Error("'-%sm:' argument is missing a level name following or preceeding one of the separators.\n",
+				exclMark)
 			return false
 		}
 		if pin+1 < len(rest) {
@@ -735,6 +794,21 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					c.NodeThreads = 0
 				}
 				p = rest
+			}
+		case 'w':
+			{
+				nos, rest := readNumeric("-nw", p[1:])
+				if nos.whichType != ARG_IS_NUMBER {
+					Log.Error("Width (-nw) must be a numeric value.\n")
+				} else {
+					if nos.value < -1 {
+						Log.Error("Width (-nw) must be not less than -1. (-1 means unlimited width, 0 means auto)")
+					} else {
+						c.TreeWidth = nos.value
+					}
+				}
+				p = rest
+
 			}
 		default:
 			{

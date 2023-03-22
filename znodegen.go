@@ -1,5 +1,5 @@
 // Code generated from other source files. DO NOT EDIT.
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"reflect"
 	"runtime"
@@ -32,32 +33,41 @@ import (
 type ZExt_PickNodeFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock) *ZExt_NodeSeg
 
 type ZExt_CreateNodeSSFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock) *NodeInProcess
+type ZExt_StkCreateNodeSSFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock, *ZExt_StkQueue) *NodeInProcess
+
+type ZExt_SingleSectorDivisorFunc func(w *ZExt_NodesWork, ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock, rightsSuper,
+	leftsSuper **ZExt_Superblock, partsegs *[]PartSeg)
 
 type ZExt_DoLinesIntersectFunc func(c *ZExt_IntersectionContext) uint8
 
 type ZExt_NodesWork struct {
-	lines            WriteableLines
-	sides            []Sidedef
-	sectors          []Sector
-	allSegs          []*ZExt_NodeSeg
-	subsectors       []SubSector
-	segs             []Seg
-	nodeX            int
-	nodeY            int
-	nodeDx           int
-	nodeDy           int
-	totals           *NodesTotals
-	vertices         []ZExt_NodeVertex
-	nodes            []Node
-	nreverse         uint32
-	segAliasObj      *SegAliasHolder
-	pickNode         ZExt_PickNodeFunc
-	createNodeSS     ZExt_CreateNodeSSFunc
+	mlog            *MiniLogger
+	lines           WriteableLines
+	sides           []Sidedef
+	sectors         []Sector
+	allSegs         []*ZExt_NodeSeg
+	subsectors      []SubSector
+	segs            []Seg
+	nodeX           int
+	nodeY           int
+	nodeDx          int
+	nodeDy          int
+	totals          *NodesTotals
+	vertices        []ZExt_NodeVertex
+	nodes           []Node
+	nreverse        uint32
+	segAliasObj     *SegAliasHolder
+	pickNode        ZExt_PickNodeFunc
+	createNodeSS    ZExt_CreateNodeSSFunc
+	stkCreateNodeSS ZExt_StkCreateNodeSSFunc
+
+	stkDivisorSS ZExt_SingleSectorDivisorFunc
+
 	sectorHits       []uint8
 	incidental       []ZExt_IntVertexPairC
 	solidMap         *Blockmap
 	nonVoidCache     map[int]ZExt_NonVoidPerAlias
-	dgVertexMap      *VertexMap
+	dgVertexMap      *ZExt_VertexMap
 	blockity         *BlockityLines
 	deepNodes        []DeepNode
 	deepSubsectors   []DeepSubSector
@@ -70,18 +80,26 @@ type ZExt_NodesWork struct {
 	minorIsBetter    MinorIsBetterFunc
 	doLinesIntersect ZExt_DoLinesIntersectFunc
 	multipart        bool
+	parts            []*ZExt_NodeSeg
+	width            int
 	depthArtifacts   bool
 	nodeType         int
 	vertexCache      map[SimpleVertex]int
+	vertexExists     int
 	sidenessCache    *SidenessCache
 	zenScores        []ZExt_DepthScoreBundle
 	qallocSupers     *ZExt_Superblock
+<<<<<<< HEAD
+
+	stkExtra map[*NodeInProcess]StkNodeExtraData
+=======
+>>>>>>> origin/main
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
 	zdoomSubsectors   []uint32
 	zdoomSegs         []ZdoomNode_Seg
-	vertexMap         *VertexMap
+	vertexMap         *ZExt_VertexMap
 }
 
 type ZExt_NodeVertex struct {
@@ -114,6 +132,16 @@ type ZExt_IntersectionContext struct {
 	psx, psy, pex, pey ZNumber
 	pdx, pdy           ZNumber
 	lex, lsx, ley, lsy ZNumber
+}
+
+type ZExt_VertexMap struct {
+	w          *ZExt_NodesWork
+	Grid       [][]*FloatVertex
+	Snapshot   []int
+	BlocksWide int
+	BlocksTall int
+	MinX, MinY float64
+	MaxX, MaxY float64
 }
 
 func ZExt_NodesGenerator(input *NodesInput) {
@@ -231,6 +259,8 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		segAliasObj:      new(SegAliasHolder),
 		pickNode:         ZExt_PickNodeFuncFromOption(input.pickNodeUser),
 		createNodeSS:     ZExt_CreateNodeSSFromOption(input.pickNodeUser),
+		stkCreateNodeSS:  ZExt_StkCreateNodeSSFromOption(input.pickNodeUser),
+		stkDivisorSS:     ZExt_StkSingleSectorDivisorFromOption(input.pickNodeUser),
 		sectorHits:       make([]byte, whichLen),
 		incidental:       make([]ZExt_IntVertexPairC, 0),
 		solidMap:         solidMap,
@@ -249,13 +279,14 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		sidenessCache: &SidenessCache{
 			maxKnownAlias: 0,
 		},
+		width: input.width,
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
 		workData.zdoomVertexHeader = &ZdoomNode_VertexHeader{
 			ReusedOriginalVertices: uint32(input.lines.GetVerticesCount()),
 		}
-		workData.vertexMap = CreateVertexMap(rootBox.Xmin, rootBox.Ymin,
+		workData.vertexMap = ZExt_CreateVertexMap(&workData, rootBox.Xmin, rootBox.Ymin,
 			rootBox.Xmax, rootBox.Ymax)
 		ZExt_PopulateVertexMap(workData.vertexMap, allSegs)
 	} else {
@@ -266,9 +297,9 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	if workData.solidMap != nil {
 
 		lineBox := GetLineBounds(workData.lines)
-		dgVertexMap := CreateVertexMap(lineBox.Xmin, lineBox.Ymin,
+		dgVertexMap := ZExt_CreateVertexMap(&workData, lineBox.Xmin, lineBox.Ymin,
 			lineBox.Xmax, lineBox.Ymax)
-		PopulateVertexMapFromLines(dgVertexMap, workData.lines)
+		ZExt_PopulateVertexMapFromLines(dgVertexMap, workData.lines)
 		workData.dgVertexMap = dgVertexMap
 	}
 	workData.segAliasObj.Init()
@@ -279,8 +310,13 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 	var rootNode *NodeInProcess
 	if input.multiTreeMode == MULTITREE_NOTUSED {
+		if input.stkNode {
 
-		rootNode = ZExt_CreateNode(&workData, rootSeg, rootBox, initialSuper)
+			rootNode = ZExt_StkEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+		} else {
+
+			rootNode = ZExt_CreateNode(&workData, rootSeg, rootBox, initialSuper)
+		}
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
 
 		if workData.sidenessCache.maxKnownAlias == 0 {
@@ -293,6 +329,9 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
 	}
+
+	Log.Merge(workData.mlog, "Merging buffered output (if any) from the chosen tree.\n")
+	workData.mlog = nil
 
 	Log.Flush()
 
@@ -315,6 +354,19 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	if rootNode.nextR != nil {
 		hRight = HeightOfNodes(rootNode.nextR) + 1
 	}
+
+	Log.Printf("Splits reused already created vertices to avoid duplicates: %d times\n", workData.vertexExists)
+
+	if input.stkNode && config.Deterministic {
+		if input.nodeType == NODETYPE_VANILLA {
+			workData.RearrangeBSPVanilla(rootNode)
+		} else if input.nodeType == NODETYPE_DEEP {
+			workData.RearrangeBSPDeep(rootNode)
+		} else {
+			workData.RearrangeBSPExtended(rootNode)
+		}
+	}
+
 	Log.Printf("Height of left and right subtrees = (%d,%d)\n", hLeft, hRight)
 	if input.nodeType == NODETYPE_VANILLA {
 		workData.reverseNodes(rootNode)
@@ -398,7 +450,8 @@ func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
 		}
 	default:
 		{
-			panic("Invalid argument")
+			Log.Panic("Invalid argument\n")
+			return nil
 		}
 	}
 }
@@ -408,6 +461,20 @@ func ZExt_CreateNodeSSFromOption(userOption int) ZExt_CreateNodeSSFunc {
 		return ZExt_CreateNodeForSingleSector
 	}
 	return ZExt_CreateNode
+}
+
+func ZExt_StkCreateNodeSSFromOption(userOption int) ZExt_StkCreateNodeSSFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return ZExt_StkCreateNodeForSingleSector
+	}
+	return ZExt_StkCreateNode
+}
+
+func ZExt_StkSingleSectorDivisorFromOption(userOption int) ZExt_SingleSectorDivisorFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return ZExt_VigilantSingleSectorDivisor
+	}
+	return ZExt_DefaultSingleSectorDivisor
 }
 
 func (w *ZExt_NodesWork) emptyNodesLumps() {
@@ -795,8 +862,7 @@ func ZExt_splitDist(lines AbstractLines, seg *ZExt_NodeSeg) int {
 	}
 
 	if dx == 0 && dy == 0 {
-
-		Log.Printf("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.getFlip(), dx, dy)
+		Log.Error("Trouble in splitDist %d!%d %f,%f\n", seg.Linedef, seg.getFlip(), dx, dy)
 	}
 	t := math.Sqrt((dx * dx) + (dy * dy))
 	return int(t)
@@ -908,8 +974,7 @@ func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 				val := w.doLinesIntersect(&c)
 				if val&34 != 0 {
 					if nonConvexityMode == NONCONVEX_ONESECTOR {
-						Log.ZExt_DumpSegs(ts)
-
+						w.mlog.ZExt_DumpSegs(ts)
 					}
 					return nonConvexityMode
 				}
@@ -920,14 +985,123 @@ func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 	return CONVEX_SUBSECTOR
 }
 
+func (w *ZExt_NodesWork) IsConvexMultiSector(ts *ZExt_NodeSeg) bool {
+	multisector := false
+	sector := ts.sector
+	for check := ts; check != nil; check = check.next {
+		if check.sector != sector {
+			multisector = true
+			break
+		}
+	}
+	if !multisector {
+		return false
+	}
+
+	var c ZExt_IntersectionContext
+	for line := ts; line != nil; line = line.next {
+		c.psx = line.StartVertex.X
+		c.psy = line.StartVertex.Y
+		c.pex = line.EndVertex.X
+		c.pey = line.EndVertex.Y
+		c.pdx = c.psx - c.pex
+		c.pdy = c.psy - c.pey
+		for check := ts; check != nil; check = check.next {
+			if line != check {
+				c.lsx = check.StartVertex.X
+				c.lsy = check.StartVertex.Y
+				c.lex = check.EndVertex.X
+				c.ley = check.EndVertex.Y
+				val := w.doLinesIntersect(&c)
+				if val&34 != 0 {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func (w *ZExt_NodesWork) GetPartSegs(ts *ZExt_NodeSeg, best *ZExt_NodeSeg, receiver *[]PartSeg) {
+	wasNil := false
+	if len(w.parts) == 0 {
+		if w.parts == nil {
+			w.parts = make([]*ZExt_NodeSeg, 0)
+			wasNil = true
+		}
+		w.parts = append(w.parts, best)
+	}
+	if *receiver == nil {
+		*receiver = make([]PartSeg, 0)
+	}
+
+	limit := w.width
+	if limit < 0 {
+		limit = len(w.parts)
+	} else if limit > len(w.parts) {
+
+		limit = len(w.parts)
+	}
+
+	for _, v := range w.parts[:limit] {
+		partseg := ZExt_getPartSeg(ts, v)
+		*receiver = append(*receiver, partseg)
+	}
+	fold := false
+	for _, v := range *receiver {
+		if v.Occurence == -1 {
+			fold = true
+			break
+		}
+	}
+	if fold {
+
+		w.mlog.Printf("Best partition didn't come from seg\n")
+		*receiver = (*receiver)[:0]
+		*receiver = append(*receiver, PartSeg{
+			Linedef:   0,
+			Occurence: -1,
+		})
+	}
+	if wasNil {
+		w.parts = nil
+	} else {
+		w.parts = w.parts[:0]
+	}
+}
+
+func ZExt_getPartSeg(ts *ZExt_NodeSeg, target *ZExt_NodeSeg) PartSeg {
+	ldef := target.Linedef
+	occurence := 0
+	for tmps := ts; tmps != nil; tmps = tmps.next {
+		if tmps.Linedef == ldef {
+			occurence++
+		}
+		if tmps == target {
+			return PartSeg{
+				Linedef:   ldef,
+				Occurence: occurence,
+			}
+		}
+	}
+	return PartSeg{
+		Linedef:   0,
+		Occurence: -1,
+	}
+}
+
 func (w *ZExt_NodesWork) DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds,
-	super *ZExt_Superblock, rightsSuper, leftsSuper **ZExt_Superblock) {
+	super *ZExt_Superblock, rightsSuper, leftsSuper **ZExt_Superblock, partsegs *[]PartSeg) {
 
 	best := w.pickNode(w, ts, bbox, super)
 
 	if best == nil {
 
-		panic("Couldn't pick nodeline!")
+		Log.Panic("Couldn't pick nodeline!\n")
+	}
+
+	if partsegs != nil {
+		w.GetPartSegs(ts, best, partsegs)
 	}
 
 	c := &ZExt_IntersectionContext{
@@ -977,9 +1151,9 @@ func (w *ZExt_NodesWork) DivideSegsActual(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, l
 
 				tmps.partner.partner = nil
 				tmps.partner = nil
-				if tmps == best {
-					tmps = tmps.next
-				}
+
+				tmps = tmps.next
+
 			}
 		}
 		tmpsNext = tmps.next
@@ -990,13 +1164,13 @@ func (w *ZExt_NodesWork) DivideSegsActual(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, l
 
 	if strights == nil {
 
-		panic("Should have had partition at the right side (hardcoded to go there).")
+		Log.Panic("Should have had partition at the right side (hardcoded to go there).\n")
 	}
 
 	if stlefts == nil {
 
 		if asector > 0 {
-			Log.Verbose(1, "No left side, moving partition into left side (single sector #%d)\n",
+			w.mlog.Verbose(1, "No left side, moving partition into left side (single sector #%d)\n",
 				asector)
 		} else {
 			if config.VerbosityLevel >= 3 {
@@ -1012,9 +1186,9 @@ func (w *ZExt_NodesWork) DivideSegsActual(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, l
 				if s != "" {
 					s = s[1:]
 				}
-				Log.Verbose(1, "No left side, moving partition into left side (sectors %s)\n", s)
+				w.mlog.Verbose(1, "No left side, moving partition into left side (sectors %s)\n", s)
 			} else {
-				Log.Verbose(1, "No left side, moving partition into left side (multiple sectors in this node)\n")
+				w.mlog.Verbose(1, "No left side, moving partition into left side (multiple sectors in this node)\n")
 			}
 		}
 		lefts = best
@@ -1082,7 +1256,7 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 
 	atmps := *tmps
 	if atmps.partner != nil && atmps.partner != atmps.next {
-		panic("Partnership was not kept up to date!")
+		Log.Panic("Partnership was not kept up to date!\n")
 	}
 	c.lsx = atmps.StartVertex.X
 	c.lsy = atmps.StartVertex.Y
@@ -1221,7 +1395,7 @@ func (w *ZExt_NodesWork) recomputeSegs(originSeg, newSeg *ZExt_NodeSeg) {
 	w.recomputeOneSeg(newSeg)
 	if oldAngle != originSeg.Angle || oldAngle != newSeg.Angle {
 
-		Log.Verbose(3, "Angle changed after splitting seg:  %d -> (%d ; %d)",
+		w.mlog.Verbose(3, "Angle changed after splitting seg:  %d -> (%d ; %d)\n",
 			oldAngle, originSeg.Angle, newSeg.Angle)
 	}
 }
@@ -1262,7 +1436,11 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 	var leftsSuper *ZExt_Superblock
 
 	w.totals.numNodes++
+<<<<<<< HEAD
+	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper, nil)
+=======
 	w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper, &leftsSuper)
+>>>>>>> origin/main
 
 	super = nil
 	res.X = int16(w.nodeX)
@@ -1284,6 +1462,9 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	} else {
+		if config.VerbosityLevel >= 1 && w.IsConvexMultiSector(lefts) {
+			w.dumpMultiSectorSegs(lefts)
+		}
 		res.nextL = ZExt_CreateNode(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
 	}
@@ -1303,12 +1484,30 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	} else {
+		if config.VerbosityLevel >= 1 && w.IsConvexMultiSector(rights) {
+			w.dumpMultiSectorSegs(rights)
+		}
 		res.nextR = ZExt_CreateNode(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
 	}
 	rightsSuper = nil
 
 	return res
+}
+
+func (w *ZExt_NodesWork) dumpMultiSectorSegs(ts *ZExt_NodeSeg) {
+	if config.VerbosityLevel < 1 {
+		return
+	}
+	var buf bytes.Buffer
+	buf.WriteString("Multiple sectors detected that form something CONVEX!\n")
+	for check := ts; check != nil; check = check.next {
+		buf.WriteString(fmt.Sprintf(
+			"  Sector: %v Linedef: %v Flip: %v (%v,%v) - (%v, %v)\n",
+			check.sector, check.Linedef, check.getFlip(),
+			check.psx, check.psy, check.pex, check.pey))
+	}
+	w.mlog.Verbose(1, buf.String())
 }
 
 func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
@@ -1499,6 +1698,10 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	newW := new(ZExt_NodesWork)
 	*newW = *w
 
+	if w.mlog != nil {
+		newW.mlog = CreateMiniLogger()
+	}
+
 	newW.sides = make([]Sidedef, len(w.sides))
 	for i := 0; i < len(newW.sides); i++ {
 		newW.sides[i] = w.sides[i]
@@ -1535,10 +1738,12 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 
 	if w.vertexMap != nil {
 		newW.vertexMap = w.vertexMap.Clone()
+		newW.vertexMap.w = newW
 	}
 
 	if w.dgVertexMap != nil {
 		newW.dgVertexMap = w.dgVertexMap.Clone()
+		newW.dgVertexMap.w = newW
 	}
 
 	newW.segAliasObj = w.segAliasObj.Clone()
@@ -1550,6 +1755,14 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	newW.zenScores = make([]ZExt_DepthScoreBundle, 0, cap(w.zenScores))
 
 	newW.qallocSupers = nil
+<<<<<<< HEAD
+	newW.stkExtra = nil
+
+	if w.parts != nil {
+		newW.parts = make([]*ZExt_NodeSeg, 0)
+	}
+=======
+>>>>>>> origin/main
 
 	if newW.zdoomVertexHeader != nil {
 		newW.zdoomVertexHeader = new(ZdoomNode_VertexHeader)
@@ -1589,12 +1802,161 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	return newW
 }
 
-func ZExt_PopulateVertexMap(vm *VertexMap, allSegs []*ZExt_NodeSeg) {
+func ZExt_CreateVertexMap(w *ZExt_NodesWork, minx, miny, maxx, maxy int) *ZExt_VertexMap {
+
+	minx = minx - VMAP_SAFE_MARGIN
+	miny = miny - VMAP_SAFE_MARGIN
+	maxx = maxx + VMAP_SAFE_MARGIN
+	maxy = maxy + VMAP_SAFE_MARGIN
+
+	vm := &ZExt_VertexMap{
+		w:    w,
+		MinX: float64(minx),
+		MinY: float64(miny),
+		BlocksWide: int((float64(maxx-minx+1)*
+			FIXED16DOT16_MULTIPLIER + float64(VMAP_BLOCK_SIZE-1)) /
+			float64(VMAP_BLOCK_SIZE)),
+		BlocksTall: int((float64(maxy-miny+1)*
+			FIXED16DOT16_MULTIPLIER + float64(VMAP_BLOCK_SIZE-1)) /
+			float64(VMAP_BLOCK_SIZE)),
+	}
+	vm.MaxX = vm.MinX + float64(vm.BlocksWide*VMAP_BLOCK_SIZE-1)/FIXED16DOT16_MULTIPLIER
+	vm.MaxY = vm.MinY + float64(vm.BlocksTall*VMAP_BLOCK_SIZE-1)/FIXED16DOT16_MULTIPLIER
+	vm.Grid = make([][]*FloatVertex, vm.BlocksWide*vm.BlocksTall)
+	return vm
+}
+
+func (vm *ZExt_VertexMap) Clone() *ZExt_VertexMap {
+	if vm == nil {
+		return nil
+	}
+	newVm := &ZExt_VertexMap{}
+	*newVm = *vm
+	newVm.w = nil
+	newVm.Grid = make([][]*FloatVertex, 0, len(vm.Grid))
+	for _, it := range vm.Grid {
+		cpit := make([]*FloatVertex, 0, len(it))
+		for _, it2 := range it {
+			nv := &FloatVertex{}
+			*nv = *it2
+			cpit = append(cpit, nv)
+		}
+		newVm.Grid = append(newVm.Grid, cpit)
+	}
+	if vm.Snapshot != nil {
+		newVm.Snapshot = make([]int, len(vm.Grid))
+		for i, it := range vm.Snapshot {
+			newVm.Snapshot[i] = it
+		}
+	}
+	return newVm
+}
+
+func (vm *ZExt_VertexMap) GetBlock(x, y float64) int {
+
+	ret := int(uint((x-vm.MinX)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT +
+		(uint((y-vm.MinY)*FIXED16DOT16_MULTIPLIER)>>VMAP_BLOCK_SHIFT)*
+			uint(vm.BlocksWide))
+	if ret < 0 || ret >= len(vm.Grid) {
+		vm.w.mlog.Verbose(1, "Vertex map index out of range, source values: x=%f, y=%f xmin,ymin=(%f,%f) xmax,ymax=(%f,%f)\n",
+			x, y, vm.MinX, vm.MinY, vm.MaxX, vm.MaxY)
+
+		return 0
+	}
+	return ret
+}
+
+func (vm *ZExt_VertexMap) SelectVertexExact(x, y float64, id int) *FloatVertex {
+	block := &(vm.Grid[vm.GetBlock(x, y)])
+	for _, it := range *block {
+		if it.X == x && it.Y == y {
+			return it
+		}
+	}
+	return vm.insertVertex(x, y, id)
+}
+
+func (vm *ZExt_VertexMap) SelectVertexClose(x, y float64) *FloatVertex {
+	block := &(vm.Grid[vm.GetBlock(x, y)])
+	for _, it := range *block {
+		if math.Abs(it.X-x) < VERTEX_EPSILON &&
+			math.Abs(it.Y-y) < VERTEX_EPSILON {
+			return it
+		}
+	}
+	return vm.insertVertex(x, y, -1)
+}
+
+func (vm *ZExt_VertexMap) insertVertex(x, y float64, id int) *FloatVertex {
+
+	ret := &FloatVertex{
+		X:  x,
+		Y:  y,
+		Id: id,
+	}
+	minx := vm.MinX
+	if minx < (x - VERTEX_EPSILON) {
+		minx = x - VERTEX_EPSILON
+	}
+	maxx := vm.MaxX
+	if maxx > (x + VERTEX_EPSILON) {
+		maxx = x + VERTEX_EPSILON
+	}
+	miny := vm.MinY
+	if miny < (y - VERTEX_EPSILON) {
+		miny = y - VERTEX_EPSILON
+	}
+	maxy := vm.MaxY
+	if maxy > (y + VERTEX_EPSILON) {
+		maxy = y + VERTEX_EPSILON
+	}
+	blk := [4]int{vm.GetBlock(minx, miny),
+		vm.GetBlock(maxx, miny),
+		vm.GetBlock(minx, maxy),
+		vm.GetBlock(maxx, maxy)}
+	blcount := [4]int{
+		len(vm.Grid[blk[0]]),
+		len(vm.Grid[blk[1]]),
+		len(vm.Grid[blk[2]]),
+		len(vm.Grid[blk[3]])}
+	for i := 0; i < 4; i++ {
+		if len(vm.Grid[blk[i]]) == blcount[i] {
+			vm.Grid[blk[i]] = append(vm.Grid[blk[i]], ret)
+		}
+	}
+	return ret
+}
+
+func (vm *ZExt_VertexMap) RestoreOrBeginSnapshot() {
+	if vm.Snapshot == nil {
+
+		vm.Snapshot = make([]int, len(vm.Grid))
+		for i, it := range vm.Grid {
+			vm.Snapshot[i] = len(it)
+		}
+	} else {
+
+		for i, it := range vm.Grid {
+			vm.Grid[i] = it[:vm.Snapshot[i]]
+		}
+	}
+}
+
+func ZExt_PopulateVertexMap(vm *ZExt_VertexMap, allSegs []*ZExt_NodeSeg) {
 	for _, seg := range allSegs {
 		vm.SelectVertexExact(float64(seg.psx), float64(seg.psy),
 			int(seg.StartVertex.idx))
 		vm.SelectVertexExact(float64(seg.pex), float64(seg.pey),
 			int(seg.EndVertex.idx))
+	}
+}
+
+func ZExt_PopulateVertexMapFromLines(vm *ZExt_VertexMap, lines AbstractLines) {
+	l := int(lines.Len())
+	for i := 0; i < l; i++ {
+		x1, x2, y1, y2 := lines.GetAllXY(uint16(i))
+		vm.SelectVertexExact(float64(x1), float64(y1), i)
+		vm.SelectVertexExact(float64(x2), float64(y2), i)
 	}
 }
 
@@ -1662,6 +2024,14 @@ func (w *ZExt_NodesWork) returnSuperblockToPool(block *ZExt_Superblock) {
 	w.qallocSupers = block
 }
 
+<<<<<<< HEAD
+func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
+
+	log.Panic("Function that was not supposed to be called was called.\n")
+}
+
+=======
+>>>>>>> origin/main
 type ZExt_SegMinorBundle struct {
 	seg   *ZExt_NodeSeg
 	minor MinorCosts
@@ -1675,6 +2045,9 @@ func ZExt_PickNode_traditional(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBo
 		PreciousSplit: int(INITIAL_BIG_COST),
 	}
 	cnt := 0
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	for part := ts; part != nil; part = part.next {
 		cnt++
@@ -1724,12 +2097,34 @@ func ZExt_PickNode_traditional(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBo
 		if (tot + cnt) > diff {
 
 			cost += diff
-			if cost < bestcost || (cost == bestcost &&
-				minorIsBetter_Precious(minors, bestMinors)) {
+			if w.parts == nil {
+				if cost < bestcost || (cost == bestcost &&
+					minorIsBetter_Precious(minors, bestMinors)) {
 
-				bestcost = cost
-				best = part
-				bestMinors = minors
+					bestcost = cost
+					best = part
+					bestMinors = minors
+				}
+			} else {
+				strictlyBetter := false
+				if cost < bestcost {
+					strictlyBetter = true
+				} else if cost == bestcost {
+					if minorIsBetter_Precious(minors, bestMinors) {
+						strictlyBetter = true
+					} else if !minorIsBetter_Precious(bestMinors, minors) {
+
+						w.parts = append(w.parts, part)
+					}
+				}
+
+				if strictlyBetter {
+					bestcost = cost
+					best = part
+					bestMinors = minors
+					w.parts = w.parts[:0]
+					w.parts = append(w.parts, part)
+				}
 			}
 		}
 
@@ -1848,6 +2243,9 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		PreciousSplit: int(INITIAL_BIG_COST),
 	}
 	cnt := 0
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	for part := ts; part != nil; part = part.next {
 		cnt++
@@ -1936,7 +2334,7 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		}
 		cost += diff
 		if cost > bestcost || (cost == bestcost &&
-			!minorIsBetter_Precious(minors, bestMinors)) {
+			w.parts == nil && !minorIsBetter_Precious(minors, bestMinors)) {
 			continue
 		}
 
@@ -1945,14 +2343,40 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		if slen < l {
 			cost += w.pickNodeFactor
 			if cost > bestcost || (cost == bestcost &&
-				!minorIsBetter_Precious(minors, bestMinors)) {
+				w.parts == nil && !minorIsBetter_Precious(minors, bestMinors)) {
 				continue
 			}
 		}
 
-		bestcost = cost
-		best = part
-		bestMinors = minors
+		if w.parts == nil {
+
+			bestcost = cost
+			best = part
+			bestMinors = minors
+
+		} else {
+
+			strictlyBetter := false
+			if cost < bestcost {
+				strictlyBetter = true
+			} else {
+				if minorIsBetter_Precious(minors, bestMinors) {
+
+					strictlyBetter = true
+				} else if !minorIsBetter_Precious(bestMinors, minors) {
+
+					w.parts = append(w.parts, part)
+				}
+			}
+			if strictlyBetter {
+				bestcost = cost
+				best = part
+				bestMinors = minors
+				w.parts = w.parts[:0]
+				w.parts = append(w.parts, part)
+			}
+
+		}
 	}
 	return best
 }
@@ -2080,6 +2504,10 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		parts = make([]ZExt_SegMinorBundle, 0)
 	}
 	cnt := 0
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+
+	}
 
 	for part := ts; part != nil; part = part.next {
 		cnt++
@@ -2194,7 +2622,8 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 			minors.Unmerged = unmerged
 		}
-		if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+		if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+			!w.minorIsBetter(minors, bestMinors)) {
 			continue
 		}
 
@@ -2202,7 +2631,8 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 			if w.diagonalPenalty != 0 && (part.pdx != 0 && part.pdy != 0) {
 				cost += w.diagonalPenalty
-				if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+				if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+					!w.minorIsBetter(minors, bestMinors)) {
 					continue
 				}
 			}
@@ -2210,8 +2640,8 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 			l := w.GetPartitionLength_VigilantWay(part, bbox)
 			if l == 0 {
 
-				l = ZExt_GetFullPartitionLength(part, bbox)
-				Log.Verbose(2, "Recomputing partition length the old way, because I got zero length doing it the new way.\n")
+				l = ZExt_GetFullPartitionLength(w, part, bbox)
+				w.mlog.Verbose(2, "Recomputing partition length the old way, because I got zero length doing it the new way.\n")
 			}
 
 			collinearSegs := ZExt_IntCollinearVertexPairCByCoord(w.incidental)
@@ -2221,7 +2651,7 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 			slen = slen - collinearSegs.GetOverlapsLength()
 			if slen < 0 {
 
-				Log.Verbose(2, "Oops, got negative length after removing overlaps! Must have overflowed somewhere.\n")
+				w.mlog.Verbose(2, "Oops, got negative length after removing overlaps! Must have overflowed somewhere.\n")
 				slen = 0
 			}
 
@@ -2229,7 +2659,8 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 			if slen < l {
 				cost += w.pickNodeFactor
-				if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+				if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+					!w.minorIsBetter(minors, bestMinors)) {
 					continue
 				}
 			}
@@ -2237,25 +2668,52 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 		if !hasLeft && w.VigilantGuard_IsBadPartition(part, ts, cnt) {
 			cost += w.pickNodeFactor * ONESIDED_MULTIPLY
-			if (cost > bestcost) || (cost == bestcost && !w.minorIsBetter(minors, bestMinors)) {
+			if (cost > bestcost) || (cost == bestcost && w.parts == nil &&
+				!w.minorIsBetter(minors, bestMinors)) {
 				continue
 			}
 		}
 
-		if parts != nil {
-			if bestcost != cost {
+		if w.parts == nil || parts != nil {
 
-				parts = parts[:0]
+			if parts != nil {
+				if bestcost != cost {
+
+					parts = parts[:0]
+				}
+				parts = append(parts, ZExt_SegMinorBundle{
+					seg:   part,
+					minor: minors,
+				})
 			}
-			parts = append(parts, ZExt_SegMinorBundle{
-				seg:   part,
-				minor: minors,
-			})
+			bestcost = cost
+			bestMinors = minors
+			best = part
+			executed = true
+
+		} else {
+			strictlyBetter := false
+			if cost < bestcost {
+				strictlyBetter = true
+			} else {
+				if w.minorIsBetter(minors, bestMinors) {
+					strictlyBetter = true
+				} else if !w.minorIsBetter(bestMinors, minors) {
+
+					if minors.SectorsSplit > 0 || minors.SegsSplit > 0 {
+						w.parts = append(w.parts, part)
+					}
+				}
+			}
+			if strictlyBetter {
+				bestcost = cost
+				bestMinors = minors
+				best = part
+				executed = true
+				w.parts = w.parts[:0]
+				w.parts = append(w.parts, part)
+			}
 		}
-		bestcost = cost
-		bestMinors = minors
-		best = part
-		executed = true
 	}
 	w.incidental = w.incidental[:0]
 	if len(parts) > 1 {
@@ -2266,24 +2724,36 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		ZExt_ZenPickBestScore(depthScores)
 		if depthScores[0].scoreSeg != VERY_BAD_SCORE {
 			best = depthScores[0].seg
-			tst1, tst2, tst3, tst4 := depthScores[0].preciousSplit,
-				depthScores[0].scoreTotal,
-				depthScores[0].equivSplit,
-				depthScores[0].segSplit
-			track := 1
-			for i := 1; i < len(depthScores); i++ {
-				if tst1 == depthScores[i].preciousSplit &&
-					tst2 == depthScores[i].scoreTotal &&
-					tst3 == depthScores[i].equivSplit &&
-					tst4 == depthScores[i].segSplit {
-					track++
-				} else {
-					break
-				}
+			if w.parts != nil {
+				w.parts = append(w.parts, best)
 			}
-			if track > 1 {
+			if w.parts != nil || config.VerbosityLevel >= 4 {
 
-				Log.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+				tst1, tst2, tst3, tst4 := depthScores[0].preciousSplit,
+					depthScores[0].scoreTotal,
+					depthScores[0].equivSplit,
+					depthScores[0].segSplit
+				if tst3 > 0 || tst4 > 0 {
+
+					track := 1
+					for i := 1; i < len(depthScores); i++ {
+						if tst1 == depthScores[i].preciousSplit &&
+							tst2 == depthScores[i].scoreTotal &&
+							tst3 == depthScores[i].equivSplit &&
+							tst4 == depthScores[i].segSplit {
+							if w.parts != nil {
+								w.parts = append(w.parts, depthScores[i].seg)
+							}
+							track++
+						} else {
+							break
+						}
+					}
+					if track > 1 {
+						w.mlog.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+
+					}
+				}
 			}
 		}
 	}
@@ -2376,7 +2846,9 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 				leftside = true
 			} else if b == 0 {
 
-				check.alias = part.alias
+				if check.alias != part.alias && ZExt_vetAliasTransfer2(part, check) {
+					check.alias = part.alias
+				}
 				*slen += check.len
 
 				w.incidental = append(w.incidental, check.toIntVertexPairC())
@@ -2494,7 +2966,7 @@ func ZExt_GetPartitionLength_LegacyWay(part *ZExt_NodeSeg, bbox *NodeBounds) ZNu
 	return l
 }
 
-func ZExt_GetFullPartitionLength(part *ZExt_NodeSeg, bbox *NodeBounds) ZNumber {
+func ZExt_GetFullPartitionLength(w *ZExt_NodesWork, part *ZExt_NodeSeg, bbox *NodeBounds) ZNumber {
 	var l ZNumber
 	if part.pdx == 0 {
 		l = ZNumber(bbox.Ymax - bbox.Ymin)
@@ -2509,7 +2981,7 @@ func ZExt_GetFullPartitionLength(part *ZExt_NodeSeg, bbox *NodeBounds) ZNumber {
 		c.pey = partSegCoords.EndVertex.Y
 		c.pdx = c.pex - c.psx
 		c.pdy = c.pey - c.psy
-		contextStart, contextEnd, _ := ZExt_PartitionInBoundary(part, &c, bbox.Xmax,
+		contextStart, contextEnd, _ := ZExt_PartitionInBoundary(w, part, &c, bbox.Xmax,
 			bbox.Ymax, bbox.Xmin, bbox.Ymin, partSegCoords)
 		if contextStart == nil {
 
@@ -2526,8 +2998,8 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 
 	if part.alias == 0 {
 
-		Log.Verbose(2, "What? Alias should not be zero here. Falling back to old way of computing partition length. (Programmer error)")
-		return ZExt_GetFullPartitionLength(part, bbox)
+		w.mlog.Verbose(2, "What? Alias should not be zero here. Falling back to old way of computing partition length. (Programmer error)")
+		return ZExt_GetFullPartitionLength(w, part, bbox)
 	}
 	nonVoidStruc, ok := w.nonVoidCache[part.alias]
 	if !ok {
@@ -2537,20 +3009,20 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 	}
 	if !nonVoidStruc.success {
 
-		return ZExt_GetFullPartitionLength(part, bbox)
+		return ZExt_GetFullPartitionLength(w, part, bbox)
 	}
 
-	contextStart, contextEnd, _ := ZExt_PartitionInBoundary(part,
+	contextStart, contextEnd, _ := ZExt_PartitionInBoundary(w, part,
 		&(nonVoidStruc.c), bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 		nonVoidStruc.partSegCoords)
 	if contextStart == nil || contextEnd == nil {
 
-		Log.Verbose(2, "This cannot be! Got so far but now failing (got all the segments of line on the map to see when it goes through the void and when it does not, but failed to determine the edges of line touching the current node's bounding box)\n")
-		return ZExt_GetFullPartitionLength(part, bbox)
+		w.mlog.Verbose(2, "This cannot be! Got so far but now failing (got all the segments of line on the map to see when it goes through the void and when it does not, but failed to determine the edges of line touching the current node's bounding box)\n")
+		return ZExt_GetFullPartitionLength(w, part, bbox)
 	}
 
 	if contextStart.equalToWithEpsilon(contextEnd) {
-		Log.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
+		w.mlog.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
 			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 			contextStart.X, contextStart.Y, contextEnd.X, contextEnd.Y)
@@ -2580,12 +3052,12 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 	}
 	if hitStart < 0 || hitStop < 0 {
 
-		Log.Verbose(2, "to below: %s", nonVoidStruc.original.toString())
-		Log.Verbose(2, "More dropouts! %v %v %s\n  ...... %d [%s-%s]\n",
+		w.mlog.Verbose(2, "to below: %s", nonVoidStruc.original.toString())
+		w.mlog.Verbose(2, "More dropouts! %v %v %s\n  ...... %d [%s-%s]\n",
 			hitStart, hitStop,
 			ZExt_CollinearVertexPairCByCoord(nonVoid).toString(), part.Linedef,
 			contextStart.toString(), contextEnd.toString())
-		return ZExt_GetFullPartitionLength(part, bbox)
+		return ZExt_GetFullPartitionLength(w, part, bbox)
 	}
 
 	L := ZNumber(0)
@@ -2609,9 +3081,9 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 		if !precomputedInvalid {
 			L = L + nonVoid[i].len
 			if nonVoid[i].len == 0 {
-				Log.Verbose(2, "non-void interval computed with zero length (precomputed)\n")
+				w.mlog.Verbose(2, "non-void interval computed with zero length (precomputed)\n")
 			} else if nonVoid[i].len < 0 {
-				Log.Verbose(2, "what? non-void interval computed with NEGATIVE length (precomputed)\n")
+				w.mlog.Verbose(2, "what? non-void interval computed with NEGATIVE length (precomputed)\n")
 			}
 		} else {
 			dx := thisEnd.X - thisStart.X
@@ -2622,12 +3094,12 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 			if l0 == 0 {
 
 			} else if l0 < 0 {
-				Log.Verbose(2, "what? sqrt yieled NEGATIVE value after cast?\n")
+				w.mlog.Verbose(2, "what? sqrt yieled NEGATIVE value after cast?\n")
 			}
 		}
 	}
 	if L == 0 {
-		Log.Verbose(2, "returning 0 (sad)\n ........... %d %s ........ range (%d,%d) - (%d, %d) hit: %d,%d \n",
+		w.mlog.Verbose(2, "returning 0 (sad)\n ........... %d %s ........ range (%d,%d) - (%d, %d) hit: %d,%d \n",
 			part.Linedef, ZExt_CollinearVertexPairCByCoord(nonVoid).toString(),
 			bbox.Xmin, bbox.Ymin, bbox.Xmax, bbox.Ymax,
 			hitStart, hitStop)
@@ -2641,6 +3113,9 @@ func ZExt_subPickNode_fast(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds
 	var bestH, bestV *ZExt_NodeSeg
 	oldDistH := ZNumber(-1)
 	oldDistV := ZNumber(-1)
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	midX := (bbox.Xmax + bbox.Xmin) >> 1
 	midY := (bbox.Ymax + bbox.Ymin) >> 1
@@ -2719,6 +3194,14 @@ func ZExt_subPickNode_fast(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds
 
 				bestcost = cost
 				best = part
+				if w.parts != nil {
+					w.parts = w.parts[:0]
+					w.parts = append(w.parts, part)
+				}
+			} else if cost == bestcost {
+				if w.parts != nil {
+					w.parts = append(w.parts, part)
+				}
 			}
 		}
 	}
@@ -2853,10 +3336,8 @@ func (w *ZExt_NodesWork) PartIsPolyobjSide(part, check *ZExt_NodeSeg) bool {
 func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 	super *ZExt_Superblock) *ZExt_NodeSeg {
 	best := ts
-	cnt := 0
-
-	for part := ts; part != nil; part = part.next {
-		cnt++
+	if w.parts != nil {
+		w.parts = w.parts[:0]
 	}
 
 	var previousPart *ZExt_NodeSeg
@@ -2951,8 +3432,34 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 	}
 	if len(w.zenScores) > 0 {
 		ZExt_ZenPickBestScore(w.zenScores)
-
 		best = w.zenScores[0].seg
+		if w.parts != nil {
+			w.parts = append(w.parts, best)
+		}
+		if w.parts != nil || config.VerbosityLevel >= 4 {
+
+			tst1, tst2, tst3, tst4 := w.zenScores[0].preciousSplit,
+				w.zenScores[0].scoreTotal,
+				w.zenScores[0].equivSplit,
+				w.zenScores[0].segSplit
+			track := 1
+			for i := 1; i < len(w.zenScores); i++ {
+				if tst1 == w.zenScores[i].preciousSplit &&
+					tst2 == w.zenScores[i].scoreTotal &&
+					tst3 == w.zenScores[i].equivSplit &&
+					tst4 == w.zenScores[i].segSplit {
+					if w.parts != nil {
+						w.parts = append(w.parts, w.zenScores[i].seg)
+					}
+					track++
+				} else {
+					break
+				}
+			}
+			if track > 1 {
+				w.mlog.Verbose(4, "ZEN Ambiguity equal rank for %d records \n", track)
+			}
+		}
 	}
 	return best
 }
@@ -3090,7 +3597,7 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	c.pdx = c.pex - c.psx
 	c.pdy = c.pey - c.psy
 
-	partStart, partEnd, bside := ZExt_PartitionInBoundary(part, &c, blXMax,
+	partStart, partEnd, bside := ZExt_PartitionInBoundary(w, part, &c, blXMax,
 		blYMax, blXMin, blYMin, partSegCoords)
 	if partStart == nil || partEnd == nil {
 
@@ -3112,7 +3619,7 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 		MOVE_SAFE_MARGIN)
 	partOrient := c.getIntersectionPoint_InfiniteLines()
 	if partOrient == nil {
-		Log.Verbose(2, "Failed to compute a special vertex for clockwise-triangle checking.\n")
+		w.mlog.Verbose(2, "Failed to compute a special vertex for clockwise-triangle checking.\n")
 	}
 
 	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
@@ -3171,7 +3678,7 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 
 	if len(pts) < 2 {
 
-		Log.Verbose(2, "Failed to produce a solid hits array: %d items (need at least two)\n",
+		w.mlog.Verbose(2, "Failed to produce a solid hits array: %d items (need at least two)\n",
 			len(pts))
 		return ZExt_NonVoidPerAlias{
 			success: false,
@@ -3195,7 +3702,7 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 				pts[len(pts)-1].v.X, pts[len(pts)-1].v.Y,
 				partEnd.X, partEnd.Y)
 		}
-		Log.Verbose(2, "Failed to produce a solid hits array for partition line %d: %t %t %s.\n",
+		w.mlog.Verbose(2, "Failed to produce a solid hits array for partition line %d: %t %t %s.\n",
 			part.Linedef, startBound, endBound, tailStr)
 
 		return ZExt_NonVoidPerAlias{
@@ -3237,9 +3744,9 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	}
 	if !fluger {
 
-		Log.Verbose(2, "... for the next line - old content: %s",
+		w.mlog.Verbose(2, "... for the next line - old content: %s",
 			ptsOld.toString())
-		Log.Verbose(2, "Sanity check failed! Evaluated partition line %d (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines (incidence count: %d). %s\n",
+		w.mlog.Verbose(2, "Sanity check failed! Evaluated partition line %d (%v,%v)-(%v,%v) doesn't consistently go in/out of the void when crossing solid lines (incidence count: %d). %s\n",
 			part.Linedef, part.psx, part.psy, part.pex, part.pey, cntIncident, pts.toString())
 
 		if !config.PersistThroughInsanity {
@@ -3264,7 +3771,7 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	}
 
 	if len(nonVoid) == 0 {
-		Log.Verbose(2, "part %d trace produced ZERO non-void intervals\n",
+		w.mlog.Verbose(2, "part %d trace produced ZERO non-void intervals\n",
 			part.Linedef)
 	}
 
@@ -3278,7 +3785,7 @@ func (w *ZExt_NodesWork) ComputeNonVoid(part *ZExt_NodeSeg) ZExt_NonVoidPerAlias
 	}
 }
 
-func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *FloatIntersectionContext,
+func ZExt_PartitionInBoundary(w *ZExt_NodesWork, part *ZExt_NodeSeg, c *FloatIntersectionContext,
 	blXMax, blYMax, blXMin, blYMin int, partSegCoords ZExt_VertexPairC) (*FloatVertex, *FloatVertex, int) {
 
 	partStart := new(FloatVertex)
@@ -3319,7 +3826,7 @@ func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *FloatIntersectionContext,
 				if sideIdx < 2 {
 					side[sideIdx] = linesTried
 				} else {
-					Log.Verbose(2, "More than 2 intersection points between line and a box - error.\n")
+					w.mlog.Verbose(2, "More than 2 intersection points between line and a box - error.\n")
 					return nil, nil, 0
 				}
 			}
@@ -3327,13 +3834,13 @@ func ZExt_PartitionInBoundary(part *ZExt_NodeSeg, c *FloatIntersectionContext,
 		}
 		if len(intersectPoints) < 2 {
 
-			Log.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
+			w.mlog.Verbose(2, "Couldn't determine point of intersection between partition line and solid internal blockmap bounding box (%d, %d). Falling back to legacy way of measuring length.\n",
 				len(intersectPoints), linesTried)
-			Log.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
+			w.mlog.Verbose(2, "part from linedef %d!%d+%d: (%v %v) - (%v %v) bbox: (%v %v) - (%v %v)\n",
 				part.Linedef, part.getFlip(), part.Offset, c.psx, c.psy, c.pex,
 				c.pey, blXMin, blYMax, blXMax, blYMin)
 			for i := 0; i < len(intersectPoints); i++ {
-				Log.Verbose(2, "Intersection#%d: (%v, %v)",
+				w.mlog.Verbose(2, "Intersection#%d: (%v, %v)",
 					i, intersectPoints[i].X, intersectPoints[i].Y)
 			}
 
@@ -3414,7 +3921,8 @@ func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 	w.totals.numNodes++
 	w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super, &rightsSuper,
-		&leftsSuper)
+		&leftsSuper, nil)
+	super = nil
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
@@ -3452,12 +3960,16 @@ func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 }
 
 func (w *ZExt_NodesWork) DivideSegsForSingleSector(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock, rightsSuper,
-	leftsSuper **ZExt_Superblock) {
+	leftsSuper **ZExt_Superblock, partsegs *[]PartSeg) {
 
 	best := ZExt_PickNode_SingleSector(w, ts, bbox, super)
 
 	if best == nil {
 		panic("Couldn't pick nodeline!")
+	}
+
+	if partsegs != nil {
+		w.GetPartSegs(ts, best, partsegs)
 	}
 
 	c := &ZExt_IntersectionContext{
@@ -3479,6 +3991,9 @@ func ZExt_PickNode_SingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 	best := ts
 	bestcost := int(INITIAL_BIG_COST)
 	cnt := 0
+	if w.parts != nil {
+		w.parts = w.parts[:0]
+	}
 
 	for part := ts; part != nil; part = part.next {
 		cnt++
@@ -3557,7 +4072,9 @@ func ZExt_PickNode_SingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 						rightcnt++
 					}
 					if (val&1 != 0) && (val&16 != 0) {
-						check.alias = part.alias
+						if check.alias != part.alias && ZExt_vetAliasTransfer(c) {
+							check.alias = part.alias
+						}
 						if check.pdx*part.pdx+check.pdy*part.pdy < 0 {
 							leftside = true
 							leftcnt++
@@ -3594,6 +4111,12 @@ func ZExt_PickNode_SingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 
 			bestcost = cost
 			best = part
+			if w.parts != nil {
+				w.parts = w.parts[:0]
+				w.parts = append(w.parts, part)
+			}
+		} else if cost == bestcost && w.parts != nil {
+			w.parts = append(w.parts, part)
 		}
 	}
 
@@ -3720,26 +4243,27 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	return bestResult.bspTree
 }
 
-func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_MTPWorker_Result) bool {
+func ZExt_IsBSPTreeBetter(oldWD *ZExt_NodesWork, oldNIP *NodeInProcess,
+	newWD *ZExt_NodesWork, newNIP *NodeInProcess) int {
 
-	oldBad := oldResult.workData.totals.preciousSplit > 0
-	newBad := newResult.workData.totals.preciousSplit > 0
+	oldBad := oldWD.totals.preciousSplit > 0
+	newBad := newWD.totals.preciousSplit > 0
 	if oldBad && !newBad {
-		return true
+		return 1
 	} else if !oldBad && newBad {
-		return false
+		return -1
 	}
 
-	oldSsectorsCnt := oldResult.workData.totals.numSSectors
-	newSSectorsCnt := newResult.workData.totals.numSSectors
+	oldSsectorsCnt := oldWD.totals.numSSectors
+	newSSectorsCnt := newWD.totals.numSSectors
 	if newSSectorsCnt < oldSsectorsCnt {
-		return true
+		return 1
 	} else if newSSectorsCnt > oldSsectorsCnt {
-		return false
+		return -1
 	}
 
-	oldLeft, oldRight := getBSPHeights(oldResult.bspTree)
-	newLeft, newRight := getBSPHeights(newResult.bspTree)
+	oldLeft, oldRight := getBSPHeights(oldNIP)
+	newLeft, newRight := getBSPHeights(newNIP)
 	oldDiff := oldRight - oldLeft
 	if oldDiff < 0 {
 		oldDiff = -oldDiff
@@ -3750,9 +4274,9 @@ func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_
 	}
 
 	if newDiff < oldDiff {
-		return true
+		return 1
 	} else if newDiff > oldDiff {
-		return false
+		return -1
 	}
 
 	oldMaxHeight := oldLeft
@@ -3765,16 +4289,27 @@ func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_
 	}
 
 	if newMaxHeight < oldMaxHeight {
-		return true
+		return 1
 	} else if newMaxHeight > oldMaxHeight {
-		return false
+		return -1
 	}
 
-	oldSegCnt := oldResult.workData.totals.numSegs
-	newSegCnt := newResult.workData.totals.numSegs
+	oldSegCnt := oldWD.totals.numSegs
+	newSegCnt := newWD.totals.numSegs
 	if newSegCnt < oldSegCnt {
-		return true
+		return 1
 	} else if newSegCnt > oldSegCnt {
+		return -1
+	}
+	return 0
+}
+
+func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_MTPWorker_Result) bool {
+	ir := ZExt_IsBSPTreeBetter(oldResult.workData, oldResult.bspTree,
+		newResult.workData, newResult.bspTree)
+	if ir > 0 {
+		return true
+	} else if ir < 0 {
 		return false
 	}
 
@@ -3786,6 +4321,7 @@ func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_
 
 func ZExt_MTPSentinel_Clone(w *ZExt_NodesWork, bbox *NodeBounds) (*ZExt_NodesWork, *NodeBounds) {
 	clonedWorkData := w.GetInitialStateClone()
+	clonedWorkData.mlog = CreateMiniLogger()
 	clonedBbox := new(NodeBounds)
 	*clonedBbox = *bbox
 	return clonedWorkData, clonedBbox
@@ -3931,6 +4467,7 @@ func (w *ZExt_NodesWork) MTP_DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls 
 func (w *ZExt_NodesWork) AddVertex(x, y ZNumber) *ZExt_NodeVertex {
 	v := w.vertexMap.SelectVertexClose(float64(x), float64(y))
 	if v.Id != -1 {
+		w.vertexExists++
 		return &(w.vertices[v.Id])
 	}
 
@@ -3983,27 +4520,6 @@ func ZExt_PointOnLineSide(part *ZExt_NodeSeg, x, y int) int {
 func ZExt_UtilPerpDist_Float64(part *ZExt_NodeSeg, x, y float64) float64 {
 	return (x*float64(part.pdy) - y*float64(part.pdx) +
 		float64(part.perp)) / float64(part.len)
-}
-
-func (log *MyLogger) ZExt_DumpSegs(ts *ZExt_NodeSeg) {
-	if !config.DumpSegsFlag || ts == nil {
-		return
-	}
-
-	allSector := ts.sector
-	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
-	for tmps := ts; tmps != nil; tmps = tmps.next {
-		log.segs.WriteString(fmt.Sprintf(
-			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
-			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
-			tmps.EndVertex.X, tmps.EndVertex.Y))
-		if tmps.sector != allSector {
-
-			log.segs.WriteString(fmt.Sprintf(" BAD! Sector = %d\n", tmps.sector))
-		} else {
-			log.segs.WriteString("\n")
-		}
-	}
 }
 
 func (w *ZExt_NodesWork) PassingTooClose(part, check *ZExt_NodeSeg, cost *int,
@@ -4232,6 +4748,26 @@ func (w *ZExt_NodesWork) SegOrLineToVertexPairC(part *ZExt_NodeSeg) ZExt_VertexP
 
 func ZExt_vetAliasTransfer(c *ZExt_IntersectionContext) bool {
 	return true
+}
+
+func ZExt_vetAliasTransfer2(part, check *ZExt_NodeSeg) bool {
+	if check.len >= 4 {
+		return true
+	}
+	c := &ZExt_IntersectionContext{
+		psx: part.psx,
+		psy: part.psy,
+		pex: part.pex,
+		pey: part.pey,
+	}
+	c.pdx = c.psx - c.pex
+	c.pdy = c.psy - c.pey
+	c.lsx = check.psx
+	c.lsy = check.psy
+	c.lex = check.pex
+	c.ley = check.pey
+	val := ZExt_doLinesIntersectStandard(c)
+	return (val&1 != 0) && (val&16 != 0)
 }
 
 type ZExt_Superblock struct {
@@ -4803,6 +5339,51 @@ func ZExt_ZenSegMinorToDepthScores(input []ZExt_SegMinorBundle) []ZExt_DepthScor
 		res[i].segSplit = entry.minor.SegsSplit
 	}
 	return res
+}
+
+func (log *MyLogger) ZExt_DumpSegs(ts *ZExt_NodeSeg) {
+	if !config.DumpSegsFlag || ts == nil {
+		return
+	}
+
+	allSector := ts.sector
+	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
+	for tmps := ts; tmps != nil; tmps = tmps.next {
+		log.segs.WriteString(fmt.Sprintf(
+			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
+			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.EndVertex.X, tmps.EndVertex.Y))
+		if tmps.sector != allSector {
+
+			log.segs.WriteString(fmt.Sprintf(" BAD! Sector = %d\n", tmps.sector))
+		} else {
+			log.segs.WriteString("\n")
+		}
+	}
+}
+
+func (mlog *MiniLogger) ZExt_DumpSegs(ts *ZExt_NodeSeg) {
+	if mlog == nil {
+		Log.ZExt_DumpSegs(ts)
+	}
+	if !config.DumpSegsFlag || ts == nil {
+		return
+	}
+
+	allSector := ts.sector
+	mlog.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
+	for tmps := ts; tmps != nil; tmps = tmps.next {
+		mlog.segs.WriteString(fmt.Sprintf(
+			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
+			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
+			tmps.EndVertex.X, tmps.EndVertex.Y))
+		if tmps.sector != allSector {
+
+			mlog.segs.WriteString(fmt.Sprintf(" BAD! Sector = %d\n", tmps.sector))
+		} else {
+			mlog.segs.WriteString("\n")
+		}
+	}
 }
 
 func ZExt_IntPartitionInBoundary(part *ZExt_NodeSeg, c *ZExt_IntersectionContext, blXMax, blYMax, blXMin, blYMin int, partSegCoords ZExt_IntVertexPairC) (*ZExt_IntOrientedVertex, *ZExt_IntOrientedVertex) {
@@ -5417,6 +5998,700 @@ func (w *ZExt_NodesWork) WhichSideInternal(check *ZExt_NodeSeg, c *ZExt_Intersec
 		return SIDENESS_RIGHT
 	}
 	return 0
+}
+
+type ZExt_RearrangeTracker struct {
+	totals             *NodesTotals
+	vertices           []ZExt_NodeVertex
+	subsectors         []SubSector
+	segs               []Seg
+	deepSubsectors     []DeepSubSector
+	deepSegs           []DeepSeg
+	zdoomSubsectors    []uint32
+	zdoomSegs          []ZdoomNode_Seg
+	verticeRenumbering []int
+	cntVerts           int
+}
+
+type ZExt_StkQueue struct {
+	tasks      []ZExt_StkQueueTask
+	depthLimit int
+	cur        int
+
+	tmp *ZExt_StkQueueTask
+}
+
+type ZExt_StkQueueTask struct {
+	action       int
+	num          int
+	parentNum    int
+	isRightChild bool
+	depth        int
+	seg          *ZExt_NodeSeg
+	box          *NodeBounds
+	super        *ZExt_Superblock
+	leftChild    int
+	rightChild   int
+	parts        []PartSeg
+	node         *NodeInProcess
+}
+
+func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess) {
+	if w.vertexExists > 0 {
+
+		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
+		return
+	}
+	if len(w.segs) > 32767 || len(w.subsectors) > 32767 {
+
+		Log.Printf("RearrangeBSP: cancelled (segs / subsectors are out of guaranteed vanilla range).\n")
+		return
+	}
+	track := &ZExt_RearrangeTracker{
+		totals:     &NodesTotals{},
+		segs:       make([]Seg, 0, cap(w.segs)),
+		subsectors: make([]SubSector, 0, cap(w.subsectors)),
+		vertices:   make([]ZExt_NodeVertex, 0, cap(w.vertices)),
+	}
+
+	if !w.identifyLinedefVertices(track) {
+		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
+		return
+	}
+
+	w.rearrangeVanilla(node, track)
+	if w.totals.numSegs != track.totals.numSegs ||
+		w.totals.numSSectors != track.totals.numSSectors ||
+		track.cntVerts != w.lines.GetVerticesCount() {
+		Log.Panic("RearrangeBSP: BSP structures length not identical after rearrangement segs:%d:%d ssectors:%d:%d verts:%d:%d\n",
+			w.totals.numSegs, track.totals.numSegs,
+			w.totals.numSSectors, track.totals.numSSectors,
+			track.cntVerts, w.lines.GetVerticesCount())
+	}
+	w.segs = track.segs
+	w.subsectors = track.subsectors
+	w.vertices = track.vertices
+	w.lines.RearrangeVertices(track.verticeRenumbering)
+	Log.Printf("RearrangeBSP: done\n")
+}
+
+func (w *ZExt_NodesWork) rearrangeVanilla(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+	w.rearrangeVertices(node, track)
+	if node.nextL != nil {
+		w.rearrangeVanilla(node.nextL, track)
+	} else {
+		ssector := &(w.subsectors[node.LChild & ^w.SsectorMask])
+		node.LChild = w.putSubsector(ssector, track) | w.SsectorMask
+	}
+	if node.nextR != nil {
+		w.rearrangeVanilla(node.nextR, track)
+	} else {
+		ssector := &(w.subsectors[node.RChild & ^w.SsectorMask])
+		node.RChild = w.putSubsector(ssector, track) | w.SsectorMask
+	}
+}
+
+func (w *ZExt_NodesWork) rearrangeVertices(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+	ex, ok := w.stkExtra[node]
+	if !ok {
+		Log.Panic("rearrangeVertices: failed to retrieve extra information on node-in-process structure.\n")
+	}
+
+	for i := ex.vstart; i < ex.vend; i++ {
+		if track.verticeRenumbering[i] >= 0 {
+			Log.Panic("vertex already numbered\n")
+		}
+		track.verticeRenumbering[i] = track.cntVerts
+		track.cntVerts++
+	}
+}
+
+func (w *ZExt_NodesWork) putSubsector(ssector *SubSector, track *ZExt_RearrangeTracker) uint32 {
+	idx := track.totals.numSSectors
+	track.totals.numSSectors++
+	v := w.putSegs(ssector, track)
+	track.subsectors = append(track.subsectors, v)
+	return uint32(idx)
+}
+
+func (w *ZExt_NodesWork) putSegs(orig *SubSector, track *ZExt_RearrangeTracker) SubSector {
+	firstSeg := track.totals.numSegs
+	for _, seg := range w.segs[orig.FirstSeg : orig.FirstSeg+orig.SegCount] {
+		seg2 := seg
+		w.renumberSegVertices(&seg2, track)
+		track.segs = append(track.segs, seg2)
+		track.totals.numSegs++
+	}
+	return SubSector{
+		FirstSeg: uint16(firstSeg),
+		SegCount: orig.SegCount,
+	}
+}
+
+func (w *ZExt_NodesWork) renumberSegVertices(seg *Seg, track *ZExt_RearrangeTracker) {
+	s := int(seg.StartVertex)
+	e := int(seg.EndVertex)
+	if track.verticeRenumbering[s] < 0 || track.verticeRenumbering[e] < 0 {
+		Log.Panic("vertex was not renumbered at proper place (s: %d->%d, e: %d->%d)\n",
+			s, track.verticeRenumbering[s], e, track.verticeRenumbering[e])
+	}
+	seg.StartVertex = uint16(track.verticeRenumbering[s])
+	seg.EndVertex = uint16(track.verticeRenumbering[e])
+}
+
+func (w *ZExt_NodesWork) identifyLinedefVertices(track *ZExt_RearrangeTracker) bool {
+	lcount := w.lines.Len()
+	numVerts := len(w.vertices)
+	translate := make([]int, numVerts)
+	track.cntVerts = 0
+	for i, _ := range translate {
+		translate[i] = -1
+	}
+	for i := uint16(0); i < lcount; i++ {
+		s, e := w.lines.GetLinedefVertices(i)
+		if s >= numVerts || e >= numVerts {
+			Log.Error("identifyLinedefVertices: Linedef %d has vertex out of range\n", i)
+			return false
+		}
+
+		if translate[s] < 0 {
+			track.cntVerts++
+		}
+		translate[s] = s
+
+		if translate[e] < 0 {
+			track.cntVerts++
+		}
+		translate[e] = e
+	}
+
+	for i := 0; i < track.cntVerts; i++ {
+		if translate[i] != i {
+
+			Log.Error("identifyLinedefVertices: failed assertion that vertices from linedefs must precede vertices from segs\n")
+			return false
+		}
+	}
+	for i := track.cntVerts; i < numVerts; i++ {
+		if translate[i] != -1 {
+			Log.Error("identifyLinedefVertices: wtf (programmer error)\n")
+			return false
+		}
+	}
+	Log.Printf("debug: cntVerts (original) == %d\n", track.cntVerts)
+	track.verticeRenumbering = translate
+	return true
+}
+
+func (w *ZExt_NodesWork) RearrangeBSPDeep(node *NodeInProcess) {
+	if w.vertexExists > 0 {
+		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
+		return
+	}
+
+	track := &ZExt_RearrangeTracker{
+		totals:         &NodesTotals{},
+		deepSegs:       make([]DeepSeg, 0, cap(w.deepSegs)),
+		deepSubsectors: make([]DeepSubSector, 0, cap(w.deepSubsectors)),
+		vertices:       make([]ZExt_NodeVertex, 0, cap(w.vertices)),
+	}
+	if !w.identifyLinedefVertices(track) {
+		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
+		return
+	}
+	w.rearrangeDeep(node, track)
+	if w.totals.numSegs != track.totals.numSegs ||
+		w.totals.numSSectors != track.totals.numSSectors ||
+		track.cntVerts != w.lines.GetVerticesCount() {
+		Log.Panic("RearrangeBSP: BSP structures length not identical after rearrangement segs:%d:%d ssectors:%d:%d verts:%d:%d\n",
+			w.totals.numSegs, track.totals.numSegs,
+			w.totals.numSSectors, track.totals.numSSectors,
+			track.cntVerts, w.lines.GetVerticesCount())
+	}
+	w.deepSegs = track.deepSegs
+	w.deepSubsectors = track.deepSubsectors
+	w.vertices = track.vertices
+	w.lines.RearrangeVertices(track.verticeRenumbering)
+	Log.Printf("RearrangeBSP: done\n")
+}
+
+func (w *ZExt_NodesWork) rearrangeDeep(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+	w.rearrangeVertices(node, track)
+	if node.nextL != nil {
+		w.rearrangeDeep(node.nextL, track)
+	} else {
+		ssector := &(w.deepSubsectors[node.LChild & ^w.SsectorMask])
+		node.LChild = w.putDeepSubsector(ssector, track) | w.SsectorMask
+	}
+	if node.nextR != nil {
+		w.rearrangeDeep(node.nextR, track)
+	} else {
+		ssector := &(w.deepSubsectors[node.RChild & ^w.SsectorMask])
+		node.RChild = w.putDeepSubsector(ssector, track) | w.SsectorMask
+	}
+}
+
+func (w *ZExt_NodesWork) putDeepSubsector(ssector *DeepSubSector,
+	track *ZExt_RearrangeTracker) uint32 {
+	idx := track.totals.numSSectors
+	track.totals.numSSectors++
+	v := w.putDeepSegs(ssector, track)
+	track.deepSubsectors = append(track.deepSubsectors, v)
+	return uint32(idx)
+}
+
+func (w *ZExt_NodesWork) putDeepSegs(orig *DeepSubSector,
+	track *ZExt_RearrangeTracker) DeepSubSector {
+	firstSeg := track.totals.numSegs
+	view := w.deepSegs[orig.FirstSeg : orig.FirstSeg+uint32(orig.SegCount)]
+	for _, seg := range view {
+		seg2 := seg
+		w.renumberDeepSegVertices(&seg2, track)
+		track.deepSegs = append(track.deepSegs, seg2)
+		track.totals.numSegs++
+	}
+	return DeepSubSector{
+		FirstSeg: uint32(firstSeg),
+		SegCount: orig.SegCount,
+	}
+}
+
+func (w *ZExt_NodesWork) renumberDeepSegVertices(seg *DeepSeg,
+	track *ZExt_RearrangeTracker) {
+	s := int(seg.StartVertex)
+	e := int(seg.EndVertex)
+	if track.verticeRenumbering[s] < 0 || track.verticeRenumbering[e] < 0 {
+		Log.Panic("vertex was not renumbered at proper place\n")
+	}
+	seg.StartVertex = uint32(track.verticeRenumbering[s])
+	seg.EndVertex = uint32(track.verticeRenumbering[e])
+}
+
+func (w *ZExt_NodesWork) RearrangeBSPExtended(node *NodeInProcess) {
+	if w.vertexExists > 0 {
+		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
+		return
+	}
+
+	track := &ZExt_RearrangeTracker{
+		totals:          &NodesTotals{},
+		zdoomSegs:       make([]ZdoomNode_Seg, 0, cap(w.zdoomSegs)),
+		zdoomSubsectors: make([]uint32, 0, cap(w.zdoomSubsectors)),
+	}
+	w.initTranslateVectorForExtended(track)
+	w.rearrangeExtended(node, track)
+	if w.totals.numSegs != track.totals.numSegs ||
+		w.totals.numSSectors != track.totals.numSSectors ||
+		uint32(track.cntVerts) != (uint32(len(w.vertices))-
+			w.zdoomVertexHeader.ReusedOriginalVertices) {
+		Log.Panic("RearrangeBSP: BSP structures length not identical after rearrangement segs:%d:%d ssectors:%d:%d verts:%d:%d\n",
+			w.totals.numSegs, track.totals.numSegs,
+			w.totals.numSSectors, track.totals.numSSectors,
+			track.cntVerts, uint32(len(w.vertices))-
+				w.zdoomVertexHeader.ReusedOriginalVertices)
+	}
+	w.zdoomSegs = track.zdoomSegs
+	w.zdoomSubsectors = track.zdoomSubsectors
+	w.reallyRearrangeExtendedVertices(track.verticeRenumbering)
+	Log.Printf("RearrangeBSP: done\n")
+}
+
+func (w *ZExt_NodesWork) rearrangeExtended(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+	w.rearrangeExtendedVertices(node, track)
+	if node.nextL != nil {
+		w.rearrangeExtended(node.nextL, track)
+	} else {
+		ssector := node.LChild & ^w.SsectorMask
+		node.LChild = w.putExtendedSubsector(ssector, track) | w.SsectorMask
+	}
+	if node.nextR != nil {
+		w.rearrangeExtended(node.nextR, track)
+	} else {
+		ssector := node.RChild & ^w.SsectorMask
+		node.RChild = w.putExtendedSubsector(ssector, track) | w.SsectorMask
+	}
+}
+
+func (w *ZExt_NodesWork) putExtendedSubsector(ssector uint32,
+	track *ZExt_RearrangeTracker) uint32 {
+	idx := track.totals.numSSectors
+	track.totals.numSSectors++
+	v := w.putExtendedSegs(ssector, track)
+	track.zdoomSubsectors = append(track.zdoomSubsectors, v)
+	return uint32(idx)
+}
+
+func (w *ZExt_NodesWork) putExtendedSegs(orig uint32,
+	track *ZExt_RearrangeTracker) uint32 {
+	oldFirstSeg := getFirstSegExtended(w.zdoomSubsectors, orig)
+	view := w.zdoomSegs[oldFirstSeg : oldFirstSeg+w.zdoomSubsectors[orig]]
+	a := uint32(0)
+	for _, seg := range view {
+		seg2 := seg
+		w.renumberExtendedSegVertices(&seg2, track)
+		track.zdoomSegs = append(track.zdoomSegs, seg2)
+		track.totals.numSegs++
+		a++
+	}
+	return w.zdoomSubsectors[orig]
+}
+
+func (w *ZExt_NodesWork) renumberExtendedSegVertices(seg *ZdoomNode_Seg,
+	track *ZExt_RearrangeTracker) {
+	reused := w.zdoomVertexHeader.ReusedOriginalVertices
+	if seg.StartVertex >= reused {
+		s := seg.StartVertex - reused
+		if track.verticeRenumbering[s] < 0 {
+			Log.Panic("vertex was not renumbered at proper place\n")
+		}
+		seg.StartVertex = uint32(track.verticeRenumbering[s]) + reused
+	}
+	if seg.EndVertex >= reused {
+		e := seg.EndVertex - reused
+		if track.verticeRenumbering[e] < 0 {
+			Log.Panic("vertex was not renumbered at proper place\n")
+		}
+		seg.EndVertex = uint32(track.verticeRenumbering[e]) + reused
+	}
+}
+
+func (w *ZExt_NodesWork) initTranslateVectorForExtended(track *ZExt_RearrangeTracker) {
+	numVerts := uint32(len(w.vertices) -
+		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	translate := make([]int, numVerts)
+	track.cntVerts = 0
+	for i, _ := range translate {
+		translate[i] = -1
+	}
+	track.verticeRenumbering = translate
+}
+
+func (w *ZExt_NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
+	track *ZExt_RearrangeTracker) {
+	ex, ok := w.stkExtra[node]
+	if !ok {
+		Log.Panic("rearrangeExtendedVertices: failed to retrieve extra information on node-in-process structure.\n")
+	}
+	reused := w.zdoomVertexHeader.ReusedOriginalVertices
+	dstart := ex.vstart - int64(reused)
+	dend := ex.vend - int64(reused)
+	for i := dstart; i < dend; i++ {
+		if track.verticeRenumbering[i] >= 0 {
+			Log.Panic("vertex already numbered\n")
+		}
+		track.verticeRenumbering[i] = track.cntVerts
+		track.cntVerts++
+	}
+}
+
+func (w *ZExt_NodesWork) reallyRearrangeExtendedVertices(translate []int) {
+	reused := w.zdoomVertexHeader.ReusedOriginalVertices
+	if len(translate) != (len(w.vertices) - int(reused)) {
+		Log.Panic("reallyRearrangeExtendedVertices: failed translation (length don't match) %d != %d",
+			len(translate), len(w.vertices)-int(reused))
+	}
+	newVertices := make([]ZExt_NodeVertex, len(w.vertices))
+	for i, _ := range w.vertices[:reused] {
+		newVertices[i] = w.vertices[i]
+	}
+	for i, _ := range w.vertices[reused:] {
+		newVertices[uint32(translate[i])+reused] =
+			w.vertices[uint32(i)+reused]
+	}
+	w.vertices = newVertices
+}
+
+func ZExt_StkEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
+	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
+	w.parts = make([]*ZExt_NodeSeg, 0)
+
+	queue := &ZExt_StkQueue{}
+
+	queue.depthLimit = 7
+	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
+
+	return ZExt_StkCreateNode(w, ts, bbox, super, queue)
+}
+
+func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
+	super *ZExt_Superblock, queue *ZExt_StkQueue) *NodeInProcess {
+	b := true
+	var firstRes *NodeInProcess
+	task := queue.Dequeue()
+	for b {
+		singleSectorMode := false
+		if task != nil {
+			ts = task.seg
+			bbox = task.box
+			super = task.super
+			singleSectorMode = task.action == STK_QUEUE_SINGLE_NONCONVEX
+		} else {
+			b = false
+		}
+		res := new(NodeInProcess)
+		if firstRes == nil {
+			firstRes = res
+		}
+		var rights *ZExt_NodeSeg
+		var lefts *ZExt_NodeSeg
+		var rightsSuper *ZExt_Superblock
+		var leftsSuper *ZExt_Superblock
+
+		w.totals.numNodes++
+
+		partsegs := make([]PartSeg, 0)
+
+		vstart := int64(len(w.vertices))
+		if singleSectorMode {
+			w.stkDivisorSS(w, ts, &rights, &lefts, bbox, super, &rightsSuper,
+				&leftsSuper, &partsegs)
+		} else {
+			w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
+				&leftsSuper, &partsegs)
+		}
+		vend := int64(len(w.vertices))
+		super = nil
+		res.X = int16(w.nodeX)
+		res.Y = int16(w.nodeY)
+		res.Dx = int16(w.nodeDx)
+		res.Dy = int16(w.nodeDy)
+		w.stkExtra[res] = StkNodeExtraData{
+			vstart: vstart,
+			vend:   vend,
+			parts:  partsegs,
+		}
+
+		if task != nil {
+			queue.SetResult(res, partsegs)
+		}
+
+		leftBox := ZExt_FindLimits(lefts)
+		res.Lbox[BB_TOP] = int16(leftBox.Ymax)
+		res.Lbox[BB_BOTTOM] = int16(leftBox.Ymin)
+		res.Lbox[BB_LEFT] = int16(leftBox.Xmin)
+		res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
+		state := w.isItConvex(lefts)
+		if state == CONVEX_SUBSECTOR {
+			res.nextL = nil
+			res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+			w.returnSuperblockToPool(leftsSuper)
+		} else if state == NONCONVEX_ONESECTOR {
+			res.LChild = 0
+			if !b || !queue.Enqueue(STK_QUEUE_SINGLE_NONCONVEX, lefts, leftBox,
+				leftsSuper, false) {
+				res.nextL = w.stkCreateNodeSS(w, lefts, leftBox, leftsSuper, nil)
+			}
+		} else {
+			res.LChild = 0
+			if config.VerbosityLevel >= 1 && w.IsConvexMultiSector(lefts) {
+				w.dumpMultiSectorSegs(lefts)
+			}
+			if !b || !queue.Enqueue(STK_QUEUE_REGULARNODE, lefts, leftBox,
+				leftsSuper, false) {
+				res.nextL = ZExt_StkCreateNode(w, lefts, leftBox, leftsSuper, nil)
+			}
+		}
+		leftsSuper = nil
+
+		rightBox := ZExt_FindLimits(rights)
+		res.Rbox[BB_TOP] = int16(rightBox.Ymax)
+		res.Rbox[BB_BOTTOM] = int16(rightBox.Ymin)
+		res.Rbox[BB_LEFT] = int16(rightBox.Xmin)
+		res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
+		state = w.isItConvex(rights)
+		if state == CONVEX_SUBSECTOR {
+			res.nextR = nil
+			res.RChild = w.CreateSSector(rights) | w.SsectorMask
+			w.returnSuperblockToPool(rightsSuper)
+		} else if state == NONCONVEX_ONESECTOR {
+			res.RChild = 0
+			if !b || !queue.Enqueue(STK_QUEUE_SINGLE_NONCONVEX, rights, rightBox,
+				rightsSuper, true) {
+				res.nextR = w.stkCreateNodeSS(w, rights, rightBox, rightsSuper, nil)
+			}
+		} else {
+			res.RChild = 0
+			if config.VerbosityLevel >= 1 && w.IsConvexMultiSector(rights) {
+				w.dumpMultiSectorSegs(rights)
+			}
+			if !b || !queue.Enqueue(STK_QUEUE_REGULARNODE, rights, rightBox,
+				rightsSuper, true) {
+				res.nextR = ZExt_StkCreateNode(w, rights, rightBox, rightsSuper, nil)
+			}
+		}
+		rightsSuper = nil
+		task = queue.Dequeue()
+		b = task != nil
+	}
+	return firstRes
+}
+
+func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
+	super *ZExt_Superblock, queue *ZExt_StkQueue) *NodeInProcess {
+	res := new(NodeInProcess)
+	var rights *ZExt_NodeSeg
+	var lefts *ZExt_NodeSeg
+	var rightsSuper *ZExt_Superblock
+	var leftsSuper *ZExt_Superblock
+
+	w.totals.numNodes++
+	partsegs := make([]PartSeg, 0)
+	vstart := int64(len(w.vertices))
+	w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super, &rightsSuper,
+		&leftsSuper, &partsegs)
+	vend := int64(len(w.vertices))
+	super = nil
+	res.X = int16(w.nodeX)
+	res.Y = int16(w.nodeY)
+	res.Dx = int16(w.nodeDx)
+	res.Dy = int16(w.nodeDy)
+	w.stkExtra[res] = StkNodeExtraData{
+		vstart: vstart,
+		vend:   vend,
+		parts:  partsegs,
+	}
+
+	leftBox := ZExt_FindLimits(lefts)
+	res.Lbox[BB_TOP] = int16(leftBox.Ymax)
+	res.Lbox[BB_BOTTOM] = int16(leftBox.Ymin)
+	res.Lbox[BB_LEFT] = int16(leftBox.Xmin)
+	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
+	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
+		res.nextL = nil
+		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		w.returnSuperblockToPool(leftsSuper)
+	} else {
+		res.nextL = ZExt_StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
+		res.LChild = 0
+	}
+
+	rightBox := ZExt_FindLimits(rights)
+	res.Rbox[BB_TOP] = int16(rightBox.Ymax)
+	res.Rbox[BB_BOTTOM] = int16(rightBox.Ymin)
+	res.Rbox[BB_LEFT] = int16(rightBox.Xmin)
+	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
+	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
+		res.nextR = nil
+		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		w.returnSuperblockToPool(rightsSuper)
+	} else {
+		res.nextR = ZExt_StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)
+		res.RChild = 0
+	}
+
+	return res
+}
+
+func ZExt_VigilantSingleSectorDivisor(w *ZExt_NodesWork, ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock, rightsSuper,
+	leftsSuper **ZExt_Superblock, partsegs *[]PartSeg) {
+
+	w.DivideSegsForSingleSector(ts, rs, ls, bbox, super, rightsSuper,
+		leftsSuper, partsegs)
+}
+
+func ZExt_DefaultSingleSectorDivisor(w *ZExt_NodesWork, ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock, rightsSuper,
+	leftsSuper **ZExt_Superblock, partsegs *[]PartSeg) {
+
+	w.DivideSegs(ts, rs, ls, bbox, super, rightsSuper, leftsSuper, partsegs)
+}
+
+func (q *ZExt_StkQueue) lastDequeued() *ZExt_StkQueueTask {
+	if len(q.tasks) == 0 || q.cur == 0 {
+		return nil
+	}
+	return &(q.tasks[q.cur-1])
+}
+
+func (q *ZExt_StkQueue) depthChanged() {
+
+}
+
+func (q *ZExt_StkQueue) getDepth() int {
+	if len(q.tasks) == 0 {
+		return -1
+	}
+	return q.tasks[len(q.tasks)-1].depth
+}
+
+func (q *ZExt_StkQueue) Enqueue(action int, seg *ZExt_NodeSeg, box *NodeBounds,
+	super *ZExt_Superblock, isRightChild bool) bool {
+	if q == nil {
+
+		return false
+	}
+	if q.depthLimit != -1 && q.getDepth()+1 > q.depthLimit {
+		return false
+	}
+	num := len(q.tasks)
+	q.tasks = append(q.tasks, ZExt_StkQueueTask{
+		action: action,
+		num:    num,
+
+		isRightChild: isRightChild,
+
+		seg:        seg,
+		box:        box,
+		super:      super,
+		leftChild:  -1,
+		rightChild: -1,
+		parts:      nil,
+	})
+	parent := q.lastDequeued()
+	nu := &(q.tasks[len(q.tasks)-1])
+	if parent != nil {
+		nu.parentNum = parent.num
+		nu.depth = parent.depth + 1
+		if isRightChild {
+			parent.rightChild = num
+		} else {
+			parent.leftChild = num
+		}
+	} else {
+
+		nu.parentNum = -1
+		nu.depth = 0
+	}
+	return true
+}
+
+func (q *ZExt_StkQueue) Dequeue() *ZExt_StkQueueTask {
+	if q == nil {
+		return nil
+	}
+	if len(q.tasks) == 0 {
+		return nil
+	}
+	if q.cur == len(q.tasks) {
+		q.tmp = nil
+		return nil
+	}
+	if q.tmp == nil {
+		q.tmp = &ZExt_StkQueueTask{}
+
+	} else {
+		oldDepth := q.tmp.depth
+		newDepth := q.tasks[q.cur].depth
+		if oldDepth != newDepth {
+			q.depthChanged()
+		}
+	}
+	*(q.tmp) = q.tasks[q.cur]
+	q.cur++
+	return q.tmp
+}
+
+func (q *ZExt_StkQueue) SetResult(node *NodeInProcess, parts []PartSeg) {
+	de := q.lastDequeued()
+	de.node = node
+	if de.parentNum >= 0 {
+		if de.isRightChild {
+			q.tasks[de.parentNum].node.nextR = node
+		} else {
+			q.tasks[de.parentNum].node.nextL = node
+		}
+	}
+
+	de.parts = parts
 }
 func init() {
 	ZNodesGenerator = ZExt_NodesGenerator

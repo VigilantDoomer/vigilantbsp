@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -19,7 +19,6 @@
 package main
 
 import (
-	"fmt"
 	"math"
 )
 
@@ -70,7 +69,6 @@ import (
 // #pragma replace_prototype *NodesWork.AddVertex with *NodesWork.ZAddVertex_Proto
 // #pragma replace_prototype *NodesWork.CreateSSector with *NodesWork.ZCreateSSector_Proto
 // #pragma replace_prototype PointOnLineSide with ZPointOnLineSide_Proto
-// #pragma replace_prototype *MyLogger.DumpSegs with *MyLogger.ZDumpSegs_Proto
 // #pragma replace_prototype *NodesWork.PassingTooClose with *NodesWork.ZPassingTooClose_Proto
 // #pragma replace_prototype *IntersectionContext.computeIntersection with *IntersectionContext.ZcomputeIntersection_Proto
 // #pragma replace_prototype doLinesIntersectStandard with ZdoLinesIntersect_Proto
@@ -78,6 +76,7 @@ import (
 // #pragma replace_prototype *NodesWork.updateSegLenBetter with *NodesWork.ZupdateSegLenBetter_Proto
 // #pragma replace_prototype *NodesWork.SegOrLineToVertexPairC with *NodesWork.ZSegOrLineToVertexPairC_Proto
 // #pragma replace_prototype vetAliasTransfer with ZVetAliasTransfer_Proto
+// #pragma replace_prototype vetAliasTransfer2 with ZVetAliasTransfer2_Proto
 
 // Finally, we need to assign the core function - which will include all other
 // generated stuff in its calltree - to a predefined callback. The generated
@@ -150,6 +149,7 @@ func (n ZNumber) Floor() int {
 func (w *NodesWork) ZAddVertex_Proto(x, y Number) *NodeVertex {
 	v := w.vertexMap.SelectVertexClose(float64(x), float64(y))
 	if v.Id != -1 { // already exists
+		w.vertexExists++
 		return &(w.vertices[v.Id])
 	}
 
@@ -210,28 +210,6 @@ func UtilPerpDist_Float64(part *NodeSeg, x, y float64) float64 {
 
 func Float64AbsAndSign(perp float64) (float64, bool) {
 	return math.Abs(perp), math.Signbit(perp)
-}
-
-func (log *MyLogger) ZDumpSegs_Proto(ts *NodeSeg) {
-	if !config.DumpSegsFlag || ts == nil { // reference to global: config
-		return
-	}
-	// Assume all come from same sector
-	allSector := ts.sector
-	log.segs.WriteString(fmt.Sprintf("Sector #%d:\n", allSector))
-	for tmps := ts; tmps != nil; tmps = tmps.next {
-		log.segs.WriteString(fmt.Sprintf(
-			"  Linedef: %d Flip: %d (%v,%v) - (%v, %v)",
-			tmps.Linedef, tmps.getFlip(), tmps.StartVertex.X, tmps.StartVertex.Y,
-			tmps.EndVertex.X, tmps.EndVertex.Y))
-		if tmps.sector != allSector {
-			// Is not supposed to write stuff from multiple sectors. You'll have
-			// to rewrite code in this function to adjust it to your use case
-			log.segs.WriteString(fmt.Sprintf(" BAD! Sector = %d\n", tmps.sector))
-		} else {
-			log.segs.WriteString("\n")
-		}
-	}
 }
 
 // ZPassingTooClose_Proto checks whether partition crosses check seg too close
@@ -562,4 +540,24 @@ func (w *NodesWork) ZSegOrLineToVertexPairC_Proto(part *NodeSeg) VertexPairC {
 // In extended nodes mode, the used intersection evaluator is accurate enough
 func ZVetAliasTransfer_Proto(c *IntersectionContext) bool {
 	return true
+}
+
+func ZVetAliasTransfer2_Proto(part, check *NodeSeg) bool {
+	if check.len >= 4 {
+		return true
+	}
+	c := &IntersectionContext{
+		psx: part.psx,
+		psy: part.psy,
+		pex: part.pex,
+		pey: part.pey,
+	}
+	c.pdx = c.psx - c.pex
+	c.pdy = c.psy - c.pey
+	c.lsx = check.psx
+	c.lsy = check.psy
+	c.lex = check.pex
+	c.ley = check.pey
+	val := doLinesIntersectStandard(c) // will be intercepted of course
+	return (val&1 != 0) && (val&16 != 0)
 }
