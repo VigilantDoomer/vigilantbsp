@@ -51,6 +51,9 @@ const ( // RMB option/command types
 	RMB_RIGHT
 	RMB_SAFE
 	RMB_TRACE
+
+	RMB_SIMPLE_BLIND // BLIND 0/1 might be replaced by this
+	RMB_SIMPLE_SAFE  // SAFE 0/1 might be replaced by this
 )
 
 const ( // RMB_FRAME_TYPE
@@ -172,4 +175,19 @@ func (l *RMBCommand) getFile() string {
 
 func (f *RMBFrame) isEmpty() bool {
 	return f == nil || (len(f.Commands) == 0 && f.Parent.isEmpty())
+}
+
+func (f *RMBFrame) Clone() *RMBFrame {
+	if f == nil {
+		return nil
+	}
+	ret := &RMBFrame{}
+	*ret = *f
+	ret.Parent = ret.Parent.Clone()
+	ret.Commands = make([]RMBCommand, len(f.Commands))
+	copy(ret.Commands, f.Commands)
+	for i, _ := range ret.Commands {
+		ret.Commands[i].Frame = ret
+	}
+	return ret
 }

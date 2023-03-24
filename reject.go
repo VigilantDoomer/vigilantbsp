@@ -238,6 +238,13 @@ func RejectGenerator(input RejectInput) {
 		Log.Printf("Reject: no RMB options applicable to current map.\n")
 	}
 
+	// This might replace/delete commands, or alter their arguments. If it does
+	// so, it returns a new structure (pointer not shared with the original
+	// then), except that it still points to original LoadedRMB, which in turn
+	// makes no reference to the new frame(s) (parent also gets cloned, if
+	// exists).
+	input.rmbFrame = input.rmbFrame.Optimize()
+
 	// If true, must use more complicated / more difficult to optimize (for
 	// compiler) algorithms
 	needSlowPath := false
@@ -298,7 +305,15 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
 		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
-			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'")
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'\n")
+		}
+	}
+
+	if input.rmbFrame.HasLineEffects() {
+		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options that block sight across a line are present\n")
 		}
 	}
 
@@ -573,6 +588,9 @@ func (r *RejectWork) getResult() []byte {
 }
 
 func (r *RejectWork) setupLines() bool {
+	if r.NoProcess_TryLoad() {
+		return false
+	}
 	numLines := r.input.lines.Len()
 	r.RMBLoadLineEffects()
 	r.specialSolids = make([]uint16, 0)
@@ -645,20 +663,6 @@ func (r *RejectWork) setupLines() bool {
 			// This can be either 1-sided line, OR a 2-sided line that has
 			// LINE specified for it as an RMB option
 			if twoSided {
-				fSide := r.input.lines.GetSidedefIndex(i, true)
-				bSide := r.input.lines.GetSidedefIndex(i, false)
-				if fSide != SIDEDEF_NONE || bSide != SIDEDEF_NONE {
-					fSector := r.input.sidedefs[fSide].Sector
-					bSector := r.input.sidedefs[bSide].Sector
-					if fSector == bSector {
-						// Don't create solid lines from inner lines
-						// The user meant to say this line is not used for
-						// self-referencing sector effect. If he lied, that's
-						// his problem, unless it proves later this can
-						// be used to crash VigilantBSP somehow
-						continue
-					}
-				}
 				r.specialSolids = append(r.specialSolids, i)
 			}
 			r.solidLines[numSolidLines] = SolidLine{
@@ -702,10 +706,11 @@ func (r *RejectWork) setupLines() bool {
 		sectorPerimeters := cull.GetPerimeters()
 		for sector, perimeters := range sectorPerimeters {
 			for _, perimeter := range perimeters {
-				whichSector := r.traceSelfRefLines(&numTransLines, sector, perimeter, it,
+				whichSector := r.traceSelfRefLines(&numTransLines,
+					&numSolidLines, sector, perimeter, it,
 					lineTraces, blXMin, blXMax, blYMin, blYMax, vertices)
 				if whichSector != -1 {
-					Log.Verbose(1, "Self-referencing sector %d has sector %d as its neighbor.",
+					Log.Verbose(1, "Self-referencing sector %d has sector %d as its neighbor.\n",
 						sector, whichSector)
 				}
 			}
@@ -718,7 +723,18 @@ func (r *RejectWork) setupLines() bool {
 	// be made always visible because of that.
 	for cull.SpewBack() {
 		i := cull.GetLine()
-		if r.HasRMBEffectLINE(i) { // doesn't make sector self-referencing
+		if r.HasRMBEffectLINE(i) {
+			// this line doesn't allow sight across it, so if all borders of
+			// a sector are this, it can't be hacked to be visible to all even
+			// if self-referencing.
+			// But LINE should trigger "pedantic computation", so generally if
+			// we are here, pedantic has apparently failed
+			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
+				fSide := r.input.lines.GetSidedefIndex(i, true)
+				fSector := r.input.sidedefs[fSide].Sector
+				Log.Verbose(1, "Reject: line %d from sector %d is affected by line effect, but I failed to classify sector as self-referencing or not.\nIf EVERY 2-sided line that references this sector on both sides is like this, this sector will be hidden from all, but if at least one such line is not marked, it will be hacked to be visible to all.\n",
+					i, fSector)
+			}
 			continue
 		}
 		fSide := r.input.lines.GetSidedefIndex(i, true)
@@ -729,7 +745,7 @@ func (r *RejectWork) setupLines() bool {
 			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
 				// FIXME and if we had an RMB option depending on length etc.
 				// we have screwed up, must tell the user!!!
-				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will have to resort to a hack to make it always visible.\n", fSector)
+				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will resort to a hack to make it always visible.\n", fSector)
 				if r.PedanticFailMode == PEDANTIC_FAIL_REPORT {
 					r.PedanticFailMode = PEDANTIC_FAIL_REPORTED
 				}
@@ -749,8 +765,8 @@ func (r *RejectWork) setupLines() bool {
 // FIXME there remain errors in this function. Traces one of the sectors in
 // first map of Hexen as self-referencing because it picks wrong side of the
 // line by mistake. Looks like there are things to improve...
-func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
-	perimeter []uint16, it *BlockityLines,
+func (r *RejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *int,
+	sector uint16, perimeter []uint16, it *BlockityLines,
 	lineTraces map[[2]IntOrientedVertex]IntCollinearOrientedVertices,
 	blXMin, blXMax, blYMin, blYMax int, vertices []IntVertex) int {
 	// Ok, let's see if we failed miserably for this sector on some other
@@ -793,7 +809,6 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		}
 		if r.HasRMBEffectLINE(i) {
 			lineEffect = true
-			continue
 		}
 		// Ok, it is/does
 		X1, Y1, X2, Y2 := r.input.lines.GetAllXY(i)
@@ -1028,6 +1043,8 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 	}
 	// Now iterate through perimeter again and create transient lines where
 	// inner sector is self-referencing and outer one is whichSector
+	// Actually can create solid lines - if they are affected by certain RMB
+	// options (think: LINE)
 	for ii, i := range perimeter {
 		// First, we make sure this line is 2-sided and reference same sector
 		// on both sides
@@ -1040,6 +1057,12 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			continue
 		}
 		if r.HasRMBEffectLINE(i) {
+			// RMB effect makes it solid instead of transient
+			// Creation of solid should have already been handled (setupLines,
+			// solid branch), so only thing to do here is not to add a transient
+			// line
+			Log.Verbose(2, "Reject: line %d is border of self-referencing sector %d, however RMB option LINE is applied to it, so I will treat it as solid not transient.\n",
+				i, sector)
 			continue
 		}
 		// Now must analyze two consecutive lines (current one and next one) in
@@ -1074,6 +1097,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			Log.Verbose(2, "Reject: line %d (original sector %d) front sector will be reassigned to %d when representing it as transient line for reject computations.\n",
 				i, sector, whichSector)
 		}
+
 		r.transLines[*numTransLines] = TransLine{
 			index:          i,
 			start:          &vertices[int(i)<<1],
@@ -1086,6 +1110,7 @@ func (r *RejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			indexInLineVis: *numTransLines,
 		}
 		(*numTransLines)++
+
 	}
 
 	return int(whichSector)
@@ -1197,9 +1222,8 @@ func (r *RejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighbo
 	sec2.numNeighbors++
 }
 
-// marks two sectors visible. This is the original markVisibility, until groups
-// were introduced
-func markVisibilitySector(r *RejectWork, i, j int, visibility uint8) {
+// marks two sectors visible. Never acknowledges group functionality
+func (r *RejectWork) markVisibilitySector(i, j int, visibility uint8) {
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
@@ -1211,10 +1235,17 @@ func markVisibilitySector(r *RejectWork, i, j int, visibility uint8) {
 	}
 }
 
+// "Smart" markVisibility for use in main reject path. rejectRMB not allowed
+// to use this, because rejectRMB needs to account for groups even in fast path,
+// and fast path replaces this with a groupless version
 // NOTE this function is replaced with a faster one in FastRejectWork variant,
-// which is exactly like markVisibilitySector
+// which is exactly like markVisibilitySector and doesn't take groups into
+// account at all
 func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
-	if !r.hasGroups || (r.sectorIsNotGroup(i) && r.sectorIsNotGroup(j)) {
+	// needs to check for groupShareVis, rather than for hasGroups, still - to
+	// account for the future where "slow path" might be used not only for
+	// "groups+some trickier effects" condition
+	if !r.groupShareVis || (r.sectorIsNotGroup(i) && r.sectorIsNotGroup(j)) {
 		cell1 := r.rejectTableIJ(i, j)
 		if *cell1 == VIS_UNKNOWN {
 			*cell1 = visibility
@@ -1225,7 +1256,7 @@ func (r *RejectWork) markVisibility(i, j int, visibility uint8) {
 			*cell2 = visibility
 		}
 	} else {
-		markVisibilityGroup(r, i, j, visibility)
+		r.markVisibilityGroup(i, j, visibility)
 	}
 }
 
@@ -1236,7 +1267,7 @@ func (r *RejectWork) sectorIsNotGroup(i int) bool {
 // This is a bit complicated: locates groups which sectors i and j are part of,
 // and then makes those two groups visible to each other (every sector in first
 // group can see every sector in second group, and vice versa)
-func markVisibilityGroup(r *RejectWork, i, j int, visibility uint8) {
+func (r *RejectWork) markVisibilityGroup(i, j int, visibility uint8) {
 	groupI := r.groups[r.groups[i].parent].sectors
 	groupJ := r.groups[r.groups[j].parent].sectors
 	if visibility == VIS_HIDDEN && r.extra.mixer != nil {
@@ -1253,8 +1284,8 @@ func markVisibilityGroup(r *RejectWork, i, j int, visibility uint8) {
 	}
 	for _, s1 := range groupI {
 		for _, s2 := range groupJ {
-			markVisibilitySector(r, s1, s2, visibility)
-			markVisibilitySector(r, s2, s1, visibility)
+			r.markVisibilitySector(s1, s2, visibility)
+			r.markVisibilitySector(s2, s1, visibility)
 		}
 	}
 }
@@ -1328,7 +1359,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 			sly, _ := r.slyLinesInSector[uint16(i)]
 			if !sly {
 				for j := 0; j < r.numSectors; j++ {
-					markVisibilitySector(r, i, j, VIS_HIDDEN)
+					r.markVisibilitySector(i, j, VIS_HIDDEN)
 				}
 			} else {
 				// If any non-solid lines with both references set to same
@@ -1336,7 +1367,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 				// and keep it visible to ALL
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 1).\n", i)
 				for j := 0; j < r.numSectors; j++ {
-					r.markVisibility(i, j, VIS_VISIBLE)
+					r.markVisibilitySector(i, j, VIS_VISIBLE)
 				}
 			}
 		} else {
@@ -1348,7 +1379,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 			if sly {
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 2).\n", i)
 				for j := 0; j < r.numSectors; j++ {
-					r.markVisibility(i, j, VIS_VISIBLE)
+					r.markVisibilitySector(i, j, VIS_VISIBLE)
 				}
 			}
 		}
@@ -1361,7 +1392,7 @@ func (r *RejectWork) eliminateTrivialCases() {
 		for j := 0; j < sec.numNeighbors; j++ {
 			nei := sec.neighbors[j]
 			if nei.index > sec.index {
-				r.markVisibility(sec.index, nei.index, VIS_VISIBLE)
+				r.markVisibilitySector(sec.index, nei.index, VIS_VISIBLE)
 			}
 		}
 	}
@@ -1741,4 +1772,20 @@ func (r *RejectWork) computeGroupNeighbors() {
 			}
 		}
 	}
+}
+
+// If NOPROCESS directive is present in RMB and is not overridden, this will
+// attempt to use existing reject, if it is compatible.
+// Returns false in any of the following conditions:
+// 1. NOPROCESS option, or maybe RMB options file itself, is not present
+// 2. NOPROCESS option is present but is overridden, so normal reject building
+// ought to happen
+// 3. NOPROCESS option is present, not overridden, but attempting to load
+// existing reject lump fails or it was not compatible (different number of
+// sectors)
+func (r *RejectWork) NoProcess_TryLoad() bool {
+	if !(r.rmbFrame.IsNOPROCESSInEffect()) {
+		return false
+	}
+	return false
 }

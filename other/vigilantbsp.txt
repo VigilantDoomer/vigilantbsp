@@ -736,7 +736,7 @@ automatically pick a linedef to insert into every list (which creates 2 bytes
 of overhead per list) so that 2 bytes can be reclaimed back, if that is
 possible. The technique to achieve so is called "byte stealing", and uses
 the fact that the offset of last block can, under certain circumstances, be
-the offset of the beginning of its list and concide with a linedef number.
+the offset of the beginning of its list and coincide with a linedef number.
 Additionally, from v0.78a onwards, VigilantBSP will avoid choosing linedef
 with length longer than or equal to 2048 units as a dummy, to reduce 
 instances of "hitscan attacks hit invisible barriers" bug (but the best
@@ -1680,6 +1680,7 @@ GROUP
 INCLUDE
 INVERT
 LENGTH
+LINE
 REPORT
 SAFE
 
@@ -1687,15 +1688,43 @@ map markers and comments. All other options are ignored
 as of yet. Future versions of VigilantBSP intend to 
 support more options.
 
+NOTE Combining BLIND and SAFE options might not match
+what is written in the manual. I didn't actually test
+it yet, but I originally copied implementation of 
+reject builder from Zennode, and now that I look at
+the part that applies BLIND and SAFE options, it seems
+to have the wrong order. If behavior will be confirmed
+to be different from both the manual AND the original
+RMB program, then it must be considered a bug in 
+current VigilantBSP implementation, which I shall
+eventually be able to fix. It is not exactly easy,
+though, due to the fact that BLIND and SAFE can both
+come with a lot of modifiers (INVERT, BAND), so it
+might take a while for me to fix even after it is
+confirmed.
+
 NOTE options that rely on sector distances in 
 sector count units (example: BAND, BLIND, LENGTH, SAFE)
 or map units (DISTANCE) will force -rs=2 (pedantic
 determination of self-referencing sectors visibility)
-as well. This does not depend on distance passed to
-this options - using BLIND/SAFE with 0 distance will
-still trigger this behavior.
+as well. Options that block sight across line/sectors 
+(example: LINE) will force -rs=2 as well. The only
+exception is for options BLIND and SAFE without
+BAND prefix and with the first argument (distance)
+being either 0 or 1: BLIND 0/1 and SAFE 0/1 will not
+force pedantic self-referencing sector visibility
+computations. This is because distances (in sector
+count) greater than 1 require to identify sectors
+adjacent to a given sector, wereas BLIND 0/1 and
+SAFE 0/1 either only check if it is same sector 
+(or group), or apply effects to sectors 
+indiscriminately. Prior to version v0.82a, 
+VigilantBSP did force pedantic visibility
+computations even for BLIND 0/1 and SAFE 0/1, but
+starting with VigilantBSP v0.82a this limitation
+is lifted. 
 
-NOTE File produced by report option looks a bit differently,
+NOTE File produced by REPORT option looks a bit differently,
 specifically: there is additional comment line
 specifying version of VigilantBSP, every map
 is processed and the list of sector pairs relevant
@@ -1731,44 +1760,57 @@ code, since Zennode forgets to actually apply
 RMB options anyway), which implementation was 
 wrong.
 
-NOTE Combining GROUP option with options that
-affect physical LOS computation (like DISTANCE)
-may cause noticeable slow down for technical
-reasons. Unlike RMB, VigilantBSP tries to 
-avoid copying visibility between sectors in one
-group unless it would take effect on gameplay
-and thus would be absolutely necessary, and those 
-slowdowns will happen when indeed such copying
-is absolutely necessary. Stricter observance of 
-"sectors in the same group share visibility"
-partially undoes graph optimization among other 
-things. The purpose of this note is to explain
-this is a known issue, and the note should
-not be misinterpreted as "I don't recommend
-using GROUP / combining it with DISTANCE, etc.".
-However, it is true that in VigilantBSP groups
-cannot speed up things (unlike the original RMB
-program, but that program is slow to begin with)
-and would rather achieve the opposite 
-performance-wise, so they should be instead
-considered useful when they are useful for the
-end result alone - the effect they have when they
-interact with other options (and certainly 
-using DISTANCE alone produces distinct result
-gameplay-wise than combining DISTANCE and GROUP:
-in the latter case, VigilantBSP does take to heart 
-the RMB documentation statement that a group is
-basically joined into one sector, so the distance 
-would be measured against the group, not the 
-individual sectors, resulting in less sectors
-hidden due to being at "distance greater than 
-max"). On the other hand, if RMB options file
-contains nothing but groups (no other options),
-then those groups are effectively no-op, whereas
-original RMB program would just drop reject 
-efficiency here, flagging a lot more sectors 
-as visible than the game engine needs to actually
-check.
+NOTE Using GROUP option doesn't copy visibility
+between sectors if doing so would only result
+in game engine running redundant visibility 
+checks with no difference to gameplay. So, GROUP
+only affects visibility in conjunction with
+other RMB options. Some options (when used 
+together with GROUP) require extra care for 
+VigilantBSP, however, as they affect physical
+line-of-sight computations (example: DISTANCE,
+LINE) and this will cause VigilantBSP to switch
+its reject builder to a comparably slower mode 
+of operation - where indeed positive visibility
+of one sector is propagated to all others within
+same group - as correct results can't be obtained
+with shortcuts in these cases. (i.e. if DISTANCE
+is specified and two sectors are grouped as one,
+and without such group one would have been visible
+according to DISTANCE rule and the other is not,
+the reject will have them both visible under
+DISTANCE + GROUP setup, which is the correct 
+behavior original RMB program demonstrates and
+ RMB manual prescribes.) And, if RMB options 
+ file contains only GROUP options and no other
+ kind of options at all, it has no effect on the
+ output compared to not using RMB options file -
+ groups do not make VigilantBSP run any faster,
+ their power is how they affect other RMB 
+ options. Remember that 
+ Zennode/ZokumBSP/VigilantBSP use graphs by
+ default, are a lot faster than RMB original
+ program, the different optimization techniques
+ not necessarily can be combined and RMB is 
+ closed source.
+
+NOTE VigilantBSP will respect and apply LINE
+option even when it is applied to 2-sided lines
+that reference same sector on both sides. (RMB
+documentation says this setup won't be successful,
+but please read on). This will actually function as 
+intended if it is a border of self-refencing sector, 
+it will affect sight the same way as when you place LINE effect
+on one linedef between two sectors. On lines properly
+inside sector, though, this can't have the effect 
+user might think of, as reject treats sectors as 
+whole, you can't block sight of some part of sector
+from another unless you alter your map in editor
+to split this sector into two DIFFERENT sectors. So,
+on inner lines you will only succeeded in blocking
+visibility between sectors other than the one LINE 
+is (if that line is wide enough to block sight 
+anywhere), but not inside the sector. 
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

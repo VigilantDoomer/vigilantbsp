@@ -271,7 +271,7 @@ func TestCoalesce1(t *testing.T) {
 func TestCoalesce2(t *testing.T) {
 	// [RIGHT(-1536.,5120.),LEFT(-1360.,5120.),RIGHT(-1344.,5120.),LEFT(-1168.,5120.),RIGHT(-1168.,5120.),LEFT(-1152.,5120.),RIGHT(-1152.,5120.),LEFT(-784.,5120.),LEFT(-784.,5120.),RIGHT(-784.,5120.),RIGHT(-784.,5120.),LEFT(-736.,5120.),RIGHT(-736.,5120.),LEFT(-528.,5120.),LEFT(-528.,5120.),RIGHT(-384.,5120.),RIGHT(-384.,5120.),LEFT(-128.,5120.),LEFT(-128.,5120.),RIGHT(0.,5120.),RIGHT(0.,5120.),LEFT(256.,5120.),LEFT(256.,5120.),RIGHT(384.,5120.),RIGHT(384.,5120.),LEFT(650.666667,5120.),RIGHT(756.444444,5120.),LEFT(1024.,5120.),RIGHT(1207.157895,5120.),LEFT(1416.421053,5120.),RIGHT(1488.,5120.),RIGHT(1488.,5120.),LEFT(2609.560976,5120.)]
 	// More dropouts! -1 -1 ; [LEFT(-1536.,5120.),LEFT(-1360.,5120.),RIGHT(-1344.,5120.),RIGHT(-784.,5120.),LEFT(-528.,5120.),RIGHT(-384.,5120.),LEFT(-128.,5120.),RIGHT(0.,5120.),LEFT(256.,5120.),RIGHT(384.,5120.),LEFT(650.666667,5120.),RIGHT(756.444444,5120.),LEFT(1024.,5120.),RIGHT(1207.157895,5120.),LEFT(1416.421053,5120.),RIGHT(1488.,5120.),LEFT(2609.560976,5120.),RIGHT(4800.,5120.)]
-	dgVertexMap := CreateVertexMap(-1536, -688, 4800, 6272)
+	dgVertexMap := CreateVertexMap(&NodesWork{}, -1536, -688, 4800, 6272)
 	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
 	pts = append(pts, OrientedVertex{
 		v:    dgVertexMap.SelectVertexClose(-1536, 5120),
@@ -375,7 +375,7 @@ func TestCoalesce3(t *testing.T) {
 	// [RIGHT(909.391304,-3776.),LEFT(2423.226891,-110.924370),RIGHT(2427.446945,-100.707395),LEFT(2816.,840.),RIGHT(2820.956522,852.),LEFT(3262.086957,1920.)]
 	// More dropouts! -1 -1 ; [(2427.446945,-100.707395)-(2816.,840.)]; [(2820.956522,852.)-(3262.086957,1920.)]
 	// (3712,-6848) to (-3776,3840)
-	dgVertexMap := CreateVertexMap(-6848, -3776, 3840, 3712)
+	dgVertexMap := CreateVertexMap(&NodesWork{}, -6848, -3776, 3840, 3712)
 	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
 	pts = append(pts, OrientedVertex{
 		v:    dgVertexMap.SelectVertexClose(909.391304, -3776),
@@ -422,7 +422,7 @@ func TestCoalesce4(t *testing.T) {
 	// [RIGHT(3456.,4352.),LEFT(3456.,-1408.),RIGHT(3456.,-1536.),RIGHT(3456.,-1536.),LEFT(3456.,-1600.),RIGHT(3456.,-1600.),LEFT(3456.,-1664.),LEFT(3456.,-1664.)]
 	// Sanity check failed! Evaluated partition line 13993 (3456,3308)-(3456,3318.4) doesn't consistently go in/out of the void when crossing solid lines (incidence count: 2). [LEFT(3456.,5256.),RIGHT(3456.,4352.),LEFT(3456.,-1408.),RIGHT(3456.,-1536.),RIGHT(3456.,-1536.),LEFT(3456.,-1664.),RIGHT(3456.,-2048.)]
 	// (5256,-3392) to (-2048,9664)
-	dgVertexMap := CreateVertexMap(-2048, -3392, 9664, 5256)
+	dgVertexMap := CreateVertexMap(&NodesWork{}, -2048, -3392, 9664, 5256)
 	pts := CollinearOrientedVertices(make([]OrientedVertex, 0))
 	pts = append(pts, OrientedVertex{
 		v:    dgVertexMap.SelectVertexClose(3456, 5256),

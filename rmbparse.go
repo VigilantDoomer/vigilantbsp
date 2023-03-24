@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // RMB parser is responsible for parsing text that defines RMB options,
@@ -86,12 +87,12 @@ var RMB_PARSE_TABLE = []ParseDef{
 	{[]byte("DOOR"), []byte("N"), RMB_DOOR, ParseGeneric, false},
 	{[]byte("E*M*") /*string unused*/, nil, RMB_EXMY_MAP, ParseMap, true},
 	{[]byte("EXCLUDE"), []byte("LL"), RMB_EXCLUDE, ParseGeneric, true},
-	{[]byte("GROUP"), []byte("NL"), RMB_GROUP, ParseGeneric, true}, // FIXME not finished yet, actually. Revert to false if fail to finish before release
+	{[]byte("GROUP"), []byte("NL"), RMB_GROUP, ParseGeneric, true},
 	{[]byte("INCLUDE"), []byte("LL"), RMB_INCLUDE, ParseGeneric, true},
 	{[]byte("INVERT"), nil, RMB_INVERT, ParseINVERT, true},
 	{[]byte("LEFT"), []byte("N"), RMB_LEFT, ParseGeneric, false},
 	{[]byte("LENGTH"), []byte("N"), RMB_LENGTH, ParseGeneric, true},
-	{[]byte("LINE"), []byte("N"), RMB_LINE, ParseGeneric, false}, // TODO Was initially implemented but disabled as roadmap has changed. v0.74a
+	{[]byte("LINE"), []byte("N"), RMB_LINE, ParseGeneric, true},
 	{[]byte("MAP**") /*string unused*/, nil, RMB_MAPXY_MAP, ParseMap, true},
 	{[]byte("NODOOR"), []byte("L"), RMB_NODOOR, ParseGeneric, false},
 	{[]byte("NOMAP"), nil, RMB_NOMAP, ParseGeneric, false},
@@ -171,7 +172,7 @@ func rmbParseList(context *ParseContext, overallIndex int, strict bool) ([]int,
 	// See if the first word contains a number and a closing bracket, or just
 	// a number. If appendFirst == false, it can't contain a number even, was
 	// just an opening bracket and nothing else
-	var list []int
+	list := make([]int, 0)
 	if appendFirst {
 		earlyExit := true
 		clsBracket := bytes.IndexByte(frsWrd, ')')
@@ -192,18 +193,15 @@ func rmbParseList(context *ParseContext, overallIndex int, strict bool) ([]int,
 			earlyExit = false
 		}
 		pNum := string(frsWrd[:clsBracket])
-		num, err := strconv.Atoi(pNum)
+		err := parseNumericListPart(pNum, &list)
 		if err != nil {
 			context.LogError("option %s argument #%d list contains something that is not a valid numeral: %s\n",
 				string(context.command), overallIndex, err.Error())
 			return nil, false
 		}
-		list = []int{num}
 		if earlyExit {
 			return list, true
 		}
-	} else {
-		list = make([]int, 0)
 	}
 
 	// Let's go
@@ -239,15 +237,40 @@ func rmbParseList(context *ParseContext, overallIndex int, strict bool) ([]int,
 		if len(sNum) == 0 { // was only closing bracket, no list item
 			break
 		}
-		num, err := strconv.Atoi(string(frsWrd[:clsBracket]))
+		err := parseNumericListPart(string(frsWrd[:clsBracket]), &list)
 		if err != nil {
-			context.LogError("option %s argument #%d list item is not a valid numeral: %s\n",
+			context.LogError("option %s argument #%d list contains something that is not a valid numeral: %s\n",
 				string(context.command), overallIndex, err.Error())
 			return nil, false
 		}
-		list = append(list, num)
 	}
 	return list, true
+}
+
+func parseNumericListPart(s string, lst *[]int) error {
+	if len(s) > 0 && s[len(s)-1] == ',' {
+		s = s[:len(s)-1]
+	}
+	hasComma := strings.IndexByte(s, ',') != -1
+	if hasComma {
+		// it is a list
+		ss := strings.Split(s, ",")
+		for _, ms := range ss {
+			num, err := strconv.Atoi(ms)
+			if err != nil {
+				return err
+			}
+			*lst = append(*lst, num)
+		}
+	} else {
+		// single number
+		num, err := strconv.Atoi(s)
+		if err != nil {
+			return err
+		}
+		*lst = append(*lst, num)
+	}
+	return nil
 }
 
 // Like INVERT, this command (BAND) is converted into prefix

@@ -92,7 +92,15 @@ func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis b
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
 		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
-			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'")
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'\n")
+		}
+	}
+
+	if input.rmbFrame.HasLineEffects() {
+		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options that block sight across a line are present\n")
 		}
 	}
 
@@ -309,6 +317,9 @@ func (r *FastRejectWork) getResult() []byte {
 }
 
 func (r *FastRejectWork) setupLines() bool {
+	if r.NoProcess_TryLoad() {
+		return false
+	}
 	numLines := r.input.lines.Len()
 	r.RMBLoadLineEffects()
 	r.specialSolids = make([]uint16, 0)
@@ -376,16 +387,6 @@ func (r *FastRejectWork) setupLines() bool {
 		} else {
 
 			if twoSided {
-				fSide := r.input.lines.GetSidedefIndex(i, true)
-				bSide := r.input.lines.GetSidedefIndex(i, false)
-				if fSide != SIDEDEF_NONE || bSide != SIDEDEF_NONE {
-					fSector := r.input.sidedefs[fSide].Sector
-					bSector := r.input.sidedefs[bSide].Sector
-					if fSector == bSector {
-
-						continue
-					}
-				}
 				r.specialSolids = append(r.specialSolids, i)
 			}
 			r.solidLines[numSolidLines] = SolidLine{
@@ -422,10 +423,11 @@ func (r *FastRejectWork) setupLines() bool {
 		sectorPerimeters := cull.GetPerimeters()
 		for sector, perimeters := range sectorPerimeters {
 			for _, perimeter := range perimeters {
-				whichSector := r.traceSelfRefLines(&numTransLines, sector, perimeter, it,
+				whichSector := r.traceSelfRefLines(&numTransLines,
+					&numSolidLines, sector, perimeter, it,
 					lineTraces, blXMin, blXMax, blYMin, blYMax, vertices)
 				if whichSector != -1 {
-					Log.Verbose(1, "Self-referencing sector %d has sector %d as its neighbor.",
+					Log.Verbose(1, "Self-referencing sector %d has sector %d as its neighbor.\n",
 						sector, whichSector)
 				}
 			}
@@ -435,6 +437,13 @@ func (r *FastRejectWork) setupLines() bool {
 	for cull.SpewBack() {
 		i := cull.GetLine()
 		if r.HasRMBEffectLINE(i) {
+
+			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
+				fSide := r.input.lines.GetSidedefIndex(i, true)
+				fSector := r.input.sidedefs[fSide].Sector
+				Log.Verbose(1, "Reject: line %d from sector %d is affected by line effect, but I failed to classify sector as self-referencing or not.\nIf EVERY 2-sided line that references this sector on both sides is like this, this sector will be hidden from all, but if at least one such line is not marked, it will be hacked to be visible to all.\n",
+					i, fSector)
+			}
 			continue
 		}
 		fSide := r.input.lines.GetSidedefIndex(i, true)
@@ -444,7 +453,7 @@ func (r *FastRejectWork) setupLines() bool {
 		if !ok {
 			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
 
-				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will have to resort to a hack to make it always visible.\n", fSector)
+				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will resort to a hack to make it always visible.\n", fSector)
 				if r.PedanticFailMode == PEDANTIC_FAIL_REPORT {
 					r.PedanticFailMode = PEDANTIC_FAIL_REPORTED
 				}
@@ -460,8 +469,8 @@ func (r *FastRejectWork) setupLines() bool {
 	return numTransLines > 0
 }
 
-func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
-	perimeter []uint16, it *BlockityLines,
+func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *int,
+	sector uint16, perimeter []uint16, it *BlockityLines,
 	lineTraces map[[2]IntOrientedVertex]IntCollinearOrientedVertices,
 	blXMin, blXMax, blYMin, blYMax int, vertices []IntVertex) int {
 
@@ -485,7 +494,6 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 		}
 		if r.HasRMBEffectLINE(i) {
 			lineEffect = true
-			continue
 		}
 
 		X1, Y1, X2, Y2 := r.input.lines.GetAllXY(i)
@@ -707,6 +715,9 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			continue
 		}
 		if r.HasRMBEffectLINE(i) {
+
+			Log.Verbose(2, "Reject: line %d is border of self-referencing sector %d, however RMB option LINE is applied to it, so I will treat it as solid not transient.\n",
+				i, sector)
 			continue
 		}
 
@@ -733,6 +744,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			Log.Verbose(2, "Reject: line %d (original sector %d) front sector will be reassigned to %d when representing it as transient line for reject computations.\n",
 				i, sector, whichSector)
 		}
+
 		r.transLines[*numTransLines] = TransLine{
 			index:          i,
 			start:          &vertices[int(i)<<1],
@@ -745,6 +757,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, sector uint16,
 			indexInLineVis: *numTransLines,
 		}
 		(*numTransLines)++
+
 	}
 
 	return int(whichSector)
@@ -833,7 +846,7 @@ func (r *FastRejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Nei
 	sec2.numNeighbors++
 }
 
-func FastmarkVisibilitySector(r *FastRejectWork, i, j int, visibility uint8) {
+func (r *FastRejectWork) markVisibilitySector(i, j int, visibility uint8) {
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
@@ -902,13 +915,13 @@ func (r *FastRejectWork) eliminateTrivialCases() {
 			sly, _ := r.slyLinesInSector[uint16(i)]
 			if !sly {
 				for j := 0; j < r.numSectors; j++ {
-					FastmarkVisibilitySector(r, i, j, VIS_HIDDEN)
+					r.markVisibilitySector(i, j, VIS_HIDDEN)
 				}
 			} else {
 
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 1).\n", i)
 				for j := 0; j < r.numSectors; j++ {
-					r.markVisibility(i, j, VIS_VISIBLE)
+					r.markVisibilitySector(i, j, VIS_VISIBLE)
 				}
 			}
 		} else {
@@ -917,7 +930,7 @@ func (r *FastRejectWork) eliminateTrivialCases() {
 			if sly {
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 2).\n", i)
 				for j := 0; j < r.numSectors; j++ {
-					r.markVisibility(i, j, VIS_VISIBLE)
+					r.markVisibilitySector(i, j, VIS_VISIBLE)
 				}
 			}
 		}
@@ -926,7 +939,7 @@ func (r *FastRejectWork) eliminateTrivialCases() {
 		for j := 0; j < sec.numNeighbors; j++ {
 			nei := sec.neighbors[j]
 			if nei.index > sec.index {
-				r.markVisibility(sec.index, nei.index, VIS_VISIBLE)
+				r.markVisibilitySector(sec.index, nei.index, VIS_VISIBLE)
 			}
 		}
 	}
@@ -1156,11 +1169,20 @@ func (r *FastRejectWork) computeGroupNeighbors() {
 	}
 }
 
+func (r *FastRejectWork) NoProcess_TryLoad() bool {
+	if !(r.rmbFrame.IsNOPROCESSInEffect()) {
+		return false
+	}
+	return false
+}
+
 func (fr *RMBFrame) FastProcessOptionsRMB(r *FastRejectWork) {
 	if fr == nil {
 		return
 	}
+
 	fr.FastprocessDistanceUsingOptions(r, nil)
+	fr.FastprocessSimpleBlindSafeOptions(r, nil)
 
 	fr.FastprocessINCLUDEs(r)
 
@@ -1560,7 +1582,7 @@ func (r *FastRejectWork) ApplyDistanceLimits() {
 
 			if *(r.distanceTableIJ(i, j)) > r.maxLength {
 
-				FastmarkVisibilitySector(r, i, j, VIS_HIDDEN)
+				r.markVisibilitySector(i, j, VIS_HIDDEN)
 			}
 		}
 	}
@@ -1611,8 +1633,11 @@ func (r *FastRejectWork) mapDistance(p1, p2 *IntVertex) uint64 {
 	return uint64(dx*dx) + uint64(dy*dy)
 }
 
-func (r *FastRejectWork) generateReport() bool {
-	return r.generateReportForFrame(r.rmbFrame)
+func (r *FastRejectWork) generateReport() {
+	if r.distanceTable == nil {
+		return
+	}
+	r.generateReportForFrame(r.rmbFrame)
 }
 
 func (r *FastRejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
@@ -1677,9 +1702,10 @@ func (r *FastRejectWork) reportGetWriter() io.Writer {
 }
 
 func (r *FastRejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
-
-	return false
-
+	if r.lineEffects == nil {
+		return false
+	}
+	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
 }
 
 func (r *FastRejectWork) RMBLoadLineEffects() {
@@ -1719,6 +1745,94 @@ func (r *FastRejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 		}
 	}
 	return ret
+}
+
+func (fr *RMBFrame) FastprocessSimpleBlindSafeOptions(r *FastRejectWork, sectors []SectorRMB) {
+	if fr == nil || !fr.hasSimpleBlindSafe() {
+		return
+	}
+
+	madeSectors := false
+	if sectors == nil {
+		sectors = make([]SectorRMB, r.numSectors)
+		madeSectors = true
+	}
+
+	fr.Parent.FastprocessSimpleBlindSafeOptions(r, sectors)
+
+	for _, command := range fr.Commands {
+		if command.Type == RMB_SIMPLE_BLIND {
+			r.prepareBlind(command, sectors)
+		}
+
+		if command.Type == RMB_SIMPLE_SAFE {
+			r.prepareSafe(command, sectors)
+		}
+	}
+
+	if !madeSectors {
+
+		return
+	}
+
+	for i, sector := range sectors {
+		if sector.Blind > 0 {
+			r.applySimpleBlind(sector, i)
+		}
+		if sector.Safe > 0 {
+			r.applySimpleSafe(sector, i)
+		}
+	}
+}
+
+func (r *FastRejectWork) applySimpleBlind(sector SectorRMB, i int) {
+
+	grI := r.groups[i].parent
+	for j := 0; j < r.numSectors; j++ {
+		if !r.groups[j].legal {
+			continue
+		}
+		grJ := r.groups[j].parent
+		for _, k := range r.groups[grJ].sectors {
+			if sector.Blind&1 == 1 {
+
+				if sector.BlindLo == 0 || grJ != grI {
+					*r.rejectTableIJ(i, k) = VIS_HIDDEN
+				}
+			}
+			if sector.Blind&2 == 2 {
+
+				if sector.BlindHi == 1 && grI == grJ {
+					*r.rejectTableIJ(i, k) = VIS_HIDDEN
+				}
+			}
+		}
+	}
+}
+
+func (r *FastRejectWork) applySimpleSafe(sector SectorRMB, i int) {
+
+	grI := r.groups[i].parent
+	for j := 0; j < r.numSectors; j++ {
+		if !r.groups[j].legal {
+			continue
+		}
+		grJ := r.groups[j].parent
+		for _, k := range r.groups[grJ].sectors {
+			if sector.Safe&1 == 1 {
+
+				if sector.SafeLo == 0 || grJ != grI {
+					*r.rejectTableIJ(k, i) = VIS_HIDDEN
+				}
+			}
+			if sector.Safe&2 == 2 {
+
+				if sector.SafeHi == 1 && grI == grJ {
+					*r.rejectTableIJ(k, i) = VIS_HIDDEN
+				}
+			}
+		}
+	}
 }
 
 func (w *FastRejectWork) DFS(graph *RejGraph, sector *RejSector) int {
@@ -2368,7 +2482,7 @@ func (w *FastRejectWork) mergeAndDestroyMixer() {
 
 }
 
-func FastmarkVisibilityGroup(r *FastRejectWork, i, j int, visibility uint8) {
+func (r *FastRejectWork) markVisibilityGroup(i, j int, visibility uint8) {
 
 }
 

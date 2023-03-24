@@ -44,7 +44,7 @@ package main
 // #pragma replace_prototype *RejectWork.markVisibility with *RejectWork.markVisibilityFast
 // #pragma replace_prototype *RejectWork.setupMixer with *RejectWork.setupMixerNoop
 // #pragma replace_prototype *RejectWork.mergeAndDestroyMixer with *RejectWork.mergeAndDestroyMixerNoop
-// #pragma replace_prototype markVisibilityGroup with markVisibilityGroupNoop
+// #pragma replace_prototype *RejectWork.markVisibilityGroup with *RejectWork.markVisibilityGroupNoop
 // #pragma replace_prototype *RejectWork.mixerIJ with *RejectWork.mixerIJNoop
 // #pragma init getFastRejectWorkIntf with morphed getRejectWorkIntf
 
@@ -93,7 +93,7 @@ func (w *RejectWork) mergeAndDestroyMixerNoop() {
 
 }
 
-func markVisibilityGroupNoop(r *RejectWork, i, j int, visibility uint8) {
+func (r *RejectWork) markVisibilityGroupNoop(i, j int, visibility uint8) {
 
 }
 

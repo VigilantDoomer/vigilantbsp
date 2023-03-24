@@ -45,6 +45,12 @@ const (
 	LINE_EFFECT_RIGHT
 )
 
+const (
+	BLINDSAFE_NONE = iota
+	BLINDSAFE_COMPLEX
+	BLINDSAFE_TRIVIAL
+)
+
 // LoadGroups loads sector groups, defined by GROUP commands in RMB source file.
 // Needs to be done before other options could be applied, and affects general
 // reject generation as well
@@ -125,6 +131,8 @@ func (fr *RMBFrame) NeedDistances() bool {
 	}
 	for _, cmd := range fr.Commands {
 		switch cmd.Type {
+		// Does not check for RMB_SIMPLE_BLIND and RMB_SIMPLE_SAFE - they
+		// are differentiated exactly to circumvent this
 		case RMB_BLIND, RMB_LENGTH, RMB_SAFE, RMB_REPORT:
 			{
 				return true
@@ -151,6 +159,24 @@ func (fr *RMBFrame) HasOptionTrickyForGroups() bool {
 		}
 	}
 	return fr.Parent.HasOptionTrickyForGroups()
+}
+
+// Whether RMB effects that block sight across line (at least one way) are
+// present. Need to be pedantic about visibility computations (identify
+// self-referencing sectors, etc.) if so
+func (fr *RMBFrame) HasLineEffects() bool {
+	if fr == nil {
+		return false
+	}
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_LINE, RMB_RIGHT, RMB_LEFT:
+			{
+				return true
+			}
+		}
+	}
+	return fr.Parent.HasLineEffects()
 }
 
 // Scans frame for LENGTH option and returns the LAST encountered value
@@ -209,7 +235,10 @@ func (fr *RMBFrame) ProcessOptionsRMB(r *RejectWork) {
 	if fr == nil {
 		return
 	}
+	// NOTE DistanceUsing and SimpleBlindSafe shall never perform together.
+	// It's either zero or one of two getting done.
 	fr.processDistanceUsingOptions(r, nil)
+	fr.processSimpleBlindSafeOptions(r, nil)
 
 	// INCLUDE is the 2nd highest priority option
 	fr.processINCLUDEs(r)
@@ -257,6 +286,18 @@ func (fr *RMBFrame) processDistanceUsingOptions(r *RejectWork,
 		return
 	}
 
+	// TODO From RMB manual, "combining options":
+	// -- begin quote
+	// In this example:
+	// SAFE 1 3
+	// BLIND 0 3
+	// the BLIND option will blind sector 3 from itself despite the SAFE option
+	// implying that it shouldn't. Reversing these two options in the options file
+	// would make no difference to the resulting REJECT map.
+	// -- end quote
+	// The below code doesn't seem to comply at first glance. Just like other
+	// Zennode stuff... needs testing to be sure.
+
 	for i, sector := range sectors {
 		if sector.Blind > 0 {
 			r.applyBlind(sector, i)
@@ -267,6 +308,7 @@ func (fr *RMBFrame) processDistanceUsingOptions(r *RejectWork,
 	}
 }
 
+// NOTE Shall be able to handle both RMB_BLIND and RMB_SIMPLE_BLIND
 func (r *RejectWork) prepareBlind(command RMBCommand, sectors []SectorRMB) {
 	if command.Band {
 		for _, num := range command.List[0] {
@@ -307,6 +349,7 @@ func (r *RejectWork) prepareBlind(command RMBCommand, sectors []SectorRMB) {
 	}
 }
 
+// NOTE Shall be able to handle both RMB_SAFE and RMB_SIMPLE_SAFE
 func (r *RejectWork) prepareSafe(command RMBCommand, sectors []SectorRMB) {
 	if command.Band {
 		for _, num := range command.List[0] {
@@ -697,8 +740,8 @@ func (r *RejectWork) ApplyDistanceLimits() {
 			// building distanceTable in first place
 			if *(r.distanceTableIJ(i, j)) > r.maxLength {
 				// Yes, markVisibilitySector, anything hacked to be visible in
-				// eliminateTrivialCases is going to stay that way
-				markVisibilitySector(r, i, j, VIS_HIDDEN)
+				// eliminateTrivialCases is going to stay that way.
+				r.markVisibilitySector(i, j, VIS_HIDDEN)
 			}
 		}
 	}
@@ -749,8 +792,11 @@ func (r *RejectWork) mapDistance(p1, p2 *IntVertex) uint64 {
 	return uint64(dx*dx) + uint64(dy*dy)
 }
 
-func (r *RejectWork) generateReport() bool {
-	return r.generateReportForFrame(r.rmbFrame)
+func (r *RejectWork) generateReport() {
+	if r.distanceTable == nil {
+		return
+	}
+	r.generateReportForFrame(r.rmbFrame)
 }
 
 func (r *RejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
@@ -825,23 +871,14 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 }
 
 // Returns whether RMB effect called LINE was applied to line #lineIdx
-// If it is, such lines are treated as if they were solid instead of transient,
-// also it can prevent the sector to be recognised as self-referencing for reject
-// computation purposes, provided all lines suspected to produce said effect by
-// the chosen method are eliminated via LINE
-// NOTE functionality DISABLED for v0.74 release because I am having doubts
-// about whether LINE should have this quirk for self-referencing sectors.
-// NOTE remains DISABLED for v0.75a release as well
-// NOTE remained DISABLED for v0.78a release which already happened
-// NOTE remains DISABLED for v0.82a release???
+// If it is, such lines are treated as if they were solid instead of transient
+// Can work on self-referencing sector borders as well
+// This shipped with v0.82a release.
 func (r *RejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
-	// Temporarily ignoring LINE, has effect of not implementing it
-	return false
-	// The below code is how it was supposed to work
-	/*if r.lineEffects == nil {
+	if r.lineEffects == nil {
 		return false
 	}
-	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID*/
+	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
 }
 
 func (r *RejectWork) RMBLoadLineEffects() {
@@ -887,4 +924,194 @@ func (r *RejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 		}
 	}
 	return ret
+}
+
+// This attempts to rewrite frame so that:
+//  	if BLIND/SAFE is only ever used with 0/1 and no BAND prefix, they are
+// replaced with RMB_SIMPLE_BLIND and RMB_SIMPLE_SAFE
+// If rewriting anything, it has to make a copy, though, because in the future
+// stuff might be shared between threads
+func (fr *RMBFrame) Optimize() *RMBFrame {
+	if fr == nil {
+		return nil
+	}
+	convertBlindSafe := fr.checkTrivialBlindSafe() == BLINDSAFE_TRIVIAL
+	if !convertBlindSafe {
+		return fr // return original copy
+	}
+	frNew := fr.Clone()
+	if convertBlindSafe {
+		frNew.convertBlindSafe()
+	}
+	return frNew
+}
+
+func (fr *RMBFrame) convertBlindSafe() {
+	if fr == nil {
+		return
+	}
+	for i, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_BLIND:
+			{
+				fr.Commands[i].Type = RMB_SIMPLE_BLIND
+			}
+		case RMB_SAFE:
+			{
+				fr.Commands[i].Type = RMB_SIMPLE_SAFE
+			}
+		}
+	}
+	fr.Parent.convertBlindSafe()
+}
+
+func (fr *RMBFrame) checkTrivialBlindSafe() int {
+	if fr == nil {
+		return BLINDSAFE_NONE
+	}
+	ret := fr.Parent.checkTrivialBlindSafe()
+	if ret == BLINDSAFE_COMPLEX {
+		return BLINDSAFE_COMPLEX
+	}
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_BLIND, RMB_SAFE:
+			{
+				if cmd.Band || cmd.Data[0] > 1 {
+					return BLINDSAFE_COMPLEX
+				}
+				ret = BLINDSAFE_TRIVIAL
+			}
+		}
+	}
+	return ret
+}
+
+func (fr *RMBFrame) hasSimpleBlindSafe() bool {
+	if fr == nil {
+		return false
+	}
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_SIMPLE_BLIND, RMB_SIMPLE_SAFE:
+			{
+				return true
+			}
+		}
+	}
+	return fr.Parent.hasSimpleBlindSafe()
+}
+
+// Returns if NOPROCESS is not just present, it is also in effect (not
+// cancelled by other options)
+// TODO currently blocking: I can't actually get RMB to recognise the damn
+// NOPROCESS option in RMB options file! It complains of syntax error as if
+// this command just doesn't exist!
+func (fr *RMBFrame) IsNOPROCESSInEffect() bool {
+	return false // TODO not implemented yet, see note above
+}
+
+func (fr *RMBFrame) processSimpleBlindSafeOptions(r *RejectWork,
+	sectors []SectorRMB) {
+	if fr == nil || !fr.hasSimpleBlindSafe() {
+		return
+	}
+
+	// NOTE it is supposed to be only able to reach here if:
+	// 1. BLIND or/and SAFE are present with 0/1
+	// 2. There is no BLIND or SAFE option with BAND prefix, or values different
+	// from 0/1
+	// Because if (1) is not true, there is nothing to do here, and
+	// if (2) is not true, those are better handled as part of all BLIND / SAFE
+	// options and not separately. Especially since options can be combined,
+	// and while current combining logic in VigilantBSP is not necessary valid,
+	// it would be definitely hard to maintain any kind of logic if some
+	// BLIND/SAFEs are compartmentalized away from others
+
+	madeSectors := false // remains false for parent frame
+	if sectors == nil {
+		sectors = make([]SectorRMB, r.numSectors)
+		madeSectors = true // becomes true for the most local map frame
+	}
+
+	// Let's aggregate information from the parent frame before the current one
+	fr.Parent.processSimpleBlindSafeOptions(r, sectors)
+
+	// Populate sectors array with the BLIND/SAFE information
+	for _, command := range fr.Commands {
+		if command.Type == RMB_SIMPLE_BLIND {
+			r.prepareBlind(command, sectors)
+		}
+
+		if command.Type == RMB_SIMPLE_SAFE {
+			r.prepareSafe(command, sectors)
+		}
+	}
+
+	if !madeSectors {
+		// parent sector information is aggregated into original callers array
+		// and processed there
+		return
+	}
+
+	for i, sector := range sectors {
+		if sector.Blind > 0 {
+			r.applySimpleBlind(sector, i)
+		}
+		if sector.Safe > 0 {
+			r.applySimpleSafe(sector, i)
+		}
+	}
+}
+
+func (r *RejectWork) applySimpleBlind(sector SectorRMB, i int) {
+	// Not relying on distanceTable means having to account for groups here
+	grI := r.groups[i].parent
+	for j := 0; j < r.numSectors; j++ {
+		if !r.groups[j].legal {
+			continue
+		}
+		grJ := r.groups[j].parent
+		for _, k := range r.groups[grJ].sectors {
+			if sector.Blind&1 == 1 {
+				// Handle normal BLIND 0/1
+				if sector.BlindLo == 0 || grJ != grI {
+					*r.rejectTableIJ(i, k) = VIS_HIDDEN
+				}
+			}
+			if sector.Blind&2 == 2 {
+				// Handle inverse BLIND 0/1
+				// Well, inverse BLIND 0 seems a no-op
+				if sector.BlindHi == 1 && grI == grJ {
+					*r.rejectTableIJ(i, k) = VIS_HIDDEN
+				}
+			}
+		}
+	}
+}
+
+func (r *RejectWork) applySimpleSafe(sector SectorRMB, i int) {
+	// Not relying on distanceTable means having to account for groups here
+	grI := r.groups[i].parent
+	for j := 0; j < r.numSectors; j++ {
+		if !r.groups[j].legal {
+			continue
+		}
+		grJ := r.groups[j].parent
+		for _, k := range r.groups[grJ].sectors {
+			if sector.Safe&1 == 1 {
+				// Handle normal SAFE 0/1
+				if sector.SafeLo == 0 || grJ != grI {
+					*r.rejectTableIJ(k, i) = VIS_HIDDEN
+				}
+			}
+			if sector.Safe&2 == 2 {
+				// Handle inverse SAFE 0/1
+				// Well, inverse SAFE 0 seems a no-op
+				if sector.SafeHi == 1 && grI == grJ {
+					*r.rejectTableIJ(k, i) = VIS_HIDDEN
+				}
+			}
+		}
+	}
 }

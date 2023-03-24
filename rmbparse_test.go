@@ -255,3 +255,73 @@ func TestComplexRMB(t *testing.T) {
 		t.Fatalf("MAP95 frame command #1 is wrong")
 	}
 }
+
+// Although RMB manual doesn't say this, example *.rej shipped with RMB
+// occassionally use comma-delimited lists rather than space-delimited lists,
+// and RMB program recognizes them. Comma may be followed by a space, or may
+// not - original RMB program recognizes both
+func TestCommaListRMB(t *testing.T) {
+	rmb := strings.Builder{}
+	rmb.WriteString("GROUP 10 (8, 11, 12)\n")
+	rmb.WriteString("INCLUDE (10,15,13) (14, 26,16)\n")
+	rmb.WriteString("EXCLUDE (20) 15\n")
+	rmb.WriteString("EXCLUDE (21,22) 14\n")
+	rmb.WriteString("EXCLUDE 23 (82, 33)\n")
+	suc, ld := LoadRMB([]byte(rmb.String()), "test_commalistrmb.rej")
+	if !suc {
+		t.Fatalf("Couldn't load rmb with comma-delimited lists.\n")
+	}
+	if ld == nil || ld.globalFrame == nil {
+		t.Fatalf("Failed to acknowledge RMB's global frame!")
+	}
+	if len(ld.globalFrame.Commands) != 5 {
+		t.Fatalf("Wrong number of commands in global frame: expected 5 got %d\n", len(ld.globalFrame.Commands))
+	}
+	frm := ld.globalFrame
+	if frm.Commands[0].Type != RMB_GROUP ||
+		len(frm.Commands[0].List[0]) != 3 ||
+		frm.Commands[0].List[0][0] != 8 ||
+		frm.Commands[0].List[0][1] != 11 ||
+		frm.Commands[0].List[0][2] != 12 {
+		t.Fatalf("frame command #0 is wrong")
+	}
+
+	if frm.Commands[1].Type != RMB_INCLUDE ||
+		len(frm.Commands[1].List[0]) != 3 ||
+		len(frm.Commands[1].List[1]) != 3 ||
+		frm.Commands[1].List[0][0] != 10 ||
+		frm.Commands[1].List[0][1] != 15 ||
+		frm.Commands[1].List[0][2] != 13 ||
+		frm.Commands[1].List[1][0] != 14 ||
+		frm.Commands[1].List[1][1] != 26 ||
+		frm.Commands[1].List[1][2] != 16 {
+		t.Fatalf("frame command #1 is wrong")
+	}
+
+	if frm.Commands[2].Type != RMB_EXCLUDE ||
+		len(frm.Commands[2].List[0]) != 1 ||
+		len(frm.Commands[2].List[1]) != 1 ||
+		frm.Commands[2].List[0][0] != 20 ||
+		frm.Commands[2].List[1][0] != 15 {
+		t.Fatalf("frame command #2 is wrong")
+	}
+
+	if frm.Commands[3].Type != RMB_EXCLUDE ||
+		len(frm.Commands[3].List[0]) != 2 ||
+		len(frm.Commands[3].List[1]) != 1 ||
+		frm.Commands[3].List[0][0] != 21 ||
+		frm.Commands[3].List[0][1] != 22 ||
+		frm.Commands[3].List[1][0] != 14 {
+		t.Fatalf("frame command #3 is wrong")
+	}
+
+	if frm.Commands[4].Type != RMB_EXCLUDE ||
+		len(frm.Commands[4].List[0]) != 1 ||
+		len(frm.Commands[4].List[1]) != 2 ||
+		frm.Commands[4].List[0][0] != 23 ||
+		frm.Commands[4].List[1][0] != 82 ||
+		frm.Commands[4].List[1][1] != 33 {
+		t.Fatalf("frame command #4 is wrong")
+	}
+
+}
