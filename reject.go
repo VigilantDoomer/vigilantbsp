@@ -77,6 +77,13 @@ type RejectExtraData struct {
 	mixer []byte
 }
 
+// So that I can store RejectWork.solidMap as a contiguous array, this
+// identifies a subslice that corresponds to a single blocklist.
+type SolidmapSlice struct {
+	offset int
+	length int
+}
+
 // RejectWork stands for reject work data
 type RejectWork struct {
 	// the stuff that goes into "extra" field disappears in "fast path"
@@ -87,8 +94,8 @@ type RejectWork struct {
 	// the bulk of working data begins
 	solidLines       []SolidLine
 	transLines       []TransLine
-	indexToSolid     []*SolidLine
-	lineVisDone      []uint8 // bitarray, replaces Zennode's lineVisTable that held redundant information
+	indexToSolid     []uint16 // linedef idx -> idx in solidLines
+	lineVisDone      []uint8  // bitarray, replaces Zennode's lineVisTable that held redundant information
 	sectors          []RejSector
 	slyLinesInSector map[uint16]bool // line with equal sector references on both sides. May indicate self-referencing sector
 	maxDistance      uint64
@@ -97,13 +104,15 @@ type RejectWork struct {
 	reSectors        []*RejSector
 	lineMap          []*TransLine
 	blockmap         *Blockmap
+	solidList        []SolidmapSlice // converted blockmap.blocklist. per blocklistIdx, stores pointer to a "slice" of solidMap thingy below
+	solidMap         []uint16        // converted blockmap.<all blocklists> as one contiguous array. Values are <idx in solidLines> instead of <linedef idx>
 	loRow            int
 	hiRow            int
 	//blockity         *BlockityLines // was used to avoid 3D arrays and blockmap copying, but then I've found an even faster way
 	blockMapBounds []BlockMapBounds
-	src, tgt       TransLine        // memory optimization: used in testLinePair, which is not reentrant. Allocate once, reuse every time.
-	p1, p2, p3, p4 IntVertex        // memory optimization: used in rejectLOS.go -> initializeWorld, another non-reentrant function
-	seenLines      [65536 / 8]uint8 // replaces checkLine bool array, here we use unsigned bytes to store them compactly
+	src, tgt       TransLine // memory optimization: used in testLinePair, which is not reentrant. Allocate once, reuse every time.
+	p1, p2, p3, p4 IntVertex // memory optimization: used in rejectLOS.go -> initializeWorld, another non-reentrant function
+	seenLines      []uint8   // replaces checkLine bool array, here we use unsigned bytes to store them compactly
 	// groups
 	hasGroups bool       // whether actual group functionality is on
 	groups    []RejGroup // length should ALWAYS equal number of sectors
@@ -248,6 +257,10 @@ func RejectGenerator(input RejectInput) {
 	// If true, must use more complicated / more difficult to optimize (for
 	// compiler) algorithms
 	needSlowPath := false
+	// If true, reject table is known to be symmetric (because there are no
+	// RMB option that could break symmetry) and a special path can handle that
+	// better, especially for levels with A LOT of sectors
+	useSymmPath := false
 	// If true, a certain premise stated in RMB documentation DOES make a
 	// difference here and so must be ensured: if any sector in the group is
 	// visible (or sees some other sector), then all sectors in the same group
@@ -262,15 +275,29 @@ func RejectGenerator(input RejectInput) {
 		groupShareVis = true
 	}
 
+	if !needSlowPath {
+		useSymmPath = input.rmbFrame.CompatibleWithSymmetry()
+	}
+
 	// Select interface depending on whether certain effects are used
 	var intf RejectWorkIntf
 	if needSlowPath {
 		// This can handle anything, but slower
 		Log.Verbose(1, "Reject: using heavy interface (without shortcuts).\n")
 		intf = getRejectWorkIntf()
+	} else if useSymmPath {
+		// Similar to "fast path", except reject table known to be symmetric
+		// in advance, and so is only stored for rowIndex<=colIndex during all
+		// reject computations, and everything tries to take advantage of that.
+		// Results in extreme performance improvements on big nasty maps with
+		// lots of sectors (bad for CPU cache), one artificial example of such
+		// being vrack2BiggestEver.wad
+		Log.Verbose(1, "Reject: using symmetric interface (with shortcuts + additional assumptions).\n")
+		intf = getSymmRejectWorkIntf()
 	} else {
-		// Fast performance that covers 99% of use cases. Certain things here
-		// are inlined by Go compiler (see rejectdefs.go, markVisibilityFast)
+		// Fast performance without the assumptions of symmetric reject table
+		// Certain things here are inlined by Go compiler (see rejectdefs.go,
+		// markVisibilityFast)
 		Log.Verbose(1, "Reject: using default interface (with shortcuts).\n")
 		intf = getFastRejectWorkIntf()
 	}
@@ -599,11 +626,8 @@ func (r *RejectWork) setupLines() bool {
 	r.solidLines = make([]SolidLine, numLines)
 	r.transLines = make([]TransLine, numLines)
 	r.drLine = new(TransLine)
-	r.indexToSolid = make([]*SolidLine, numLines) // maps index of a line in input.lines to its record in solidLines array, if one exists
+	r.indexToSolid = make([]uint16, numLines) // maps index of a line in input.lines to its index in solidLines array, if one exists. Not all values are initialized!
 	r.slyLinesInSector = make(map[uint16]bool)
-	for i := uint16(0); i < numLines; i++ {
-		r.indexToSolid[i] = nil
-	}
 	vertices := make([]IntVertex, int(numLines)*2) // cast to int important!
 	numSolidLines := 0
 	numTransLines := 0
@@ -671,7 +695,7 @@ func (r *RejectWork) setupLines() bool {
 				end:    &vertices[int(i)<<1+1],
 				ignore: false,
 			}
-			r.indexToSolid[i] = &r.solidLines[numSolidLines]
+			r.indexToSolid[i] = uint16(numSolidLines)
 			numSolidLines++
 		}
 	}
@@ -759,6 +783,7 @@ func (r *RejectWork) setupLines() bool {
 	// set correct length
 	r.solidLines = r.solidLines[:numSolidLines]
 	r.transLines = r.transLines[:numTransLines]
+	r.seenLines = make([]uint8, numSolidLines>>3+1)
 	return numTransLines > 0
 }
 
@@ -1541,10 +1566,11 @@ func adjustLinePair(src, tgt *TransLine, bisects *bool) bool {
 		y2 = src.DX*(tgt.end.Y-src.start.Y) - src.DY*(tgt.end.X-src.start.X)
 		// See if these two lines actually intersect
 		if ((y1 > 0) && (y2 < 0)) || ((y1 < 0) && (y2 > 0)) {
-			// TODO this should be logged to stderr rather than stdout
-			// or maybe not. I don't see what's so big a problem about it.
-			// Demoted to verbose level=1 -- VigilantDoomer
-			Log.Verbose(1, "ERROR: Two lines (%d & %d) intersect\n", src.index, tgt.index)
+			// Demoted to verbose level=1 (was error in Zennode) -- VigilantDoomer
+			// TODO since this is behind verbosity, a warning needs to be
+			// printed at the end of reject building process perhaps? (needs
+			// adjustLinePair to be a method on RejectWork object)
+			Log.Verbose(1, "Reject: ERROR: Two lines (%d & %d) intersect\n", src.index, tgt.index)
 			return false
 		}
 	}
@@ -1788,4 +1814,8 @@ func (r *RejectWork) NoProcess_TryLoad() bool {
 		return false
 	}
 	return false
+}
+
+func getRejectWorkIntf() RejectWorkIntf {
+	return &RejectWork{}
 }

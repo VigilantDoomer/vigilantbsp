@@ -1,7 +1,7 @@
 # VigilantBSP
 
 ## Author
-(c) 2022 VigilantDoomer
+(c) 2022-2023 VigilantDoomer
 
 ## Description
 
@@ -30,7 +30,7 @@ effects very well. Monsters in self-referencing sectors shall
 be able to see, hear and attack the player.
 5. Special effects provided by other nodebuilders (horizon effect
 and "precious" linedefs from BSP v5.2, faster scrollers from 
-ZokumBSP) are also getting implemented.
+ZokumBSP) are also implemented.
 
 In future, support for GL nodes / UDMF format MAY be considered
 as well.

@@ -894,30 +894,45 @@ func (r *RejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 		return false
 	}
 	ret := r.loadLineEffectsForFrame(rmbFrame.Parent)
-	// If multiple commands specified for the same line, last option will take
-	// effect. RMB may do things differently, I dunno, duplicates aren't
-	// supposed to happen anyway
+	// If multiple commands specified for the same line, the following rules
+	// now apply:
+	// 1. LINE effect can't be overridden by LEFT or RIGHT, or otherwise removed
+	// whatsoever if it was ever applied
+	// 2. If both LEFT and RIGHT are applied, it is equivalent to having LINE
+	// effect applied
+	// 3. Applying the same effect several times doesn't differ from applying it
+	// only one time
+	// Didn't check against the original RMB, but this is the only behavior
+	// that makes sense to me. Also, manual didn't say options LEFT, RIGHT and
+	// LINE can be overridden by anything
 	for _, cmd := range rmbFrame.Commands {
 		switch cmd.Type {
 		case RMB_LEFT:
 			{
-				// FIXME can overwrite LINE_EFFECT_SOLID, but the effect itself
-				// is not implemented. Also reported as not implemented by
-				// rmb parser
-				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_LEFT
+				idx := uint16(cmd.Data[0])
+				oldEffect := r.lineEffects[idx]
+				if oldEffect == LINE_EFFECT_NONE {
+					r.lineEffects[idx] = LINE_EFFECT_LEFT
+				} else if oldEffect == LINE_EFFECT_RIGHT {
+					// LEFT + RIGHT = LINE
+					r.lineEffects[idx] = LINE_EFFECT_SOLID
+				}
 				ret = true
 			}
 		case RMB_RIGHT:
 			{
-				// FIXME can overwrite LINE_EFFECT_SOLID, but the effect itself
-				// is not implemented. Also reported as not implemented by
-				// rmb parser
-				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_RIGHT
+				idx := uint16(cmd.Data[0])
+				oldEffect := r.lineEffects[idx]
+				if oldEffect == LINE_EFFECT_NONE {
+					r.lineEffects[idx] = LINE_EFFECT_RIGHT
+				} else if oldEffect == LINE_EFFECT_LEFT {
+					// LEFT + RIGHT = LINE
+					r.lineEffects[idx] = LINE_EFFECT_SOLID
+				}
 				ret = true
 			}
 		case RMB_LINE:
 			{
-				// This should be implemented already
 				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_SOLID
 				ret = true
 			}
@@ -1114,4 +1129,22 @@ func (r *RejectWork) applySimpleSafe(sector SectorRMB, i int) {
 			}
 		}
 	}
+}
+
+// Returns whether reject table is guaranteed to be symmetric (no options that
+// can introduce asymmetry to reject are used)
+func (fr *RMBFrame) CompatibleWithSymmetry() bool {
+	if fr == nil {
+		return true
+	}
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_BLIND, RMB_SAFE, RMB_SIMPLE_BLIND, RMB_SIMPLE_SAFE,
+			RMB_INCLUDE, RMB_EXCLUDE, RMB_LEFT, RMB_RIGHT, RMB_ONE:
+			{
+				return false
+			}
+		}
+	}
+	return fr.Parent.CompatibleWithSymmetry()
 }

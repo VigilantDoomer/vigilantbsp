@@ -104,7 +104,26 @@ func (r *RejectWork) prepareBlockmapForLOS() {
 		r.blockMapBounds[row].lo = colCount
 		r.blockMapBounds[row].hi = -1
 	}
-	//r.blockity = GetBlockityLines(r.blockmap)
+
+	// Now I would like to convert the blockmap - a 2D array with linedef
+	// indices - to a solidMap, a contiguous array of solidLines indices. This
+	// improves performance of future findInterveningLines calls by being
+	// friendlier to cache (less trips to RAM)
+	r.solidList = make([]SolidmapSlice, len(r.blockmap.blocklist))
+	totalEntries := 0
+	for i, list := range r.blockmap.blocklist {
+		r.solidList[i].offset = totalEntries
+		r.solidList[i].length = len(list)
+		totalEntries += r.solidList[i].length
+	}
+	r.solidMap = make([]uint16, totalEntries)
+	i := 0
+	for _, list := range r.blockmap.blocklist {
+		for _, v := range list {
+			r.solidMap[i] = r.indexToSolid[v]
+			i++
+		}
+	}
 }
 
 func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
@@ -247,41 +266,24 @@ func (r *RejectWork) findInterveningLines(set *LineSet) bool {
 		r.seenLines[i] = 0
 	}
 
-	// Poor blockity, its speed sucks! Thanks to it I now have seenLines packed
-	// as bytes, though - I first implemented it there
-	/*
-		// At heart we have simple for r.blockity.NextLine() iteration, but
-		// we have different column boundaries for each row. I wish row iteration
-		// could go within blockity - which is possible - but rewriting it that way
-		// would make it more difficult to undestand blockity's code
-		r.blockity.SetContextForReject() // <- line duplicate tracking begins here
-		for row := r.loRow; row <= r.hiRow; row++ {
-			bound := &(r.blockMapBounds[row])
-			// Blockity will now iterate column range within this row, lines that
-			// were already added to set will not be returned, because the context
-			// for tracking was set before the outer loop
-			r.blockity.SetSubcontextFromRow(row, bound.lo, bound.hi)
-			for r.blockity.NextLine() {
-				line := r.blockity.GetLine()
-				set.lines[lineCount] = r.indexToSolid[line]
-				lineCount++
-			}
-			bound.lo = int(r.blockmap.header.XBlocks)
-			bound.hi = -1
-		}
-	*/
+	// March 2023: now using a solidMap, which stores indices in solidLines
+	// array, not the linedef indices, and is also one contiguous array instead
+	// of array of arrays. The speedgain is awesome.
+
 	xblocks := int(r.blockmap.header.XBlocks)
 	for row := r.loRow; row <= r.hiRow; row++ {
 		bound := &(r.blockMapBounds[row])
 		blocklistIdx := row*xblocks + bound.lo
 		for col := bound.lo; col <= bound.hi; col++ {
-			for _, line := range r.blockmap.blocklist[blocklistIdx] {
+			obeg := r.solidList[blocklistIdx].offset
+			oend := obeg + r.solidList[blocklistIdx].length
+			for _, line := range r.solidMap[obeg:oend] {
 				if !r.markAndRecall(line) {
-					set.lines[lineCount] = r.indexToSolid[line]
+					set.lines[lineCount] = &(r.solidLines[line])
 					lineCount++
 				}
 			}
-			blocklistIdx++
+			blocklistIdx++ // per col
 		}
 		bound.lo = int(r.blockmap.header.XBlocks)
 		bound.hi = -1
@@ -553,6 +555,9 @@ func TrimLines(src, tgt *TransLine, set *LineSet) int {
 			y := 1
 			// Achtung! Must compare structure values not pointers!
 			// (May be find a way to intern them?)
+			// Upd (March 2023): tested it with interning (taking note to try
+			// to intern a crossPoint in divideRegion), and it was impractical.
+			// So these will keep comparison by value.
 			if (*line.start == *src.start) || (*line.start == *src.end) {
 				y = src.DX*(line.end.Y-src.start.Y) - src.DY*(line.end.X-src.start.X)
 			} else if (*line.end == *src.start) || (*line.end == *src.end) {

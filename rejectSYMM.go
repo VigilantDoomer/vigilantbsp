@@ -22,8 +22,8 @@ import (
 	"sort"
 )
 
-type FastRejectWork struct {
-	extra       RejectNoExtra
+type SymmetricRejectWork struct {
+	extra       RejectSymmNoExtra
 	numSectors  int
 	rejectTable []byte
 	input       *RejectInput
@@ -71,9 +71,9 @@ type FastRejectWork struct {
 	drLine            *TransLine
 }
 
-func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
+func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 	groups []RejGroup) []byte {
-	*r = FastRejectWork{
+	*r = SymmetricRejectWork{
 		numSectors:    len(input.sectors),
 		input:         &input,
 		linesToIgnore: input.linesToIgnore,
@@ -196,12 +196,12 @@ func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis b
 		Log.Printf("Reject builder: not a single two-sided linedef between two distinct sectors was found. You will have an empty, zero-filled REJECT.")
 	}
 
-	r.rmbFrame.FastProcessOptionsRMB(r)
+	r.rmbFrame.SymmetricProcessOptionsRMB(r)
 
 	return r.getResult()
 }
 
-func (r *FastRejectWork) ScheduleSolidBlockmap() {
+func (r *SymmetricRejectWork) ScheduleSolidBlockmap() {
 	if r.specialSolids == nil {
 
 		Log.Panic("Programmer error: setupLines must be called before ScheduleSolidBlockmap()")
@@ -219,7 +219,7 @@ func (r *FastRejectWork) ScheduleSolidBlockmap() {
 	}
 }
 
-func (r *FastRejectWork) RetrieveSolidBlockmap() {
+func (r *SymmetricRejectWork) RetrieveSolidBlockmap() {
 	if len(r.specialSolids) > 0 {
 		return
 	}
@@ -231,7 +231,7 @@ func (r *FastRejectWork) RetrieveSolidBlockmap() {
 	r.blockmap = <-bmResponse
 }
 
-func (r *FastRejectWork) DoneWithSolidBlockmap() {
+func (r *SymmetricRejectWork) DoneWithSolidBlockmap() {
 	if len(r.specialSolids) > 0 {
 		return
 	}
@@ -241,14 +241,14 @@ func (r *FastRejectWork) DoneWithSolidBlockmap() {
 	}
 }
 
-func (r *FastRejectWork) NoNeedSolidBlockmap() {
+func (r *SymmetricRejectWork) NoNeedSolidBlockmap() {
 	r.input.bcontrol <- BconRequest{
 		Sender:  SOLIDBLOCKS_REJECT,
 		Message: BCON_NONEED_SOLID_BLOCKMAP,
 	}
 }
 
-func (r *FastRejectWork) createSolidBlockmapNow() {
+func (r *SymmetricRejectWork) createSolidBlockmapNow() {
 	lines := r.input.lines.GetSolidVersion()
 	bmi := BlockmapInput{
 		bounds:          r.input.bounds,
@@ -266,59 +266,7 @@ func (r *FastRejectWork) createSolidBlockmapNow() {
 	r.blockmap = CreateBlockmap(bmi)
 }
 
-func (r *FastRejectWork) prepareReject() {
-
-	tableSize := r.numSectors*r.numSectors + 7
-	r.rejectTable = make([]uint8, tableSize, tableSize)
-	for i, _ := range r.rejectTable {
-		r.rejectTable[i] = 0
-	}
-}
-
-func (r *FastRejectWork) getResult() []byte {
-	rejectSize := int((r.numSectors*r.numSectors)+7) / 8
-	result := make([]byte, rejectSize, rejectSize)
-	tbIdx := 0
-	for i := 0; i < rejectSize; i++ {
-		bits := 0
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x01
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x02
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x04
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x08
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x10
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x20
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x40
-		}
-		tbIdx++
-		if isHidden(r.rejectTable[tbIdx]) {
-			bits = bits | 0x80
-		}
-		tbIdx++
-		result[i] = uint8(bits)
-	}
-	return result
-}
-
-func (r *FastRejectWork) setupLines() bool {
+func (r *SymmetricRejectWork) setupLines() bool {
 	if r.NoProcess_TryLoad() {
 		return false
 	}
@@ -469,7 +417,7 @@ func (r *FastRejectWork) setupLines() bool {
 	return numTransLines > 0
 }
 
-func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *int,
+func (r *SymmetricRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *int,
 	sector uint16, perimeter []uint16, it *BlockityLines,
 	lineTraces map[[2]IntOrientedVertex]IntCollinearOrientedVertices,
 	blXMin, blXMax, blYMin, blYMax int, vertices []IntVertex) int {
@@ -763,7 +711,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *in
 	return int(whichSector)
 }
 
-func (r *FastRejectWork) finishLineSetup() {
+func (r *SymmetricRejectWork) finishLineSetup() {
 	numTransLines := len(r.transLines)
 
 	lineVisSize := int((uint64(numTransLines-1)*uint64(numTransLines)/2 + 7) / 8)
@@ -778,7 +726,7 @@ func (r *FastRejectWork) finishLineSetup() {
 
 }
 
-func (r *FastRejectWork) createSectorInfo() {
+func (r *SymmetricRejectWork) createSectorInfo() {
 	numSectors := r.numSectors
 
 	r.sectors = make([]RejSector, numSectors)
@@ -827,7 +775,7 @@ func (r *FastRejectWork) createSectorInfo() {
 	}
 }
 
-func (r *FastRejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighboring]bool) {
+func (r *SymmetricRejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighboring]bool) {
 	nei := Neighboring{
 		smallIndex: sec1.index,
 		bigIndex:   sec2.index,
@@ -846,23 +794,11 @@ func (r *FastRejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Nei
 	sec2.numNeighbors++
 }
 
-func (r *FastRejectWork) markVisibilitySector(i, j int, visibility uint8) {
-	cell1 := r.rejectTableIJ(i, j)
-	if *cell1 == VIS_UNKNOWN {
-		*cell1 = visibility
-	}
-
-	cell2 := r.rejectTableIJ(j, i)
-	if *cell2 == VIS_UNKNOWN {
-		*cell2 = visibility
-	}
-}
-
-func (r *FastRejectWork) sectorIsNotGroup(i int) bool {
+func (r *SymmetricRejectWork) sectorIsNotGroup(i int) bool {
 	return r.groups[i].legal && len(r.groups[i].sectors) == 1
 }
 
-func (r *FastRejectWork) markPairVisible(srcLine, tgtLine *TransLine) {
+func (r *SymmetricRejectWork) markPairVisible(srcLine, tgtLine *TransLine) {
 
 	r.markVisibility(int(srcLine.frontSector), int(tgtLine.frontSector), VIS_VISIBLE)
 	r.markVisibility(int(srcLine.backSector), int(tgtLine.frontSector), VIS_VISIBLE)
@@ -870,7 +806,7 @@ func (r *FastRejectWork) markPairVisible(srcLine, tgtLine *TransLine) {
 	r.markVisibility(int(srcLine.backSector), int(tgtLine.backSector), VIS_VISIBLE)
 }
 
-func (r *FastRejectWork) mixerSetVisibility(i, j int, visibility uint8) {
+func (r *SymmetricRejectWork) mixerSetVisibility(i, j int, visibility uint8) {
 	cell1 := r.mixerIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
@@ -882,11 +818,7 @@ func (r *FastRejectWork) mixerSetVisibility(i, j int, visibility uint8) {
 	}
 }
 
-func (r *FastRejectWork) rejectTableIJ(i, j int) *uint8 {
-	return &(r.rejectTable[i*r.numSectors+j])
-}
-
-func (r *FastRejectWork) eliminateTrivialCases() {
+func (r *SymmetricRejectWork) eliminateTrivialCases() {
 	if config.DebugNoSlyForReject {
 
 		r.slyLinesInSector = make(map[uint16]bool)
@@ -945,7 +877,7 @@ func (r *FastRejectWork) eliminateTrivialCases() {
 	}
 }
 
-func (r *FastRejectWork) entireGroupHiddenNoSly(sector int) bool {
+func (r *SymmetricRejectWork) entireGroupHiddenNoSly(sector int) bool {
 	if r.sectors[sector].numLines != 0 {
 		return false
 	}
@@ -961,7 +893,7 @@ func (r *FastRejectWork) entireGroupHiddenNoSly(sector int) bool {
 	return true
 }
 
-func (r *FastRejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {
+func (r *SymmetricRejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {
 	done := r.getLineVisibilityDone(srcLine, tgtLine)
 	if done || r.dontBother(srcLine, tgtLine) {
 		return false
@@ -988,7 +920,7 @@ func (r *FastRejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {
 	return isVisible
 }
 
-func (r *FastRejectWork) getLineVisibilityDone(srcLine, tgtLine *TransLine) bool {
+func (r *SymmetricRejectWork) getLineVisibilityDone(srcLine, tgtLine *TransLine) bool {
 	if srcLine == tgtLine {
 		return true
 	}
@@ -1000,7 +932,7 @@ func (r *FastRejectWork) getLineVisibilityDone(srcLine, tgtLine *TransLine) bool
 	return data&bit == bit
 }
 
-func (r *FastRejectWork) setLineVisibilityDone(srcLine, tgtLine *TransLine) {
+func (r *SymmetricRejectWork) setLineVisibilityDone(srcLine, tgtLine *TransLine) {
 
 	if srcLine == tgtLine {
 		return
@@ -1013,7 +945,7 @@ func (r *FastRejectWork) setLineVisibilityDone(srcLine, tgtLine *TransLine) {
 	r.lineVisDone[offset>>3] = data | bit
 }
 
-func (r *FastRejectWork) dontBother(srcLine, tgtLine *TransLine) bool {
+func (r *SymmetricRejectWork) dontBother(srcLine, tgtLine *TransLine) bool {
 
 	if (*r.rejectTableIJ(int(srcLine.frontSector), int(tgtLine.frontSector)) != VIS_UNKNOWN) &&
 		(*r.rejectTableIJ(int(srcLine.frontSector), int(tgtLine.backSector)) != VIS_UNKNOWN) &&
@@ -1025,7 +957,7 @@ func (r *FastRejectWork) dontBother(srcLine, tgtLine *TransLine) bool {
 	return false
 }
 
-func (r *FastRejectWork) checkLOS(src, tgt *TransLine) bool {
+func (r *SymmetricRejectWork) checkLOS(src, tgt *TransLine) bool {
 
 	var myWorld WorldInfo
 	r.initializeWorld(&myWorld, src, tgt)
@@ -1085,7 +1017,7 @@ func (r *FastRejectWork) checkLOS(src, tgt *TransLine) bool {
 	return true
 }
 
-func (r *FastRejectWork) divideRegion(src, tgt *TransLine) bool {
+func (r *SymmetricRejectWork) divideRegion(src, tgt *TransLine) bool {
 
 	num := tgt.DX*(src.start.Y-tgt.start.Y) - tgt.DY*(src.start.X-tgt.start.X)
 	det := src.DX*tgt.DY - src.DY*tgt.DX
@@ -1118,7 +1050,7 @@ func (r *FastRejectWork) divideRegion(src, tgt *TransLine) bool {
 	return isVisible
 }
 
-func (r *FastRejectWork) forceVisibility(i, j int, visibility uint8) {
+func (r *SymmetricRejectWork) forceVisibility(i, j int, visibility uint8) {
 	if !r.hasGroups {
 		*(r.rejectTableIJ(i, j)) = visibility
 		return
@@ -1132,7 +1064,7 @@ func (r *FastRejectWork) forceVisibility(i, j int, visibility uint8) {
 	}
 }
 
-func (r *FastRejectWork) orMaskVisibility(i, j int, visibility uint8) {
+func (r *SymmetricRejectWork) orMaskVisibility(i, j int, visibility uint8) {
 	if !r.hasGroups {
 		*(r.rejectTableIJ(i, j)) |= visibility
 		return
@@ -1146,7 +1078,7 @@ func (r *FastRejectWork) orMaskVisibility(i, j int, visibility uint8) {
 	}
 }
 
-func (r *FastRejectWork) computeGroupNeighbors() {
+func (r *SymmetricRejectWork) computeGroupNeighbors() {
 	if r.groups[0].neighbors != nil {
 		Log.Error("computeGroupNeighbors called after group neighbors were already computed. (Programmer error)\n")
 		return
@@ -1169,34 +1101,34 @@ func (r *FastRejectWork) computeGroupNeighbors() {
 	}
 }
 
-func (r *FastRejectWork) NoProcess_TryLoad() bool {
+func (r *SymmetricRejectWork) NoProcess_TryLoad() bool {
 	if !(r.rmbFrame.IsNOPROCESSInEffect()) {
 		return false
 	}
 	return false
 }
 
-func FastgetRejectWorkIntf() RejectWorkIntf {
-	return &FastRejectWork{}
+func SymmetricgetRejectWorkIntf() RejectWorkIntf {
+	return &SymmetricRejectWork{}
 }
 
-func (fr *RMBFrame) FastProcessOptionsRMB(r *FastRejectWork) {
+func (fr *RMBFrame) SymmetricProcessOptionsRMB(r *SymmetricRejectWork) {
 	if fr == nil {
 		return
 	}
 
-	fr.FastprocessDistanceUsingOptions(r, nil)
-	fr.FastprocessSimpleBlindSafeOptions(r, nil)
+	fr.SymmetricprocessDistanceUsingOptions(r, nil)
+	fr.SymmetricprocessSimpleBlindSafeOptions(r, nil)
 
-	fr.FastprocessINCLUDEs(r)
+	fr.SymmetricprocessINCLUDEs(r)
 
-	fr.FastprocessEXCLUDEs(r)
+	fr.SymmetricprocessEXCLUDEs(r)
 
 	r.generateReport()
 	r.distanceTable = nil
 }
 
-func (fr *RMBFrame) FastprocessDistanceUsingOptions(r *FastRejectWork, sectors []SectorRMB) {
+func (fr *RMBFrame) SymmetricprocessDistanceUsingOptions(r *SymmetricRejectWork, sectors []SectorRMB) {
 	if fr == nil || r.distanceTable == nil {
 		return
 	}
@@ -1207,7 +1139,7 @@ func (fr *RMBFrame) FastprocessDistanceUsingOptions(r *FastRejectWork, sectors [
 		madeSectors = true
 	}
 
-	fr.Parent.FastprocessDistanceUsingOptions(r, sectors)
+	fr.Parent.SymmetricprocessDistanceUsingOptions(r, sectors)
 
 	for _, command := range fr.Commands {
 		if command.Type == RMB_BLIND {
@@ -1234,7 +1166,7 @@ func (fr *RMBFrame) FastprocessDistanceUsingOptions(r *FastRejectWork, sectors [
 	}
 }
 
-func (r *FastRejectWork) prepareBlind(command RMBCommand, sectors []SectorRMB) {
+func (r *SymmetricRejectWork) prepareBlind(command RMBCommand, sectors []SectorRMB) {
 	if command.Band {
 		for _, num := range command.List[0] {
 			group := r.rmbGetGroup(sectors, num, command)
@@ -1274,7 +1206,7 @@ func (r *FastRejectWork) prepareBlind(command RMBCommand, sectors []SectorRMB) {
 	}
 }
 
-func (r *FastRejectWork) prepareSafe(command RMBCommand, sectors []SectorRMB) {
+func (r *SymmetricRejectWork) prepareSafe(command RMBCommand, sectors []SectorRMB) {
 	if command.Band {
 		for _, num := range command.List[0] {
 			group := r.rmbGetGroup(sectors, num, command)
@@ -1314,7 +1246,7 @@ func (r *FastRejectWork) prepareSafe(command RMBCommand, sectors []SectorRMB) {
 	}
 }
 
-func (r *FastRejectWork) rmbGetGroup(sectors []SectorRMB, num int, command RMBCommand) []int {
+func (r *SymmetricRejectWork) rmbGetGroup(sectors []SectorRMB, num int, command RMBCommand) []int {
 	asector := rmbGetSector(sectors, num, command)
 	if asector == nil {
 		return nil
@@ -1327,7 +1259,7 @@ func (r *FastRejectWork) rmbGetGroup(sectors []SectorRMB, num int, command RMBCo
 	return r.groups[num].sectors
 }
 
-func (r *FastRejectWork) rmbCheckSectorInRange(i int, command RMBCommand) bool {
+func (r *SymmetricRejectWork) rmbCheckSectorInRange(i int, command RMBCommand) bool {
 	if i >= r.numSectors || i < 0 {
 		command.Error("specified sector number out of range: %d\n", i)
 		return false
@@ -1335,7 +1267,7 @@ func (r *FastRejectWork) rmbCheckSectorInRange(i int, command RMBCommand) bool {
 	return true
 }
 
-func (r *FastRejectWork) applyBlind(sector SectorRMB, i int) {
+func (r *SymmetricRejectWork) applyBlind(sector SectorRMB, i int) {
 	if sector.Blind == 3 {
 		if sector.BlindLo > sector.BlindHi {
 			sector.BlindLo, sector.BlindHi = sector.BlindHi, sector.BlindLo
@@ -1368,7 +1300,7 @@ func (r *FastRejectWork) applyBlind(sector SectorRMB, i int) {
 	}
 }
 
-func (r *FastRejectWork) applySafe(sector SectorRMB, i int) {
+func (r *SymmetricRejectWork) applySafe(sector SectorRMB, i int) {
 	if sector.Safe == 3 {
 		if sector.SafeLo > sector.SafeHi {
 			sector.SafeLo, sector.SafeHi = sector.SafeHi, sector.SafeLo
@@ -1400,11 +1332,11 @@ func (r *FastRejectWork) applySafe(sector SectorRMB, i int) {
 	}
 }
 
-func (fr *RMBFrame) FastprocessINCLUDEs(r *FastRejectWork) {
+func (fr *RMBFrame) SymmetricprocessINCLUDEs(r *SymmetricRejectWork) {
 	if fr == nil {
 		return
 	}
-	fr.Parent.FastprocessINCLUDEs(r)
+	fr.Parent.SymmetricprocessINCLUDEs(r)
 
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_INCLUDE {
@@ -1424,11 +1356,11 @@ func (fr *RMBFrame) FastprocessINCLUDEs(r *FastRejectWork) {
 	}
 }
 
-func (fr *RMBFrame) FastprocessEXCLUDEs(r *FastRejectWork) {
+func (fr *RMBFrame) SymmetricprocessEXCLUDEs(r *SymmetricRejectWork) {
 	if fr == nil {
 		return
 	}
-	fr.Parent.FastprocessEXCLUDEs(r)
+	fr.Parent.SymmetricprocessEXCLUDEs(r)
 
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_EXCLUDE {
@@ -1448,7 +1380,7 @@ func (fr *RMBFrame) FastprocessEXCLUDEs(r *FastRejectWork) {
 	}
 }
 
-func (r *FastRejectWork) CreateDistanceTable() {
+func (r *SymmetricRejectWork) CreateDistanceTable() {
 	Log.Verbose(1, "Reject: calculating sector distances for RMB effects (this may allocate a lot of memory)\n")
 
 	r.distanceTable = make([]uint16, r.numSectors*r.numSectors)
@@ -1478,7 +1410,7 @@ func (r *FastRejectWork) CreateDistanceTable() {
 	r.maxLength = length
 }
 
-func (r *FastRejectWork) BFS(distanceRow []uint16, source uint16,
+func (r *SymmetricRejectWork) BFS(distanceRow []uint16, source uint16,
 	queue *RingU16) uint16 {
 	visited := make([]bool, r.numSectors)
 	visited[source] = true
@@ -1506,7 +1438,7 @@ func (r *FastRejectWork) BFS(distanceRow []uint16, source uint16,
 	return length
 }
 
-func (r *FastRejectWork) distanceTableFromGroups(distanceTable []uint16,
+func (r *SymmetricRejectWork) distanceTableFromGroups(distanceTable []uint16,
 	queue *RingU16, numSectors int) uint16 {
 	length := uint16(0)
 	for i := 0; i < numSectors; i++ {
@@ -1540,7 +1472,7 @@ func (r *FastRejectWork) distanceTableFromGroups(distanceTable []uint16,
 	return length
 }
 
-func (r *FastRejectWork) GroupBFS(distanceRow []uint16, source uint16,
+func (r *SymmetricRejectWork) GroupBFS(distanceRow []uint16, source uint16,
 	queue *RingU16) uint16 {
 	visited := make([]bool, r.numSectors)
 	visited[source] = true
@@ -1565,7 +1497,7 @@ func (r *FastRejectWork) GroupBFS(distanceRow []uint16, source uint16,
 	return length
 }
 
-func (r *FastRejectWork) ApplyDistanceLimits() {
+func (r *SymmetricRejectWork) ApplyDistanceLimits() {
 	ok, maxLength := r.rmbFrame.GetLENGTHValue()
 	if ok {
 
@@ -1593,11 +1525,11 @@ func (r *FastRejectWork) ApplyDistanceLimits() {
 
 }
 
-func (r *FastRejectWork) distanceTableIJ(i, j int) *uint16 {
+func (r *SymmetricRejectWork) distanceTableIJ(i, j int) *uint16 {
 	return &(r.distanceTable[i*r.numSectors+j])
 }
 
-func (r *FastRejectWork) linesTooFarApart(srcLine, tgtLine *TransLine) bool {
+func (r *SymmetricRejectWork) linesTooFarApart(srcLine, tgtLine *TransLine) bool {
 	if r.maxDistance != UNLIMITED_DISTANCE &&
 		r.pointTooFar(srcLine.start, tgtLine) &&
 		r.pointTooFar(srcLine.end, tgtLine) &&
@@ -1610,7 +1542,7 @@ func (r *FastRejectWork) linesTooFarApart(srcLine, tgtLine *TransLine) bool {
 	return false
 }
 
-func (r *FastRejectWork) pointTooFar(p *IntVertex, line *TransLine) bool {
+func (r *SymmetricRejectWork) pointTooFar(p *IntVertex, line *TransLine) bool {
 	p1 := line.start
 	p2 := line.end
 
@@ -1631,20 +1563,20 @@ func (r *FastRejectWork) pointTooFar(p *IntVertex, line *TransLine) bool {
 	return !(uint64(d) < r.maxDistance)
 }
 
-func (r *FastRejectWork) mapDistance(p1, p2 *IntVertex) uint64 {
+func (r *SymmetricRejectWork) mapDistance(p1, p2 *IntVertex) uint64 {
 	dx := int64(p1.X - p2.X)
 	dy := int64(p1.Y - p2.Y)
 	return uint64(dx*dx) + uint64(dy*dy)
 }
 
-func (r *FastRejectWork) generateReport() {
+func (r *SymmetricRejectWork) generateReport() {
 	if r.distanceTable == nil {
 		return
 	}
 	r.generateReportForFrame(r.rmbFrame)
 }
 
-func (r *FastRejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
+func (r *SymmetricRejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
 	if rmbFrame == nil {
 		return false
 	}
@@ -1671,7 +1603,7 @@ func (r *FastRejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
 	return ret
 }
 
-func (r *FastRejectWork) reportDoForDistance(w io.Writer, distance uint16) {
+func (r *SymmetricRejectWork) reportDoForDistance(w io.Writer, distance uint16) {
 	r.printfln(w, "# %s All sectors with LOS distance>%d are reported",
 		r.mapName, distance)
 	for i := 0; i < r.numSectors; i++ {
@@ -1686,11 +1618,11 @@ func (r *FastRejectWork) reportDoForDistance(w io.Writer, distance uint16) {
 	}
 }
 
-func (r *FastRejectWork) printfln(w io.Writer, format string, a ...interface{}) {
+func (r *SymmetricRejectWork) printfln(w io.Writer, format string, a ...interface{}) {
 	WriterPrintfln(w, r.rmbFrame.RMB.CRLF, format, a...)
 }
 
-func (r *FastRejectWork) reportGetWriter() io.Writer {
+func (r *SymmetricRejectWork) reportGetWriter() io.Writer {
 	if r.fileControl.freport != nil {
 		return r.fileControl.freport
 	}
@@ -1705,14 +1637,14 @@ func (r *FastRejectWork) reportGetWriter() io.Writer {
 	return wri
 }
 
-func (r *FastRejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
+func (r *SymmetricRejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
 	if r.lineEffects == nil {
 		return false
 	}
 	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
 }
 
-func (r *FastRejectWork) RMBLoadLineEffects() {
+func (r *SymmetricRejectWork) RMBLoadLineEffects() {
 	r.lineEffects = make(map[uint16]uint8)
 	did := r.loadLineEffectsForFrame(r.rmbFrame)
 	if !did {
@@ -1720,7 +1652,7 @@ func (r *FastRejectWork) RMBLoadLineEffects() {
 	}
 }
 
-func (r *FastRejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
+func (r *SymmetricRejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 	if rmbFrame == nil {
 		return false
 	}
@@ -1762,7 +1694,7 @@ func (r *FastRejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 	return ret
 }
 
-func (fr *RMBFrame) FastprocessSimpleBlindSafeOptions(r *FastRejectWork, sectors []SectorRMB) {
+func (fr *RMBFrame) SymmetricprocessSimpleBlindSafeOptions(r *SymmetricRejectWork, sectors []SectorRMB) {
 	if fr == nil || !fr.hasSimpleBlindSafe() {
 		return
 	}
@@ -1773,7 +1705,7 @@ func (fr *RMBFrame) FastprocessSimpleBlindSafeOptions(r *FastRejectWork, sectors
 		madeSectors = true
 	}
 
-	fr.Parent.FastprocessSimpleBlindSafeOptions(r, sectors)
+	fr.Parent.SymmetricprocessSimpleBlindSafeOptions(r, sectors)
 
 	for _, command := range fr.Commands {
 		if command.Type == RMB_SIMPLE_BLIND {
@@ -1800,7 +1732,7 @@ func (fr *RMBFrame) FastprocessSimpleBlindSafeOptions(r *FastRejectWork, sectors
 	}
 }
 
-func (r *FastRejectWork) applySimpleBlind(sector SectorRMB, i int) {
+func (r *SymmetricRejectWork) applySimpleBlind(sector SectorRMB, i int) {
 
 	grI := r.groups[i].parent
 	for j := 0; j < r.numSectors; j++ {
@@ -1825,7 +1757,7 @@ func (r *FastRejectWork) applySimpleBlind(sector SectorRMB, i int) {
 	}
 }
 
-func (r *FastRejectWork) applySimpleSafe(sector SectorRMB, i int) {
+func (r *SymmetricRejectWork) applySimpleSafe(sector SectorRMB, i int) {
 
 	grI := r.groups[i].parent
 	for j := 0; j < r.numSectors; j++ {
@@ -1850,7 +1782,7 @@ func (r *FastRejectWork) applySimpleSafe(sector SectorRMB, i int) {
 	}
 }
 
-func (w *FastRejectWork) DFS(graph *RejGraph, sector *RejSector) int {
+func (w *SymmetricRejectWork) DFS(graph *RejGraph, sector *RejSector) int {
 
 	sector.graph = graph
 	sector.indexDFS = graph.numSectors
@@ -1888,7 +1820,7 @@ func (w *FastRejectWork) DFS(graph *RejGraph, sector *RejSector) int {
 	return numChildren
 }
 
-func (w *FastRejectWork) CreateGraph(root *RejSector) *RejGraph {
+func (w *SymmetricRejectWork) CreateGraph(root *RejSector) *RejGraph {
 	w.graphTable.numGraphs++
 	graph := &(w.graphTable.graphs[w.graphTable.numGraphs-1])
 
@@ -1907,7 +1839,7 @@ func (w *FastRejectWork) CreateGraph(root *RejSector) *RejGraph {
 	return graph
 }
 
-func (w *FastRejectWork) HideComponents(oldGraph, newGraph *RejGraph) {
+func (w *SymmetricRejectWork) HideComponents(oldGraph, newGraph *RejGraph) {
 	for i := 0; i < oldGraph.numSectors; i++ {
 		sec1 := oldGraph.sectors[i]
 		if sec1.graph == oldGraph {
@@ -1919,7 +1851,7 @@ func (w *FastRejectWork) HideComponents(oldGraph, newGraph *RejGraph) {
 	}
 }
 
-func (w *FastRejectWork) SplitGraph(oldGraph *RejGraph) {
+func (w *SymmetricRejectWork) SplitGraph(oldGraph *RejGraph) {
 	remainingSectors := oldGraph.numSectors - 1
 
 	for i := 0; i < oldGraph.numSectors; i++ {
@@ -1934,7 +1866,7 @@ func (w *FastRejectWork) SplitGraph(oldGraph *RejGraph) {
 	}
 }
 
-func (w *FastRejectWork) InitializeGraphs(numSectors int) {
+func (w *SymmetricRejectWork) InitializeGraphs(numSectors int) {
 	Log.Verbose(1, "Creating sector graphs...\n")
 
 	w.graphTable.numGraphs = 0
@@ -1995,7 +1927,7 @@ func (w *FastRejectWork) InitializeGraphs(numSectors int) {
 	Log.Verbose(1, "Reject: created %d graphs.\n", w.graphTable.numGraphs)
 }
 
-func (w *FastRejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
+func (w *SymmetricRejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
 	graph := sec.graph
 
 	for i := 0; i < root.indexDFS; i++ {
@@ -2006,7 +1938,7 @@ func (w *FastRejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
 	}
 }
 
-func (w *FastRejectWork) AddGraph(graph *RejGraph, sector *RejSector) {
+func (w *SymmetricRejectWork) AddGraph(graph *RejGraph, sector *RejSector) {
 
 	sector.graph = graph
 	sector.indexDFS = graph.numSectors
@@ -2035,7 +1967,7 @@ func (w *FastRejectWork) AddGraph(graph *RejGraph, sector *RejSector) {
 	sector.hiDFS = graph.numSectors - 1
 }
 
-func (w *FastRejectWork) QuickGraph(root *RejSector) *RejGraph {
+func (w *SymmetricRejectWork) QuickGraph(root *RejSector) *RejGraph {
 	oldGraph := root.baseGraph
 	for i := 0; i < oldGraph.numSectors; i++ {
 		oldGraph.sectors[i].graph = oldGraph
@@ -2053,7 +1985,7 @@ func (w *FastRejectWork) QuickGraph(root *RejSector) *RejGraph {
 	return graph
 }
 
-func (w *FastRejectWork) ProcessSectorLines(key, root, sector *RejSector,
+func (w *SymmetricRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 	lines []*TransLine) {
 
 	isVisible := *(w.rejectTableIJ(key.index, sector.index)) == VIS_VISIBLE
@@ -2137,7 +2069,7 @@ func (w *FastRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 	}
 }
 
-func (w *FastRejectWork) ProcessSector(sector *RejSector) {
+func (w *SymmetricRejectWork) ProcessSector(sector *RejSector) {
 	if sector.isArticulation {
 
 		w.QuickGraph(sector)
@@ -2210,7 +2142,7 @@ func (w *FastRejectWork) ProcessSector(sector *RejSector) {
 	}
 }
 
-func (r *FastRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {
+func (r *SymmetricRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {
 	if !r.groupShareVis {
 		return s.neighbors
 	}
@@ -2240,7 +2172,7 @@ func (r *FastRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSec
 	return ret
 }
 
-func (r *FastRejectWork) initializeWorld(world *WorldInfo, src, tgt *TransLine) {
+func (r *SymmetricRejectWork) initializeWorld(world *WorldInfo, src, tgt *TransLine) {
 	world.src = src
 	world.tgt = tgt
 
@@ -2277,7 +2209,7 @@ func (r *FastRejectWork) initializeWorld(world *WorldInfo, src, tgt *TransLine) 
 	upperPoly.points[1] = src.loPoint
 }
 
-func (r *FastRejectWork) markBlockMap(world *WorldInfo) {
+func (r *SymmetricRejectWork) markBlockMap(world *WorldInfo) {
 	r.loRow = int(r.blockmap.header.YBlocks)
 	r.hiRow = -1
 
@@ -2287,7 +2219,7 @@ func (r *FastRejectWork) markBlockMap(world *WorldInfo) {
 	r.drawBlockMapLine(world.tgt.start, world.src.end)
 }
 
-func (r *FastRejectWork) prepareBlockmapForLOS() {
+func (r *SymmetricRejectWork) prepareBlockmapForLOS() {
 	rowCount := int(r.blockmap.header.YBlocks)
 	colCount := int(r.blockmap.header.XBlocks)
 	r.blockMapBounds = make([]BlockMapBounds, rowCount)
@@ -2313,7 +2245,7 @@ func (r *FastRejectWork) prepareBlockmapForLOS() {
 	}
 }
 
-func (r *FastRejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
+func (r *SymmetricRejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 	x0 := p1.X - int(r.blockmap.header.XMin)
 	y0 := p1.Y - int(r.blockmap.header.YMin)
 	x1 := p2.X - int(r.blockmap.header.XMin)
@@ -2430,7 +2362,7 @@ func (r *FastRejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 	}
 }
 
-func (r *FastRejectWork) updateRow(col, row int) {
+func (r *SymmetricRejectWork) updateRow(col, row int) {
 	bound := &(r.blockMapBounds[row])
 	if col < bound.lo {
 		bound.lo = col
@@ -2440,7 +2372,7 @@ func (r *FastRejectWork) updateRow(col, row int) {
 	}
 }
 
-func (r *FastRejectWork) findInterveningLines(set *LineSet) bool {
+func (r *SymmetricRejectWork) findInterveningLines(set *LineSet) bool {
 
 	lineCount := 0
 
@@ -2478,7 +2410,7 @@ func (r *FastRejectWork) findInterveningLines(set *LineSet) bool {
 	return false
 }
 
-func (r *FastRejectWork) markAndRecall(cur uint16) bool {
+func (r *SymmetricRejectWork) markAndRecall(cur uint16) bool {
 	bte := cur >> 3
 	bit := uint8(1 << (cur % 8))
 	retA := r.seenLines[bte] & bit
@@ -2490,33 +2422,104 @@ func (r *FastRejectWork) markAndRecall(cur uint16) bool {
 	}
 }
 
-func (r *FastRejectWork) markVisibility(i, j int, visibility uint8) {
+func (r *SymmetricRejectWork) markVisibility(i, j int, visibility uint8) {
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
 		*cell1 = visibility
 	}
+}
 
-	cell2 := r.rejectTableIJ(j, i)
-	if *cell2 == VIS_UNKNOWN {
-		*cell2 = visibility
+func (r *SymmetricRejectWork) markVisibilitySector(i, j int, visibility uint8) {
+	cell1 := r.rejectTableIJ(i, j)
+	if *cell1 == VIS_UNKNOWN {
+		*cell1 = visibility
 	}
 }
 
-func (w *FastRejectWork) setupMixer() {
+func (w *SymmetricRejectWork) setupMixer() {
 
 }
 
-func (w *FastRejectWork) mergeAndDestroyMixer() {
+func (w *SymmetricRejectWork) mergeAndDestroyMixer() {
 
 }
 
-func (r *FastRejectWork) markVisibilityGroup(i, j int, visibility uint8) {
+func (r *SymmetricRejectWork) markVisibilityGroup(i, j int, visibility uint8) {
 
 }
 
-func (r *FastRejectWork) mixerIJ(i, j int) *uint8 {
+func (r *SymmetricRejectWork) mixerIJ(i, j int) *uint8 {
 	return nil
 }
+
+func (r *SymmetricRejectWork) rejectTableIJ(i, j int) *uint8 {
+	if i > j {
+		i, j = j, i
+	}
+	return &(r.rejectTable[i*r.numSectors+j-((i*(i+1))>>1)])
+}
+
+func (r *SymmetricRejectWork) getResult() []byte {
+	rejectSize := int((r.numSectors*r.numSectors)+7) / 8
+	result := make([]byte, rejectSize, rejectSize)
+
+	i := 0
+	j := 0
+	for k := 0; k < rejectSize; k++ {
+		bits := 0
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x01
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x02
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x04
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x08
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x10
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x20
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x40
+		}
+		r.symmMoveIJ(&i, &j)
+		if isHidden(*r.rejectTableIJ(i, j)) {
+			bits = bits | 0x80
+		}
+		r.symmMoveIJ(&i, &j)
+		result[k] = uint8(bits)
+	}
+	return result
+}
+
+func (r *SymmetricRejectWork) symmMoveIJ(i, j *int) {
+	(*j)++
+	if *j >= r.numSectors && (*i+1) < r.numSectors {
+		*j = 0
+		(*i)++
+	}
+}
+
+func (r *SymmetricRejectWork) prepareReject() {
+
+	tableSize := r.numSectors*r.numSectors - (r.numSectors-1)*r.numSectors/2 + 7
+	r.rejectTable = make([]uint8, tableSize, tableSize)
+	for i, _ := range r.rejectTable {
+		r.rejectTable[i] = 0
+	}
+}
 func init() {
-	getFastRejectWorkIntf = FastgetRejectWorkIntf
+	getSymmRejectWorkIntf = SymmetricgetRejectWorkIntf
 }

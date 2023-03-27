@@ -65,10 +65,6 @@ type RejectWorkIntf interface {
 		groups []RejGroup) []byte
 }
 
-func getRejectWorkIntf() RejectWorkIntf {
-	return &RejectWork{}
-}
-
 // This whole unit started around this - the version of markVisibility without
 // support for groups (RMF effect called GROUP). This *must* be inlinable. The
 // version with groups that it is replacing is not inlinable, which results in

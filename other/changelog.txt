@@ -1,5 +1,17 @@
 Changelog for VigilantBSP
 
+v0.85a
+- Improved reject builder performance, with especially major gains for maps with lots of sectors (>10000) in absence of RMB effects that break reject table symmetry
+- If reject table is known to be symmetric in advance, building reject will consume less memory than before
+	When RMB options file is not present, reject table is guaranteed to be symmetric.
+	RMB options that are assumed to break symmetry are: BLIND, SAFE, INCLUDE, EXCLUDE, LEFT, RIGHT, ONE (the last three are not yet implemented, but are read nonetheless 
+		and will block this optimization). Parameters to these options are not checked, only the presence of options.
+- RMB change: LINE effect can no longer be overridden by other options, including not yet implemented RIGHT and LEFT specified on the same linedef
+- RMB change: specifying both LEFT and RIGHT on the same linedef results in the same effect as applying LINE to that linedef
+	Outside of this combination, LEFT and RIGHT take no effect as they are not yet implemented
+	Even under this combination, the assumption that reject table is going to be symmetric will NOT be made, and respective optimizations won't take place
+- (Relevant to programmers) Yet another "source code" file is now generated, and like last time it is also for reject builder! (rejectSYMM.go)
+
 v0.82a
 - New feature: added new partition algorithm - "Zennode/Zokumbsp-like (tree balance and depth)"  
     See also "Debug and other hidden parameters", "--zenvar" on how to set numeric parameters used in formula

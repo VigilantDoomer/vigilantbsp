@@ -21,7 +21,7 @@ import (
 )
 
 const PROG_CAPIT_NAME = "VigilantBSP"
-const VERSION = "0.82a"
+const VERSION = "0.85a"
 
 /*
 -b Rebuild BLOCKMAP.
