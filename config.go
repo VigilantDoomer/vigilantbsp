@@ -267,6 +267,8 @@ type ProgramConfig struct {
 	EffectiveSecondary int  // derivative value of SecondaryPriority that never has AUTO value
 	StkNode            bool // whether to use stknode in conjuction MULTITREE_NOTUSED (multi-trees ignore this parameter)
 	TreeWidth          int  // width of hard tree
+	SpeedTree          bool // accelerate multitree at the cost of memory usage
+	SpeedTreeExplicit  bool // whether the user explicitly passed --speedtree on/off
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -328,6 +330,8 @@ func init() {
 		StkNode:                false,
 		TreeWidth:              0, // auto
 		FilterProhibitsLevels:  false,
+		SpeedTree:              false, // overridden dependent on other parameters if SpeedTreeExplicit == false
+		SpeedTreeExplicit:      false,
 	})
 }
 

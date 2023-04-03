@@ -242,7 +242,7 @@ func (c *ProgramConfig) FromCommandLine() bool {
 						return false
 					}
 					if yused {
-						config.DepthArtifacts = false
+						c.DepthArtifacts = false
 					}
 				} else if bytes.HasPrefix([]byte(arg), []byte("--stknode")) {
 					ns, _ := readNumeric("--stknode=", []byte(arg)[len("--stknode=")-1:])
@@ -256,6 +256,25 @@ func (c *ProgramConfig) FromCommandLine() bool {
 							c.StkNode = false
 						case 1:
 							c.StkNode = true
+						default:
+							Log.Error("Unrecognised value %s, expected 0 or 1\n", arg)
+							return false
+						}
+					}
+				} else if bytes.HasPrefix([]byte(arg), []byte("--speedtree")) {
+					// Parameter to control whether use
+					ns, _ := readNumeric("--speedtree=", []byte(arg)[len("--speedtree=")-1:])
+					c.SpeedTreeExplicit = true
+					if ns.whichType == ARG_ENABLED {
+						c.SpeedTree = true
+					} else if ns.whichType == ARG_DISABLED {
+						c.SpeedTree = false
+					} else {
+						switch ns.value {
+						case 0:
+							c.SpeedTree = false
+						case 1:
+							c.SpeedTree = true
 						default:
 							Log.Error("Unrecognised value %s, expected 0 or 1\n", arg)
 							return false
@@ -344,6 +363,7 @@ func (c *ProgramConfig) FromCommandLine() bool {
 			c.EffectiveSecondary = SECONDARY_PRIORITY_SEGS
 		}
 	}
+
 	switch c.EffectiveSecondary {
 	// note names are confusing and may seem like they are mismatched. They were
 	// devised in old version of VigilantBSP where zenscore unit contained bugs,
@@ -377,6 +397,19 @@ func (c *ProgramConfig) FromCommandLine() bool {
 			c.MultiTreeMode = MULTITREE_NOTUSED
 		} else if c.TreeWidth == -1 {
 			Log.Printf("You chose to not limit hard multi-tree width. The results may take eternity to compute.\n")
+		}
+	}
+
+	if !c.SpeedTreeExplicit {
+		// user did not set SpeedTree
+		c.SpeedTree = c.MultiTreeMode != MULTITREE_NOTUSED &&
+			c.PickNodeUser != PICKNODE_TRADITIONAL &&
+			c.PickNodeUser != PICKNODE_MAELSTROM
+	}
+
+	if c.SpeedTree {
+		if c.MultiTreeMode == MULTITREE_NOTUSED {
+			c.SpeedTree = false
 		}
 	}
 

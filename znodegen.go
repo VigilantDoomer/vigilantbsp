@@ -27,6 +27,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -237,6 +238,8 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		whichLen = len(input.sectors)
 	} else {
 		input.ZExt_applySectorEquivalence(allSegs, sectorEquiv)
+		Log.Verbose(1, "Number of sector equivalencies vs number of sectors: %d/%d\n",
+			whichLen, len(input.sectors))
 	}
 
 	workData := ZExt_NodesWork{
@@ -272,7 +275,6 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		depthArtifacts:   input.depthArtifacts,
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
-		zenScores:        make([]ZExt_DepthScoreBundle, 0, len(allSegs)),
 		sidenessCache: &SidenessCache{
 			maxKnownAlias: 0,
 		},
@@ -299,6 +301,10 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		ZExt_PopulateVertexMapFromLines(dgVertexMap, workData.lines)
 		workData.dgVertexMap = dgVertexMap
 	}
+	if input.pickNodeUser == PICKNODE_ZENLIKE {
+
+		workData.zenScores = make([]ZExt_DepthScoreBundle, 0, len(allSegs))
+	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
 	if input.cacheSideness {
@@ -306,6 +312,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 
 	var rootNode *NodeInProcess
+	treeCount := 0
 	if input.multiTreeMode == MULTITREE_NOTUSED {
 		if input.stkNode {
 
@@ -321,8 +328,8 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			workData.sidenessCache.readOnly = true
 		}
 
-		rootNode = ZExt_MTPSentinel_MakeBestBSPTree(&workData, rootBox, initialSuper,
-			input.specialRootMode)
+		rootNode, treeCount = ZExt_MTPSentinel_MakeBestBSPTree(&workData, rootBox,
+			initialSuper, input.specialRootMode)
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
 	}
@@ -416,7 +423,14 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			}
 		}
 	}
-	Log.Printf("Nodes took %s\n", time.Since(start))
+
+	if treeCount == 0 {
+		Log.Printf("Nodes took %s\n", time.Since(start))
+	} else {
+		dur := time.Since(start)
+		avg := time.Duration(int64(dur) / int64(treeCount))
+		Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
+	}
 }
 
 func (n ZNumber) Floor16() int16 {
@@ -1119,6 +1133,7 @@ func (w *ZExt_NodesWork) DivideSegsActual(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, l
 
 	var rights, lefts, strights, stlefts *ZExt_NodeSeg
 
+	w.dismissChildrenToSuperblockPool(super)
 	*rightsSuper = w.getNewSuperblock(super)
 	*leftsSuper = w.getNewSuperblock(super)
 	(*rightsSuper).SetBounds(bbox)
@@ -1745,7 +1760,9 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 
 	newW.nonVoidCache = make(map[int]ZExt_NonVoidPerAlias)
 	newW.blocksHit = make([]ZExt_BlocksHit, 0)
-	newW.zenScores = make([]ZExt_DepthScoreBundle, 0, cap(w.zenScores))
+	if newW.zenScores != nil {
+		newW.zenScores = make([]ZExt_DepthScoreBundle, 0, cap(w.zenScores))
+	}
 
 	newW.qallocSupers = nil
 	newW.stkExtra = nil
@@ -2012,6 +2029,20 @@ func (w *ZExt_NodesWork) returnSuperblockToPool(block *ZExt_Superblock) {
 
 	block.subs[0] = w.qallocSupers
 	w.qallocSupers = block
+}
+
+func (w *ZExt_NodesWork) dismissChildrenToSuperblockPool(block *ZExt_Superblock) {
+	if block.segs == nil {
+
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
 }
 
 func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
@@ -4126,7 +4157,7 @@ type ZExt_MTPWorker_Result struct {
 }
 
 func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
-	super *ZExt_Superblock, rootChoiceMethod int) *NodeInProcess {
+	super *ZExt_Superblock, rootChoiceMethod int) (*NodeInProcess, int) {
 	Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
 	Log.Printf("Multi-tree modes take significant time to compute, and also have rather high memory consumption.\n")
 
@@ -4152,11 +4183,23 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 
 	workerChans := make([]chan ZExt_MTPWorker_Input, workerCount)
 	workerReplyChans := make([]chan ZExt_MTPWorker_Result, workerCount)
-	for i := 0; i < workerCount; i++ {
-		workerChans[i] = make(chan ZExt_MTPWorker_Input)
-		workerReplyChans[i] = make(chan ZExt_MTPWorker_Result)
 
-		go ZExt_MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
+	if config.SpeedTree {
+
+		for i := 0; i < workerCount; i++ {
+			workerChans[i] = make(chan ZExt_MTPWorker_Input)
+			workerReplyChans[i] = make(chan ZExt_MTPWorker_Result)
+
+			go ZExt_MTPWorker_SpeedGenerateBSPTrees(workerChans[i], workerReplyChans[i])
+		}
+	} else {
+
+		for i := 0; i < workerCount; i++ {
+			workerChans[i] = make(chan ZExt_MTPWorker_Input)
+			workerReplyChans[i] = make(chan ZExt_MTPWorker_Result)
+
+			go ZExt_MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
+		}
 	}
 
 	pseudoSuper := super.DerivePseudo()
@@ -4227,7 +4270,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	oldLines := w.lines
 	*w = *(bestResult.workData)
 	oldLines.AssignFrom(w.lines)
-	return bestResult.bspTree
+	return bestResult.bspTree, treesDone
 }
 
 func ZExt_IsBSPTreeBetter(oldWD *ZExt_NodesWork, oldNIP *NodeInProcess,
@@ -4379,6 +4422,41 @@ func ZExt_MTPWorker_GenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo 
 	close(replyTo)
 }
 
+func ZExt_MTPWorker_SpeedGenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo chan<- ZExt_MTPWorker_Result) {
+
+	var qallocSupers *ZExt_Superblock
+	bhPool := sync.Pool{
+		New: func() interface{} {
+			return make([]ZExt_BlocksHit, 0)
+		},
+	}
+
+	for permutation := range input {
+
+		if qallocSupers != nil {
+			permutation.workData.qallocSupers = qallocSupers
+			permutation.workData.blocksHit = bhPool.Get().([]ZExt_BlocksHit)
+		}
+
+		tree := ZExt_MTP_CreateRootNode(permutation.workData,
+			permutation.ts, permutation.bbox, permutation.pseudoSuper,
+			permutation.pickSegIdx)
+
+		qallocSupers = permutation.workData.qallocSupers
+		permutation.workData.qallocSupers = nil
+		blocksHit := permutation.workData.blocksHit[:0]
+		permutation.workData.blocksHit = nil
+		bhPool.Put(blocksHit)
+
+		replyTo <- ZExt_MTPWorker_Result{
+			workData: permutation.workData,
+			bspTree:  tree,
+			id:       permutation.id,
+		}
+	}
+	close(replyTo)
+}
+
 func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 	pseudoSuper *ZExt_Superblock, pickSegIdx int) *NodeInProcess {
 	res := new(NodeInProcess)
@@ -4405,6 +4483,7 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
 		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
@@ -4423,6 +4502,7 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
 		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
@@ -4451,6 +4531,20 @@ func (w *ZExt_NodesWork) MTP_DivideSegs(ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls 
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, pseudoSuper, rightsSuper, leftsSuper)
 }
 
+func ZExt_zoneAllocSupers(sz int, pseudoSuper *ZExt_Superblock) *ZExt_Superblock {
+	zone := make([]ZExt_Superblock, sz)
+	dummy := ZExt_NodesWork{}
+	dummySeg := &ZExt_NodeSeg{}
+	for i, _ := range zone {
+
+		zone[i].segs = dummySeg
+
+		zone[i].InitSectorsIfNeeded(pseudoSuper)
+		dummy.returnSuperblockToPool(&(zone[i]))
+	}
+	return dummy.qallocSupers
+}
+
 func (w *ZExt_NodesWork) AddVertex(x, y ZNumber) *ZExt_NodeVertex {
 	v := w.vertexMap.SelectVertexClose(float64(x), float64(y))
 	if v.Id != -1 {
@@ -4476,6 +4570,8 @@ func (w *ZExt_NodesWork) CreateSSector(tmps *ZExt_NodeSeg) uint32 {
 	w.totals.numSSectors++
 	var currentCount uint32
 	for ; tmps != nil; tmps = tmps.next {
+		tmps.block = nil
+		tmps.nextInSuper = nil
 		w.zdoomSegs = append(w.zdoomSegs, ZdoomNode_Seg{
 			StartVertex: uint32(tmps.StartVertex.idx),
 			EndVertex:   uint32(tmps.EndVertex.idx),
@@ -4930,14 +5026,13 @@ func (s *ZExt_Superblock) MarkSectorsHitNoCached(sectorsHit []uint8, mask uint8)
 func (s *ZExt_Superblock) DerivePseudo() *ZExt_Superblock {
 	res := &ZExt_Superblock{
 		parent: nil,
-		x1:     s.x1,
-		y1:     s.x1,
-		x2:     s.x2,
-		y2:     s.y2,
-		subs:   [2]*ZExt_Superblock{nil, nil},
-		segs:   nil,
+
+		subs: [2]*ZExt_Superblock{nil, nil},
+		segs: nil,
 	}
 	res.InitSectorsIfNeeded(s)
+
+	res.x1 = cap(s.secEquivs) + cap(s.sectors)
 	return res
 }
 

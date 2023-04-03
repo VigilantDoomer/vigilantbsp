@@ -1127,11 +1127,12 @@ This feature is implemented per suggestion of user with nickname
 Jerko, who asked on doomer boards if I could implement it. To
 make it active as well as get practical results from it, 
 you want to set it to non-zero value, and set partition selection 
-to 1 (Killough's visplane reduction) or 2 (advanced visplane
-reduction). This option is recommended to use on vanilla maps
-only and only with the above partition selection algorithms.
+to 1 (Killough's visplane reduction), 2 (advanced visplane
+reduction) or 4 (Zennode-like depth reudction). This option is
+recommended to use on vanilla maps only and only with the above 
+partition selection algorithms.
 
-What it will do then, is to create multiple trees and pick "best",
+What it will do then, is create multiple trees and pick "best",
 which "best" would _hopefully_ mean less visplanes / VPOs. Unlike
 ZokumBSP's multi-tree algorithm, which running time scales 
 exponentially with complexity of the level, the algorithm Jerko
@@ -1143,7 +1144,11 @@ to run.
 
 Since this creates several trees, it will take significant time
 to run and for this reason should not be used when invoked from
-editor (SLADE3, GzDoomBuilder, etc.)
+editor (SLADE3, GzDoomBuilder, etc.). Since VigilantBSP 0.85a,
+a new hidden option is available to try and speed up the
+multi-tree at the cost of using significantly more memory,
+but it can't yield more than 10% speed-up - see "Debug and other
+hidden parameters", "--speedtree".
 
 Eventually, version analogous to ZokumBSP one is going to be 
 implemented too, but the timeline for its implementation is
@@ -2094,6 +2099,49 @@ one given in documentation.
 Note that ZenNodes defaults changed from version to version. 
 VigilantBSP defaults are equivalent to the following zenvar option:
 --zenvar:"x1 = 20, x2 = 10, x3 = 1, x4 = 25"
+
+
+--speedtree=<n>, where n is a number
+For use with multi-tree mode, has no effect otherwise. First 
+implemented in VigilantBSP v0.85a.
+
+Increases VigilantBSP memory usage when building multi-tree, 
+but gain up to 10% speed improvement if using a visplane-aware 
+(or Zennode-like) partitioner. Complex maps (even if can run in
+vanilla) tend to gain less performance improvement than IWAD-quality maps.
+
+On by default for visplane aware (both Killough's and advanced) and 
+Zennode-like partitioners, off for other partitioners. The new default
+should be sensible in most cases, unless you get out-of-memory errors.
+
+Manual control:
+	--speedtree=0
+	(alternative way to specify: --speedtree- )
+	Explicitly turn off. For those cases when you don't have enough
+	memory to use this acceleration.
+	
+	--speedtree=1 
+	(alternative way to specify: --speedtree+ or --speedtree )
+	Explicitly turn on, even for partitioners that do not benefit
+	from it. Redundant for partitioners that benefit it as it is
+	already enabled.
+	
+ "Complexity" of a map is best predicted by CPU usage percentage
+ (measured against all cores) observed when building multi-tree 
+ with --speedtree-: if it is close to 100%, performance gains from
+ acceleration will be less. If, on the other hand, maps are of 
+ IWAD quality (CPU utilization around 60%, can't reach 100% even with 
+ --speedtree), gains will be better. 
+
+A rebuild of Akeldama on my rather dated quad-core machine with and without 
+acceleration:
+1. vigilantbsp -na=2m=3 -b- -r- -d akeldama.wad -o akeldama_mtree3.wad --speedtree-
+took 2h 39 m 33 seconds (without acceleration, peak memory usage 
+around 700Mb if memory serves)
+2. vigilantbsp -na=2m=3 -b- -r- -d akeldama.wad -o akeldama_speedtree.wad
+took 2h 22 m 35 seconds (with acceleration implicitly on as its the
+new default, peak memory usage around 1Gb, but that memory usage is 
+what I've seen by eye rather than precise report)
 
 
 Closing comments in regards to --memprofile and --cpuprofile options:

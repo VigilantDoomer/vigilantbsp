@@ -19,6 +19,7 @@ package main
 import (
 	"reflect"
 	"runtime"
+	"sync"
 )
 
 // multitree_plain.go - bruteforce solution for root node only
@@ -65,8 +66,9 @@ const MAX_MTP_WORKERS = 16
 
 // Parameter w is also mutated by this call. Changes to bbox and super are
 // undefined
+// Second return value is tree count
 func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
-	super *Superblock, rootChoiceMethod int) *NodeInProcess {
+	super *Superblock, rootChoiceMethod int) (*NodeInProcess, int) {
 	Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
 	Log.Printf("Multi-tree modes take significant time to compute, and also have rather high memory consumption.\n")
 	// Which segs will be used as starting point?
@@ -96,11 +98,23 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	// To communicate with threads, channels are needed
 	workerChans := make([]chan MTPWorker_Input, workerCount)       // input data for each thread
 	workerReplyChans := make([]chan MTPWorker_Result, workerCount) // output result from each thread
-	for i := 0; i < workerCount; i++ {
-		workerChans[i] = make(chan MTPWorker_Input)
-		workerReplyChans[i] = make(chan MTPWorker_Result)
-		// Spawn workers (they will be fed data later)
-		go MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
+
+	if config.SpeedTree { // reference to global: config
+		// Accelerated path
+		for i := 0; i < workerCount; i++ {
+			workerChans[i] = make(chan MTPWorker_Input)
+			workerReplyChans[i] = make(chan MTPWorker_Result)
+			// Spawn FAST but MEMORY HUNGRY workers
+			go MTPWorker_SpeedGenerateBSPTrees(workerChans[i], workerReplyChans[i])
+		}
+	} else {
+		// Non-accelerated path
+		for i := 0; i < workerCount; i++ {
+			workerChans[i] = make(chan MTPWorker_Input)
+			workerReplyChans[i] = make(chan MTPWorker_Result)
+			// Spawn workers (they will be fed data later)
+			go MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
+		}
 	}
 
 	// pseudoSuper is a superblock containing only metadata used to create new
@@ -188,7 +202,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	oldLines := w.lines // !!! level.go retains reference to old w.lines
 	*w = *(bestResult.workData)
 	oldLines.AssignFrom(w.lines) // so must clobber the data in old w.lines with the new one
-	return bestResult.bspTree
+	return bestResult.bspTree, treesDone
 }
 
 // Really banal bsp tree comparison. Tries to minimize subsector count first,
@@ -374,11 +388,61 @@ func MTPSentinel_GetRootSegCandidates(allSegs []*NodeSeg, rootChoiceMethod int) 
 	return res2
 }
 
+// The non-accelerated version of multitree_plain worker goroutine
 func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTPWorker_Result) {
 	for permutation := range input {
 		tree := MTP_CreateRootNode(permutation.workData,
 			permutation.ts, permutation.bbox, permutation.pseudoSuper,
 			permutation.pickSegIdx)
+
+		replyTo <- MTPWorker_Result{
+			workData: permutation.workData,
+			bspTree:  tree,
+			id:       permutation.id,
+		}
+	}
+	close(replyTo)
+}
+
+// The speedy variant of multitree_plain worker goroutine.
+// sync.Pool acts as a stabilizer, decreasing memory consumption from factor
+// of 6x greater than non-speed variant to 3x or less. This is necessary to
+// prevent worse performance on certain inputs (usually the more complex)
+// compared to non-speed version, even if the price is that friendlier inputs
+// get lesser speed improvements than without Pool.
+// It seems too big memory use alone can defeat optimization, sync.Pool prevents
+// that
+func MTPWorker_SpeedGenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTPWorker_Result) {
+
+	var qallocSupers *Superblock
+	bhPool := sync.Pool{
+		New: func() interface{} {
+			return make([]BlocksHit, 0)
+		},
+	}
+
+	// Loop over actual tasks
+	for permutation := range input {
+
+		// Reuse special structures from previous tasks
+		if qallocSupers != nil {
+			permutation.workData.qallocSupers = qallocSupers
+			permutation.workData.blocksHit = bhPool.Get().([]BlocksHit)
+		}
+
+		// Build BSP tree for this task
+		tree := MTP_CreateRootNode(permutation.workData,
+			permutation.ts, permutation.bbox, permutation.pseudoSuper,
+			permutation.pickSegIdx)
+
+		// Make special structures reusable for future tasks. Was not exactly
+		// easy to make gc cooperative, so any changes to this code must be
+		// checked against regressions
+		qallocSupers = permutation.workData.qallocSupers
+		permutation.workData.qallocSupers = nil
+		blocksHit := permutation.workData.blocksHit[:0]
+		permutation.workData.blocksHit = nil
+		bhPool.Put(blocksHit)
 
 		replyTo <- MTPWorker_Result{
 			workData: permutation.workData,
@@ -416,6 +480,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
 		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
 		res.LChild = 0
@@ -435,6 +500,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
 		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
 		res.RChild = 0
@@ -464,4 +530,26 @@ func (w *NodesWork) MTP_DivideSegs(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	w.SetNodeCoords(best, bbox, c)
 
 	w.DivideSegsActual(ts, rs, ls, bbox, best, c, pseudoSuper, rightsSuper, leftsSuper)
+}
+
+// This was supposed to preallocate a "cache line" of superblocks ready to use
+// at the beginning of fast workers (MTPWorker_SpeedGenerateBSPTrees)
+// It didn't contribute anything to performance
+func zoneAllocSupers(sz int, pseudoSuper *Superblock) *Superblock {
+	zone := make([]Superblock, sz)
+	dummy := NodesWork{}
+	dummySeg := &NodeSeg{}
+	for i, _ := range zone {
+		// without segs, will be mistaken for a pseudosuper and not become a
+		// part of cache
+		zone[i].segs = dummySeg
+		// NOTE I actually put root superblocks' sector and secEquiv len in
+		// pseudoSuper.x1, but this is not used and InitSectorsIfNeeded uses
+		// default capacity. Makes the entire concept of preallocated pool
+		// pretty worthless, as arrays for the first many superblocks will get
+		// reallocated
+		zone[i].InitSectorsIfNeeded(pseudoSuper)
+		dummy.returnSuperblockToPool(&(zone[i]))
+	}
+	return dummy.qallocSupers
 }

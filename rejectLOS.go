@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2023, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -17,6 +17,10 @@
 
 // rejectLOS
 package main
+
+import (
+	"fmt"
+)
 
 // reject.go grew too big for my liking. All calls descending from reject.go
 // (*RejectWork).CheckLos are implemented here + prepareBlockmapForLOS, as it
@@ -84,16 +88,24 @@ func (r *RejectWork) initializeWorld(world *WorldInfo, src, tgt *TransLine) {
 	upperPoly.points[1] = src.loPoint
 }
 
+func (p *IntVertex) String() string {
+	return fmt.Sprintf("&IntVertex{%d,%d}", p.X, p.Y)
+}
+
 func (r *RejectWork) markBlockMap(world *WorldInfo) {
 	r.loRow = int(r.blockmap.header.YBlocks)
 	r.hiRow = -1
 
 	// Determine boundaries for the BLOCKMAP search
 	// VigilantDoomer: bet this can be redone more efficiently eventually
+	// UPD April 2023: Actually really hard to do anything about it. The prime
+	// culprit is the REPEATED division operation (inside loop) that is
+	// unavoidable when a line spawns multiple blocks diagonally.
 	r.drawBlockMapLine(world.src.start, world.src.end)
 	r.drawBlockMapLine(world.tgt.start, world.tgt.end)
 	r.drawBlockMapLine(world.src.start, world.tgt.end)
 	r.drawBlockMapLine(world.tgt.start, world.src.end)
+
 }
 
 func (r *RejectWork) prepareBlockmapForLOS() {
@@ -126,6 +138,8 @@ func (r *RejectWork) prepareBlockmapForLOS() {
 	}
 }
 
+/*
+// Pre-optimization original
 func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 	x0 := p1.X - int(r.blockmap.header.XMin)
 	y0 := p1.Y - int(r.blockmap.header.YMin)
@@ -245,6 +259,127 @@ func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 
 		r.updateRow(endX, endY)
 	}
+}*/
+
+func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
+	x0 := p1.X - int(r.blockmap.header.XMin)
+	y0 := p1.Y - int(r.blockmap.header.YMin)
+	x1 := p2.X - int(r.blockmap.header.XMin)
+	y1 := p2.Y - int(r.blockmap.header.YMin)
+
+	startX := x0 >> BLOCK_BITS
+	startY := y0 >> BLOCK_BITS
+	endX := x1 >> BLOCK_BITS
+	endY := y1 >> BLOCK_BITS
+
+	if startY < r.loRow {
+		r.loRow = startY
+	}
+	if startY > r.hiRow {
+		r.hiRow = startY
+	}
+
+	if endY < r.loRow {
+		r.loRow = endY
+	}
+	if endY > r.hiRow {
+		r.hiRow = endY
+	}
+
+	r.updateRow(startX, startY)
+
+	if startX == endX {
+
+		if startY != endY { // vertical line
+
+			// unrolling to get rid of dy makes this function significantly
+			// longer, and it is copied over by codegen because it's a
+			// RejectWork method
+			// --VigilantDoomer
+			var dy int
+			if endY > startY {
+				dy = 1
+			} else {
+				dy = -1
+			}
+			b := true
+			for b {
+				startY += dy
+				r.updateRow(startX, startY)
+				b = startY != endY
+			}
+
+		}
+
+	} else {
+
+		if startY != endY { // diagonal line
+
+			// Calculate the pre-scaled values to be used in the for loop
+			var deltaX int
+			deltaY := (y1 - y0) << BLOCK_BITS
+			nextX := x0 * (y1 - y0)
+
+			var dy int
+			if endY > startY {
+				// Figure out where the 1st row ends
+				nextX += (startY<<BLOCK_BITS + BLOCK_WIDTH - y0) * (x1 - x0)
+				deltaX = ((x1 - x0) << BLOCK_BITS)
+				dy = 1
+			} else {
+				// Figure out where the 1st row ends
+				nextX += (startY<<BLOCK_BITS - y0) * (x1 - x0)
+				deltaX = ((x0 - x1) << BLOCK_BITS)
+				dy = -1
+			}
+
+			lastX := nextX / deltaY
+			r.updateRow(lastX, startY)
+
+			// Now do the rest using integer math - each row is a delta Y of 128
+			// bound := &(r.blockMapBounds[startY]) // doesn't seem to be used now that I've converted away from pointer arithmetic
+			curY := startY
+			if x0 < x1 {
+				for true {
+					// Do the next row
+					curY = curY + dy
+					bound := &(r.blockMapBounds[curY])
+					if lastX < bound.lo {
+						bound.lo = lastX
+					}
+					// Stop before we overshoot endX
+					if curY == endY {
+						break
+					}
+					nextX += deltaX
+					lastX = nextX / deltaY
+					if lastX > bound.hi {
+						bound.hi = lastX
+					}
+				}
+			} else {
+				for true {
+					// Do the next row
+					curY = curY + dy
+					bound := &(r.blockMapBounds[curY])
+					if lastX > bound.hi {
+						bound.hi = lastX
+					}
+					// Stop before we overshoot endX
+					if curY == endY {
+						break
+					}
+					nextX += deltaX
+					lastX = nextX / deltaY
+					if lastX < bound.lo {
+						bound.lo = lastX
+					}
+				}
+			}
+		}
+
+		r.updateRow(endX, endY)
+	}
 }
 
 func (r *RejectWork) updateRow(col, row int) {
@@ -313,107 +448,6 @@ func (r *RejectWork) markAndRecall(cur uint16) bool {
 	}
 }
 
-func LOSGetBounds(ss, se, ts, te *IntVertex, loY, hiY, loX, hiX *int) {
-	if ss.Y < se.Y {
-		if ts.Y < te.Y {
-			if ss.Y < ts.Y {
-				*loY = ss.Y
-			} else {
-				*loY = ts.Y
-			}
-			if se.Y > te.Y {
-				*hiY = se.Y
-			} else {
-				*hiY = te.Y
-			}
-		} else {
-			if ss.Y < te.Y {
-				*loY = ss.Y
-			} else {
-				*loY = te.Y
-			}
-			if se.Y > ts.Y {
-				*hiY = se.Y
-			} else {
-				*hiY = ts.Y
-			}
-		}
-	} else {
-		if ts.Y < te.Y {
-			if se.Y < ts.Y {
-				*loY = se.Y
-			} else {
-				*loY = ts.Y
-			}
-			if ss.Y > te.Y {
-				*hiY = ss.Y
-			} else {
-				*hiY = te.Y
-			}
-		} else {
-			if se.Y < te.Y {
-				*loY = se.Y
-			} else {
-				*loY = te.Y
-			}
-			if ss.Y > ts.Y {
-				*hiY = ss.Y
-			} else {
-				*hiY = ts.Y
-			}
-		}
-	}
-	// Now all the same with x coords
-	if ss.X < se.X {
-		if ts.X < te.X {
-			if ss.X < ts.X {
-				*loX = ss.X
-			} else {
-				*loX = ts.X
-			}
-			if se.X > te.X {
-				*hiX = se.X
-			} else {
-				*hiX = te.X
-			}
-		} else {
-			if ss.X < te.X {
-				*loX = ss.X
-			} else {
-				*loX = te.X
-			}
-			if se.X > ts.X {
-				*hiX = se.X
-			} else {
-				*hiX = ts.X
-			}
-		}
-	} else {
-		if ts.X < te.X {
-			if se.X < ts.X {
-				*loX = se.X
-			} else {
-				*loX = ts.X
-			}
-			if ss.X > te.X {
-				*hiX = ss.X
-			} else {
-				*hiX = te.X
-			}
-		} else {
-			if se.X < te.X {
-				*loX = se.X
-			} else {
-				*loX = te.X
-			}
-			if ss.X > ts.X {
-				*hiX = ss.X
-			} else {
-				*hiX = ts.X
-			}
-		}
-	}
-}
 func TrimSetBounds(set *LineSet) bool {
 
 	if set.loIndex >= set.hiIndex {
@@ -447,10 +481,124 @@ func (r *RotatePointData) RotatePoint(p *IntVertex, x, y int) {
 	p.Y = r.DX*(y-r.Y) - r.DY*(x-r.X)
 }
 
+//go:nosplit
 func TrimLines(src, tgt *TransLine, set *LineSet) int {
-
 	var loY, hiY, loX, hiX int
-	LOSGetBounds(src.start, src.end, tgt.start, tgt.end, &loY, &hiY, &loX, &hiX)
+
+	// LOSGetBounds inlined manually (because compiler wouldn't inline this)
+	// (gcc didn't inline this in ZokumBSP source code either, so Go is not
+	// behind in any way)
+	// Might uninline back. Go switched the strategy from branching to
+	// conditional moves after manual inlining, and while gcc also uses
+	// conditional moves, on my computer branch conditionals version did better
+	// The removal of call overhead cancels it out, of course, and different
+	// machines may exhibit different performance, but generally I think this
+	// stuff is somehow indeed predictable, may have something to do with
+	// src and tgt going in opposite direction, also the iteration enumerating
+	// src against different tgts, preserving much of conditions between all
+	// work on the same src?
+	// --------------- LOSGetBounds START
+	ss, se, ts, te := src.start, src.end, tgt.start, tgt.end
+	if ss.Y < se.Y {
+		if ts.Y < te.Y {
+			if ss.Y < ts.Y {
+				loY = ss.Y
+			} else {
+				loY = ts.Y
+			}
+			if se.Y > te.Y {
+				hiY = se.Y
+			} else {
+				hiY = te.Y
+			}
+		} else {
+			if ss.Y < te.Y {
+				loY = ss.Y
+			} else {
+				loY = te.Y
+			}
+			if se.Y > ts.Y {
+				hiY = se.Y
+			} else {
+				hiY = ts.Y
+			}
+		}
+	} else {
+		if ts.Y < te.Y {
+			if se.Y < ts.Y {
+				loY = se.Y
+			} else {
+				loY = ts.Y
+			}
+			if ss.Y > te.Y {
+				hiY = ss.Y
+			} else {
+				hiY = te.Y
+			}
+		} else {
+			if se.Y < te.Y {
+				loY = se.Y
+			} else {
+				loY = te.Y
+			}
+			if ss.Y > ts.Y {
+				hiY = ss.Y
+			} else {
+				hiY = ts.Y
+			}
+		}
+	}
+	// Now all the same with x coords
+	if ss.X < se.X {
+		if ts.X < te.X {
+			if ss.X < ts.X {
+				loX = ss.X
+			} else {
+				loX = ts.X
+			}
+			if se.X > te.X {
+				hiX = se.X
+			} else {
+				hiX = te.X
+			}
+		} else {
+			if ss.X < te.X {
+				loX = ss.X
+			} else {
+				loX = te.X
+			}
+			if se.X > ts.X {
+				hiX = se.X
+			} else {
+				hiX = ts.X
+			}
+		}
+	} else {
+		if ts.X < te.X {
+			if se.X < ts.X {
+				loX = se.X
+			} else {
+				loX = ts.X
+			}
+			if ss.X > te.X {
+				hiX = ss.X
+			} else {
+				hiX = te.X
+			}
+		} else {
+			if se.X < te.X {
+				loX = se.X
+			} else {
+				loX = te.X
+			}
+			if ss.X > ts.X {
+				hiX = ss.X
+			} else {
+				hiX = ts.X
+			}
+		}
+	}
+	// --------------- LOSGetBounds END
 
 	// Set up data used by RotatePoint
 	rp := RotatePointData{
@@ -487,9 +635,7 @@ func TrimLines(src, tgt *TransLine, set *LineSet) int {
 
 	checkBlock := ((minX <= maxX) && ((rp.DX != 0) || (rp.DY != 0)))
 
-	for i := set.loIndex; i <= set.hiIndex; i++ {
-
-		line := set.lines[i]
+	for _, line := range set.lines[set.loIndex : set.hiIndex+1] {
 
 		line.ignore = true
 
@@ -547,24 +693,20 @@ func TrimLines(src, tgt *TransLine, set *LineSet) int {
 	if ((src.DX != 0) && (src.DY != 0)) || ((tgt.DX != 0) && (tgt.DY != 0)) {
 
 		// Eliminate lines that touch the src/tgt lines but are not in view
-		for i := set.loIndex; i <= set.hiIndex; i++ {
-			line := set.lines[i]
+		for _, line := range set.lines[set.loIndex : set.hiIndex+1] {
 			if line.ignore {
 				continue
 			}
 			y := 1
-			// Achtung! Must compare structure values not pointers!
-			// (May be find a way to intern them?)
-			// Upd (March 2023): tested it with interning (taking note to try
-			// to intern a crossPoint in divideRegion), and it was impractical.
-			// So these will keep comparison by value.
-			if (*line.start == *src.start) || (*line.start == *src.end) {
+			// April 2023: solid lines' vertices are stored in SolidLine
+			// structure directly, not as pointers (friendlier to CPU cache)
+			if (line.start == *src.start) || (line.start == *src.end) {
 				y = src.DX*(line.end.Y-src.start.Y) - src.DY*(line.end.X-src.start.X)
-			} else if (*line.end == *src.start) || (*line.end == *src.end) {
+			} else if (line.end == *src.start) || (line.end == *src.end) {
 				y = src.DX*(line.start.Y-src.start.Y) - src.DY*(line.start.X-src.start.X)
-			} else if (*line.start == *tgt.start) || (*line.start == *tgt.end) {
+			} else if (line.start == *tgt.start) || (line.start == *tgt.end) {
 				y = tgt.DX*(line.end.Y-tgt.start.Y) - tgt.DY*(line.end.X-tgt.start.X)
-			} else if (*line.end == *tgt.start) || (*line.end == *tgt.end) {
+			} else if (line.end == *tgt.start) || (line.end == *tgt.end) {
 				y = tgt.DX*(line.start.Y-tgt.start.Y) - tgt.DY*(line.start.X-tgt.start.X)
 			}
 			if y <= 0 {
@@ -654,7 +796,7 @@ func FindSide(line *SolidLine, poly *PolyLine) int {
 	for i := 0; i < poly.numPoints-1; i++ {
 		p1 := poly.points[i]
 		p2 := poly.points[i+1]
-		switch Intersects(p1, p2, line.start, line.end) {
+		switch Intersects(p1, p2, &line.start, &line.end) {
 		case -1:
 			{
 			}
@@ -723,9 +865,9 @@ func AddToPolyLine(poly *PolyLine, line *SolidLine) {
 	poly.numPoints += 1 - ptsRemoved
 
 	if y1 > 0 {
-		poly.points[i] = line.start
+		poly.points[i] = &line.start
 	} else {
-		poly.points[i] = line.end
+		poly.points[i] = &line.end
 	}
 	poly.lastPoint = i
 }
@@ -894,9 +1036,8 @@ func FindPolyLines(world *WorldInfo) bool {
 		done := true
 		stray := false
 
-		for i := set.loIndex; i <= set.hiIndex; i++ {
+		for _, line := range set.lines[set.loIndex : set.hiIndex+1] {
 
-			line := set.lines[i]
 			if line.ignore {
 				continue
 			}

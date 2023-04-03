@@ -174,6 +174,8 @@ func (w *NodesWork) ZCreateSSector_Proto(tmps *NodeSeg) uint32 {
 	w.totals.numSSectors++
 	var currentCount uint32
 	for ; tmps != nil; tmps = tmps.next {
+		tmps.block = nil
+		tmps.nextInSuper = nil
 		w.zdoomSegs = append(w.zdoomSegs, ZdoomNode_Seg{
 			StartVertex: uint32(tmps.StartVertex.idx),
 			EndVertex:   uint32(tmps.EndVertex.idx),

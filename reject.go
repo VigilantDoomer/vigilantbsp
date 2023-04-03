@@ -160,8 +160,8 @@ type IntVertex struct {
 
 type SolidLine struct {
 	index  uint16
-	start  *IntVertex
-	end    *IntVertex
+	start  IntVertex
+	end    IntVertex
 	ignore bool
 }
 
@@ -691,8 +691,8 @@ func (r *RejectWork) setupLines() bool {
 			}
 			r.solidLines[numSolidLines] = SolidLine{
 				index:  i,
-				start:  &vertices[int(i)<<1],
-				end:    &vertices[int(i)<<1+1],
+				start:  vertices[int(i)<<1],
+				end:    vertices[int(i)<<1+1],
 				ignore: false,
 			}
 			r.indexToSolid[i] = uint16(numSolidLines)
@@ -767,8 +767,6 @@ func (r *RejectWork) setupLines() bool {
 		r.slyLinesInSector[fSector] = true
 		if !ok { // marking sector for the first time
 			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
-				// FIXME and if we had an RMB option depending on length etc.
-				// we have screwed up, must tell the user!!!
 				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will resort to a hack to make it always visible.\n", fSector)
 				if r.PedanticFailMode == PEDANTIC_FAIL_REPORT {
 					r.PedanticFailMode = PEDANTIC_FAIL_REPORTED
@@ -1630,11 +1628,11 @@ func (r *RejectWork) checkLOS(src, tgt *TransLine) bool {
 		var common *IntVertex
 		common = src.end
 		linesTouch := false
-		if common == tgt.start {
+		if *common == *tgt.start {
 			linesTouch = true
 		} else {
 			common = src.start
-			if common == tgt.end {
+			if *common == *tgt.end {
 				linesTouch = true
 			}
 		}
@@ -1642,7 +1640,7 @@ func (r *RejectWork) checkLOS(src, tgt *TransLine) bool {
 			more := false
 			for i := myWorld.solidSet.loIndex; i <= myWorld.solidSet.hiIndex; i++ {
 				line := myWorld.solidSet.lines[i]
-				if (*line.start == *common) || (*line.end == *common) {
+				if (line.start == *common) || (line.end == *common) {
 					more = true
 				}
 			}

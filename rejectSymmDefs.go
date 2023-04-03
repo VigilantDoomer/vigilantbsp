@@ -38,6 +38,7 @@ package main
 // #pragma replace_prototype *RejectWork.mergeAndDestroyMixer with *RejectWork.mergeAndDestroyMixerSymmNoop
 // #pragma replace_prototype *RejectWork.markVisibilityGroup with *RejectWork.markVisibilityGroupSymmNoop
 // #pragma replace_prototype *RejectWork.mixerIJ with *RejectWork.mixerIJSymmNoop
+// #pragma replace_prototype *RejectWork.DFSGetNeighborsAndGroupsiblings with *RejectWork.DFSGetNeighborsAndGroupsiblingsSymm
 // #pragma init getSymmRejectWorkIntf with morphed getRejectWorkIntf
 
 // -----------------------------------------------------------------------------
@@ -50,10 +51,8 @@ type RejectSymmNoExtra struct{}
 // automatically generated
 var getSymmRejectWorkIntf RejectWorkIntfMaker = nil
 
-// This whole unit started around this - the version of markVisibility without
-// support for groups (RMF effect called GROUP). This *must* be inlinable. The
-// version with groups that it is replacing is not inlinable, which results in
-// noticeable performance loss
+// Here, not only dropping groups, but also dropping a call on
+// rejectTableIJ(j,i)
 func (r *RejectWork) markVisibilityOneWay(i, j int, visibility uint8) {
 	cell1 := r.rejectTableIJ(i, j)
 	if *cell1 == VIS_UNKNOWN {
@@ -84,6 +83,7 @@ func (r *RejectWork) mixerIJSymmNoop(i, j int) *uint8 {
 	return nil
 }
 
+// The core piece of symmetric reject processing - only store data for row<=col
 func (r *RejectWork) rejectTableIJSymm(i, j int) *uint8 {
 	if i > j {
 		i, j = j, i
@@ -152,4 +152,8 @@ func (r *RejectWork) prepareRejectSymm() {
 	for i, _ := range r.rejectTable {
 		r.rejectTable[i] = 0
 	}
+}
+
+func (r *RejectWork) DFSGetNeighborsAndGroupsiblingsSymm(s *RejSector) []*RejSector {
+	return s.neighbors
 }

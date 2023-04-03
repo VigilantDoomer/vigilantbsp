@@ -46,6 +46,7 @@ package main
 // #pragma replace_prototype *RejectWork.mergeAndDestroyMixer with *RejectWork.mergeAndDestroyMixerNoop
 // #pragma replace_prototype *RejectWork.markVisibilityGroup with *RejectWork.markVisibilityGroupNoop
 // #pragma replace_prototype *RejectWork.mixerIJ with *RejectWork.mixerIJNoop
+// #pragma replace_prototype *RejectWork.DFSGetNeighborsAndGroupsiblings with *RejectWork.DFSGetNeighborsAndGroupsiblingsFast
 // #pragma init getFastRejectWorkIntf with morphed getRejectWorkIntf
 
 // -----------------------------------------------------------------------------
@@ -95,4 +96,8 @@ func (r *RejectWork) markVisibilityGroupNoop(i, j int, visibility uint8) {
 
 func (r *RejectWork) mixerIJNoop(i, j int) *uint8 {
 	return nil
+}
+
+func (r *RejectWork) DFSGetNeighborsAndGroupsiblingsFast(s *RejSector) []*RejSector {
+	return s.neighbors
 }

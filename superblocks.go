@@ -250,14 +250,18 @@ func (s *Superblock) MarkSectorsHitNoCached(sectorsHit []uint8, mask uint8) {
 func (s *Superblock) DerivePseudo() *Superblock {
 	res := &Superblock{
 		parent: nil,
-		x1:     s.x1,
-		y1:     s.x1,
-		x2:     s.x2,
-		y2:     s.y2,
-		subs:   [2]*Superblock{nil, nil},
-		segs:   nil,
+		//x1:     s.x1,
+		//y1:     s.x1,
+		//x2:     s.x2,
+		//y2:     s.y2,
+		subs: [2]*Superblock{nil, nil},
+		segs: nil,
 	}
 	res.InitSectorsIfNeeded(s) // this is actually what the return value is used for
+	// Store original length of secEquivs and sectors in x1 (zoneAlloc will read
+	// this value later)
+	// x1,y1,x2,y2 from pseudosuperblock are not actually used
+	res.x1 = cap(s.secEquivs) + cap(s.sectors)
 	return res
 }
 

@@ -440,6 +440,8 @@ func NodesGenerator(input *NodesInput) {
 		whichLen = len(input.sectors)
 	} else {
 		input.applySectorEquivalence(allSegs, sectorEquiv)
+		Log.Verbose(1, "Number of sector equivalencies vs number of sectors: %d/%d\n",
+			whichLen, len(input.sectors))
 	}
 
 	workData := NodesWork{
@@ -475,7 +477,6 @@ func NodesGenerator(input *NodesInput) {
 		depthArtifacts:   input.depthArtifacts,
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
-		zenScores:        make([]DepthScoreBundle, 0, len(allSegs)),
 		sidenessCache: &SidenessCache{
 			maxKnownAlias: 0,
 		},
@@ -505,6 +506,11 @@ func NodesGenerator(input *NodesInput) {
 		PopulateVertexMapFromLines(dgVertexMap, workData.lines)
 		workData.dgVertexMap = dgVertexMap
 	}
+	if input.pickNodeUser == PICKNODE_ZENLIKE {
+		// Uses lots of memory, especially if cloned for each multi-tree task.
+		// So now is only initialized if actually used by partitioner
+		workData.zenScores = make([]DepthScoreBundle, 0, len(allSegs))
+	}
 	workData.segAliasObj.Init()
 	initialSuper := workData.doInitialSuperblocks(rootBox)
 	if input.cacheSideness {
@@ -513,6 +519,7 @@ func NodesGenerator(input *NodesInput) {
 
 	// The main act
 	var rootNode *NodeInProcess
+	treeCount := 0
 	if input.multiTreeMode == MULTITREE_NOTUSED { // This is a most commonly used single-tree mode
 		if input.stkNode {
 			// breadth-first node creation (for debug purposes, debug parameter
@@ -542,8 +549,8 @@ func NodesGenerator(input *NodesInput) {
 			workData.sidenessCache.readOnly = true
 		}
 
-		rootNode = MTPSentinel_MakeBestBSPTree(&workData, rootBox, initialSuper,
-			input.specialRootMode)
+		rootNode, treeCount = MTPSentinel_MakeBestBSPTree(&workData, rootBox,
+			initialSuper, input.specialRootMode)
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
 	}
@@ -669,7 +676,14 @@ func NodesGenerator(input *NodesInput) {
 			}
 		}
 	}
-	Log.Printf("Nodes took %s\n", time.Since(start))
+
+	if treeCount == 0 {
+		Log.Printf("Nodes took %s\n", time.Since(start))
+	} else {
+		dur := time.Since(start)
+		avg := time.Duration(int64(dur) / int64(treeCount))
+		Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
+	}
 }
 
 func RoundToPrecision(n float64) Number {
@@ -1746,6 +1760,8 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 	if w.nodeType == NODETYPE_DEEP {
 		w.deepSubsectors[subsectorIdx].FirstSeg = oldNumSegs
 		for ; tmps != nil; tmps = tmps.next {
+			tmps.block = nil
+			tmps.nextInSuper = nil
 			w.deepSegs = append(w.deepSegs, DeepSeg{
 				StartVertex: uint32(tmps.StartVertex.idx),
 				EndVertex:   uint32(tmps.EndVertex.idx),
@@ -1759,6 +1775,8 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 	} else { // vanilla
 		w.subsectors[subsectorIdx].FirstSeg = uint16(oldNumSegs) // MIGHT overflow - try changing layout if that happens
 		for ; tmps != nil; tmps = tmps.next {
+			tmps.block = nil
+			tmps.nextInSuper = nil
 			w.segs = append(w.segs, Seg{
 				StartVertex: uint16(tmps.StartVertex.idx),
 				EndVertex:   uint16(tmps.EndVertex.idx),
@@ -1994,6 +2012,7 @@ func (w *NodesWork) DivideSegsActual(ts *NodeSeg, rs **NodeSeg, ls **NodeSeg,
 	// split all of the segs into two lists (rightside & leftside).
 	var rights, lefts, strights, stlefts *NodeSeg // start empty
 
+	w.dismissChildrenToSuperblockPool(super)
 	*rightsSuper = w.getNewSuperblock(super)
 	*leftsSuper = w.getNewSuperblock(super)
 	(*rightsSuper).SetBounds(bbox)
@@ -2825,7 +2844,9 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 
 	newW.nonVoidCache = make(map[int]NonVoidPerAlias)
 	newW.blocksHit = make([]BlocksHit, 0)
-	newW.zenScores = make([]DepthScoreBundle, 0, cap(w.zenScores))
+	if newW.zenScores != nil {
+		newW.zenScores = make([]DepthScoreBundle, 0, cap(w.zenScores))
+	}
 
 	newW.qallocSupers = nil // never share between threads!
 	newW.stkExtra = nil     // never share between threads!
@@ -3122,6 +3143,20 @@ func (w *NodesWork) returnSuperblockToPool(block *Superblock) {
 	// superblocks chained via subs[0]
 	block.subs[0] = w.qallocSupers
 	w.qallocSupers = block
+}
+
+func (w *NodesWork) dismissChildrenToSuperblockPool(block *Superblock) {
+	if block.segs == nil {
+		// pseudoSuperblock - don't touch! shared between threadds
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
 }
 
 // first seg is not stored for Zdoom extended/compressed nodes - compute

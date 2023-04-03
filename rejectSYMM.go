@@ -338,8 +338,8 @@ func (r *SymmetricRejectWork) setupLines() bool {
 			}
 			r.solidLines[numSolidLines] = SolidLine{
 				index:  i,
-				start:  &vertices[int(i)<<1],
-				end:    &vertices[int(i)<<1+1],
+				start:  vertices[int(i)<<1],
+				end:    vertices[int(i)<<1+1],
 				ignore: false,
 			}
 			r.indexToSolid[i] = uint16(numSolidLines)
@@ -399,7 +399,6 @@ func (r *SymmetricRejectWork) setupLines() bool {
 		r.slyLinesInSector[fSector] = true
 		if !ok {
 			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
-
 				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will resort to a hack to make it always visible.\n", fSector)
 				if r.PedanticFailMode == PEDANTIC_FAIL_REPORT {
 					r.PedanticFailMode = PEDANTIC_FAIL_REPORTED
@@ -967,11 +966,11 @@ func (r *SymmetricRejectWork) checkLOS(src, tgt *TransLine) bool {
 		var common *IntVertex
 		common = src.end
 		linesTouch := false
-		if common == tgt.start {
+		if *common == *tgt.start {
 			linesTouch = true
 		} else {
 			common = src.start
-			if common == tgt.end {
+			if *common == *tgt.end {
 				linesTouch = true
 			}
 		}
@@ -979,7 +978,7 @@ func (r *SymmetricRejectWork) checkLOS(src, tgt *TransLine) bool {
 			more := false
 			for i := myWorld.solidSet.loIndex; i <= myWorld.solidSet.hiIndex; i++ {
 				line := myWorld.solidSet.lines[i]
-				if (*line.start == *common) || (*line.end == *common) {
+				if (line.start == *common) || (line.end == *common) {
 					more = true
 				}
 			}
@@ -1930,11 +1929,11 @@ func (w *SymmetricRejectWork) InitializeGraphs(numSectors int) {
 func (w *SymmetricRejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
 	graph := sec.graph
 
-	for i := 0; i < root.indexDFS; i++ {
-		w.markVisibility(sec.index, graph.sectors[i].index, VIS_HIDDEN)
+	for _, sec2 := range graph.sectors[:root.indexDFS] {
+		w.markVisibility(sec.index, sec2.index, VIS_HIDDEN)
 	}
-	for i := root.hiDFS + 1; i < graph.numSectors; i++ {
-		w.markVisibility(sec.index, graph.sectors[i].index, VIS_HIDDEN)
+	for _, sec2 := range graph.sectors[root.hiDFS+1 : graph.numSectors] {
+		w.markVisibility(sec.index, sec2.index, VIS_HIDDEN)
 	}
 }
 
@@ -2142,36 +2141,6 @@ func (w *SymmetricRejectWork) ProcessSector(sector *RejSector) {
 	}
 }
 
-func (r *SymmetricRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {
-	if !r.groupShareVis {
-		return s.neighbors
-	}
-	group := r.groups[r.groups[s.index].parent]
-	if len(group.sectors) == 1 {
-		return s.neighbors
-	}
-	ret := make([]*RejSector, 0, len(s.neighbors)+len(group.sectors))
-	filt := make(map[int]bool)
-	for _, sec := range s.neighbors {
-
-		if sec == nil {
-
-			break
-		}
-		filt[sec.index] = true
-		ret = append(ret, sec)
-	}
-	for _, si := range group.sectors {
-
-		if s.index != si && !filt[si] {
-			sec := &(r.sectors[si])
-			ret = append(ret, sec)
-			filt[si] = true
-		}
-	}
-	return ret
-}
-
 func (r *SymmetricRejectWork) initializeWorld(world *WorldInfo, src, tgt *TransLine) {
 	world.src = src
 	world.tgt = tgt
@@ -2217,6 +2186,7 @@ func (r *SymmetricRejectWork) markBlockMap(world *WorldInfo) {
 	r.drawBlockMapLine(world.tgt.start, world.tgt.end)
 	r.drawBlockMapLine(world.src.start, world.tgt.end)
 	r.drawBlockMapLine(world.tgt.start, world.src.end)
+
 }
 
 func (r *SymmetricRejectWork) prepareBlockmapForLOS() {
@@ -2275,6 +2245,7 @@ func (r *SymmetricRejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 	if startX == endX {
 
 		if startY != endY {
+
 			var dy int
 			if endY > startY {
 				dy = 1
@@ -2287,32 +2258,28 @@ func (r *SymmetricRejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 				r.updateRow(startX, startY)
 				b = startY != endY
 			}
+
 		}
 
 	} else {
 
 		if startY != endY {
 
-			var dy int
-			if endY > startY {
-				dy = 1
-			} else {
-				dy = -1
-			}
-
-			deltaX := ((x1 - x0) << BLOCK_BITS) * dy
+			var deltaX int
 			deltaY := (y1 - y0) << BLOCK_BITS
 			nextX := x0 * (y1 - y0)
 
-			switch dy {
-			case -1:
-				{
-					nextX += (startY<<BLOCK_BITS - y0) * (x1 - x0)
-				}
-			case 1:
-				{
-					nextX += (startY<<BLOCK_BITS + BLOCK_WIDTH - y0) * (x1 - x0)
-				}
+			var dy int
+			if endY > startY {
+
+				nextX += (startY<<BLOCK_BITS + BLOCK_WIDTH - y0) * (x1 - x0)
+				deltaX = ((x1 - x0) << BLOCK_BITS)
+				dy = 1
+			} else {
+
+				nextX += (startY<<BLOCK_BITS - y0) * (x1 - x0)
+				deltaX = ((x0 - x1) << BLOCK_BITS)
+				dy = -1
 			}
 
 			lastX := nextX / deltaY
@@ -2519,6 +2486,10 @@ func (r *SymmetricRejectWork) prepareReject() {
 	for i, _ := range r.rejectTable {
 		r.rejectTable[i] = 0
 	}
+}
+
+func (r *SymmetricRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {
+	return s.neighbors
 }
 func init() {
 	getSymmRejectWorkIntf = SymmetricgetRejectWorkIntf

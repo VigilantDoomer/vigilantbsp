@@ -178,11 +178,11 @@ func (w *RejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
 	graph := sec.graph
 	// Hide sec from all other sectors in its graph that are in different
 	// bi-connected components
-	for i := 0; i < root.indexDFS; i++ {
-		w.markVisibility(sec.index, graph.sectors[i].index, VIS_HIDDEN)
+	for _, sec2 := range graph.sectors[:root.indexDFS] {
+		w.markVisibility(sec.index, sec2.index, VIS_HIDDEN)
 	}
-	for i := root.hiDFS + 1; i < graph.numSectors; i++ {
-		w.markVisibility(sec.index, graph.sectors[i].index, VIS_HIDDEN)
+	for _, sec2 := range graph.sectors[root.hiDFS+1 : graph.numSectors] {
+		w.markVisibility(sec.index, sec2.index, VIS_HIDDEN)
 	}
 }
 
