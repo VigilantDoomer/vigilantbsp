@@ -209,7 +209,7 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		state := w.isItConvex(lefts)
 		if state == CONVEX_SUBSECTOR {
 			res.nextL = nil
-			res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+			res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(leftsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.LChild = 0
@@ -238,7 +238,7 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		state = w.isItConvex(rights)
 		if state == CONVEX_SUBSECTOR {
 			res.nextR = nil
-			res.RChild = w.CreateSSector(rights) | w.SsectorMask
+			res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(rightsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.RChild = 0
@@ -301,7 +301,7 @@ func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else { // only NONCONVEX_ONESECTOR can be here
 		res.nextL = StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
@@ -316,7 +316,7 @@ func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else { // only NONCONVEX_ONESECTOR can be here
 		res.nextR = StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)

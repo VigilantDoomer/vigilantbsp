@@ -479,7 +479,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	state := w.isItConvex(lefts)
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
@@ -499,7 +499,7 @@ func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	state = w.isItConvex(rights)
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)

@@ -27,14 +27,15 @@ import (
 // as a valid byte array (also already converted to file endianness) ready to be
 // written
 func WriteSliceLump(data []byte, curPos *uint32, fout *os.File, le []LumpEntry,
-	lumpIdx int, s string) {
+	lumpIdx int, s string, postfix string) {
 	if data != nil {
 		fout.Write(data)
 	}
 	le[lumpIdx].FilePos = *curPos
 	le[lumpIdx].Size = uint32(len(data))
 	if len(s) > 0 {
-		Log.Printf("Lump number %d (%s) has its size set to %d bytes.\n", lumpIdx, s, le[lumpIdx].Size)
+		Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.\n", lumpIdx,
+			s, postfix, le[lumpIdx].Size)
 	}
 	*curPos = *curPos + uint32(len(data))
 }
@@ -42,22 +43,24 @@ func WriteSliceLump(data []byte, curPos *uint32, fout *os.File, le []LumpEntry,
 // Write lump from a typed array of structures that represent game data but need
 // conversion before going to file
 func ConvertAndWriteGenericLump(data interface{}, curPos *uint32, fout *os.File,
-	le []LumpEntry, lumpIdx int, s string) {
+	le []LumpEntry, lumpIdx int, s string, postfix string) {
 	binary.Write(fout, binary.LittleEndian, data)
 	dataLen := binary.Size(data)
 	le[lumpIdx].FilePos = *curPos
 	le[lumpIdx].Size = uint32(dataLen)
-	Log.Printf("Lump number %d (%s) has its size set to %d bytes.\n", lumpIdx, s, le[lumpIdx].Size)
+	Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.\n", lumpIdx, s,
+		postfix, le[lumpIdx].Size)
 	*curPos = *curPos + uint32(dataLen)
 }
 
 func ConvertAndWriteDeepNodes(data []DeepNode, curPos *uint32, fout *os.File,
-	le []LumpEntry, lumpIdx int, s string) {
+	le []LumpEntry, lumpIdx int, s string, postfix string) {
 	sigCnt, _ := fout.Write(DEEPNODES_SIG[:])
 	binary.Write(fout, binary.LittleEndian, data)
 	dataLen := binary.Size(data)
 	le[lumpIdx].FilePos = *curPos
 	le[lumpIdx].Size = uint32(dataLen + sigCnt)
-	Log.Printf("Lump number %d (%s) has its size set to %d bytes.\n", lumpIdx, s, le[lumpIdx].Size)
+	Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.\n", lumpIdx, s,
+		postfix, le[lumpIdx].Size)
 	*curPos = *curPos + uint32(dataLen+sigCnt)
 }

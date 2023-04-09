@@ -1,6 +1,9 @@
 Changelog for VigilantBSP
 
 v0.85a
+- New feature: new selectable option for "nodes format compatibility" -> "Prefer vanilla, switch to Deep nodes on overflow"
+- When SEGS, SUBSECTORS or NODES are written as the result of rebuilding, format is also shown to the user ("van/lr", "deep", "zdoom ext", "zdoom comp", or "empty")
+	SEGS and SUBSECTORS are [empty] for Zdoom extended/compressed format nodes, this is ok as vertices and segs are stored in NODES lump in these formats.
 - When multi-tree mode is used for node partitioning, output average time per tree at the end
 	This average is merely "full node build time" / "number of trees", so it is usually faster than a single tree build time 
 	by a factor equal to number of threads used (provided number of threads <= number of cores)
@@ -10,6 +13,7 @@ v0.85a
 	When RMB options file is not present, reject table is guaranteed to be symmetric.
 	RMB options that are assumed to break symmetry are: BLIND, SAFE, INCLUDE, EXCLUDE, LEFT, RIGHT, ONE (the last three are not yet implemented, but are read nonetheless 
 		and will block this optimization). Parameters to these options are not checked, only the presence of options.
+	Combination of GROUP with some RMB options (for example, DISTANCE or LINE) can also prevent this optimization from taking effect, even if the produced reject is symmetric.
 - RMB change: LINE effect can no longer be overridden by other options, including not yet implemented RIGHT and LEFT specified on the same linedef
 - RMB change: specifying both LEFT and RIGHT on the same linedef results in the same effect as applying LINE to that linedef
 	Outside of this combination, LEFT and RIGHT take no effect as they are not yet implemented

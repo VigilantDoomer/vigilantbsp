@@ -87,15 +87,13 @@ func (s *Superblock) AddSegToSuper(seg *NodeSeg) {
 		// update sector counts, if needed
 		if block.sectors != nil {
 			sec := seg.sector
-			if _, ex := block.secMap[sec]; !ex {
+			if !block.markAndRecall(block.sectors, sec) {
 				block.sectors = append(block.sectors, sec)
-				block.secMap[sec] = struct{}{}
 			}
 		} else if block.secEquivs != nil {
 			sec := seg.secEquiv
-			if _, ex := block.secMap[sec]; !ex {
+			if !block.markAndRecall(block.secEquivs, sec) {
 				block.secEquivs = append(block.secEquivs, sec)
-				block.secMap[sec] = struct{}{}
 			}
 		}
 		if block.SuperIsLeaf() {
@@ -192,9 +190,6 @@ func (s *Superblock) InitSectorsIfNeeded(template *Superblock) {
 	}
 	if template.secEquivs != nil {
 		s.secEquivs = make([]uint16, 0)
-	}
-	if template.secMap != nil {
-		s.secMap = make(map[uint16]struct{})
 	}
 }
 
@@ -356,6 +351,41 @@ func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
 	return 0
 }
 
+// markAndRecall is function for internal superblock maintenance. It is used
+// for quick adding of sectors/secEquivs without duplicates, and will use an
+// optimal strategy for checking if sec is already in arr
+// If it returns true, sec shall not be added to arr as it is already present
+// in it, if it is false, it must be added
+func (block *Superblock) markAndRecall(arr []uint16, sec uint16) bool {
+	if len(arr) <= 4 {
+		// Small arrays are more efficiently checked directly - this actually
+		// benefits performance and gives garbage collector less work.
+		// Reason is, on many maps, especially those under vanilla limits,
+		// over 50% of ever used superblocks never grow beyond having just 4
+		// sectors/secEquivs! And hashmap is generally too much memory for
+		// what it stores.
+		for _, chk := range arr {
+			if chk == sec {
+				return true
+			}
+		}
+		return false
+	}
+	// Bigger arrays are checked against secMap
+	if block.secMap == nil {
+		// initialize map and add all sectors so far to that
+		block.secMap = make(map[uint16]struct{}, 64)
+		for _, chk := range arr {
+			block.secMap[chk] = struct{}{}
+		}
+	}
+	if _, ex := block.secMap[sec]; !ex {
+		block.secMap[sec] = struct{}{}
+		return false
+	}
+	return true
+}
+
 func (w *NodesWork) getNewSuperblock(template *Superblock) *Superblock {
 	if w.qallocSupers == nil {
 		ret := &Superblock{}
@@ -367,17 +397,11 @@ func (w *NodesWork) getNewSuperblock(template *Superblock) *Superblock {
 	w.qallocSupers = w.qallocSupers.subs[0] // see returnSuperblockToPool
 	ret.subs[0] = nil
 	ret.nwlink = w
-	needMap := false
 	if ret.sectors != nil { // shall give same result as template.sectors != nil
 		ret.sectors = ret.sectors[:0]
-		needMap = true
 	}
 	if ret.secEquivs != nil { // shall give same result as template.secEquivs != nil
 		ret.secEquivs = ret.secEquivs[:0]
-		needMap = true
-	}
-	if needMap {
-		ret.secMap = make(map[uint16]struct{})
 	}
 	return ret
 }
@@ -423,10 +447,8 @@ func (w *NodesWork) newSuperblockNoProto() *Superblock {
 	ret := &Superblock{}
 	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
 		ret.sectors = make([]uint16, 0)
-		ret.secMap = make(map[uint16]struct{})
 	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
 		ret.secEquivs = make([]uint16, 0)
-		ret.secMap = make(map[uint16]struct{})
 	}
 	return ret
 }

@@ -36,7 +36,10 @@ func (w *NodesWork) emptyNodesLumps() {
 // tooManySegsCantFix checks if there is overflow in SSECTORS when referencing
 // segs. In some cases, it can (and then will) be fixed, so this function can
 // mutate data
-func (w *NodesWork) tooManySegsCantFix() bool {
+// If dryRun == true, doesn't print anything, doesn't modify anything. Dry run
+// is used to check if conversion to DeeP nodes needs to happen when it is
+// permitted to build either vanilla or DeeP nodes
+func (w *NodesWork) tooManySegsCantFix(dryRun bool) bool {
 	// Currently only normal nodes are checked, not deep nodes or extended nodes
 	// (w.segs expected to be nil for both of those)
 	if w.segs == nil { // assume no overflow is possible for advanced node formats
@@ -50,8 +53,18 @@ func (w *NodesWork) tooManySegsCantFix() bool {
 	UNSIGNED_MAXSEGINDEX := uint16(65535)
 	VANILLA_MAXSEGINDEX := uint16(32767)
 
+	if dryRun {
+		if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
+			couldFix, _ := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX, true)
+			if !couldFix {
+				return true
+			}
+		}
+		return false
+	}
+
 	if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX)
+		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX, false)
 		if !couldFix {
 			return true
 		}
@@ -59,7 +72,7 @@ func (w *NodesWork) tooManySegsCantFix() bool {
 			pivotSsector)
 		Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
 	} else if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX)
+		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX, false)
 		if !couldFix {
 			Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
 			// But it can run in some ports, so don't return true (failure)
@@ -104,11 +117,17 @@ func (w *NodesWork) lastSubsectorOverflows(maxSegIndex uint16) bool {
 // before call
 // NOTE that while (the converted version of) this might end up in znodegen.go,
 // it won't be actually called there
-func (w *NodesWork) fitSegsToTarget(maxSegIndex uint16) (bool, int) {
+func (w *NodesWork) fitSegsToTarget(maxSegIndex uint16, dryRun bool) (bool, int) {
 	newMaxSegIndex := uint32(len(w.segs)) - w.totals.maxSegCountInSubsector
 	if newMaxSegIndex > uint32(maxSegIndex) {
 		// Nothing can be done
 		return false, 0
+	}
+
+	if dryRun {
+		// Yes, can do it, but we were not requested to do it yet
+		// (used to assess whether switch to DeeP nodes is justified)
+		return true, -1
 	}
 
 	// not necessary the only one, btw. We'll fetch the last one
@@ -183,12 +202,22 @@ func (w *NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 		Dy:     node.Dy,
 		Rbox:   node.Rbox,
 		Lbox:   node.Lbox,
-		LChild: int16(node.LChild),
-		RChild: int16(node.RChild),
+		LChild: convertToSsectorMask(node.LChild, w.SsectorMask),
+		RChild: convertToSsectorMask(node.RChild, w.SsectorMask),
 	}
 
 	w.nreverse++
 	return w.nreverse - 1
+}
+
+// NodeInProcess now always uses SSECTOR_DEEP_MASK by default, so conversion
+// involves this
+func convertToSsectorMask(childIdx uint32, ssectorMask uint32) int16 {
+	masked := (childIdx & SSECTOR_DEEP_MASK) != 0
+	if masked {
+		childIdx = childIdx & ^SSECTOR_DEEP_MASK | ssectorMask
+	}
+	return int16(childIdx)
 }
 
 // Node reversal for deep/extended nodes
@@ -250,8 +279,8 @@ func (w *NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32
 		Dy:     node.Dy,
 		Rbox:   node.Rbox,
 		Lbox:   node.Lbox,
-		LChild: int16(node.LChild),
-		RChild: int16(node.RChild),
+		LChild: convertToSsectorMask(node.LChild, w.SsectorMask),
+		RChild: convertToSsectorMask(node.RChild, w.SsectorMask),
 	}
 	return idx
 }

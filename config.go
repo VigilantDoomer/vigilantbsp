@@ -77,6 +77,7 @@ const VERSION = "0.85a"
 		d Deep nodes format
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
+		D Prefer vanilla, switch to Deep nodes on overflow
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -159,6 +160,7 @@ const (
 	NODETYPE_DEEP
 	NODETYPE_ZDOOM_EXTENDED
 	NODETYPE_ZDOOM_COMPRESSED
+	NODETYPE_VANILLA_OR_DEEP
 )
 
 const (
@@ -419,6 +421,7 @@ func PrintHelp() {
 	Log.Printf("		d Deep nodes format\n")
 	Log.Printf("		x Zdoom extended nodes format\n")
 	Log.Printf("		z Zdoom compressed nodes format \n")
+	Log.Printf("		D Prefer vanilla, switch to Deep nodes on overflow\n")
 	Log.Printf("	f= Tuning factor (seg split cost, etc.)\n")
 	Log.Printf("		17 - default seg split cost\n")
 	Log.Printf("	d= Penalty factor for _diagonal_ lines\n")

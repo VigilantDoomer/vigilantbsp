@@ -168,6 +168,7 @@ is either a suboption of option above it, or a possible value:
 		d Deep nodes format
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
+		D Prefer vanilla, switch to Deep nodes on overflow
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -1007,7 +1008,7 @@ than algorithms that analyze only segs and not sectors, and,
 as anecdotal evidence suggests, on most maps this produces results 
 comparable to deliberately visplane-aware algorithms but with less 
 segs and better tree balance. (i.e. there exists maps where
-visplane-aware algorithms don't eliminate any more vpos than this
+visplane-aware algorithms don't eliminate any more vpos than this 
 algorithm does, although there also exist maps when at least
 advanced visplane reduction eliminates more vpos).
 
@@ -1356,6 +1357,9 @@ splits (coordinates being fixed point instead of integer).
 And then some are supported by VigilantBSP. Please note than formats
 other than the vanilla may not be supported by all source ports.
 
+Options are case-sensitive, so options such as "c=d" and "c=D" are
+distinct, and options not listed here are not valid.
+
 c=v - Vanilla format which all software ports recognise
 
 This is the default, original nodes format. Every port is going to support
@@ -1382,7 +1386,11 @@ the map to work in vanilla or advanced ports.
 In the event when format limits are exceeded HARD (even for the 
 ports that treat certain fields as unsigned integers), 
 VigilantBSP will not only print a warning but also empty NODES,
-SUBSECTORS, and SEGS lumps (rather than write incorrect values)
+SUBSECTORS, and SEGS lumps (rather than write incorrect values).
+Since overflowing even the unsigned limits means you are nowhere
+near getting your map supported in vanilla anyway, you can 
+consider using c=D option, which will automatically upgrade
+nodes format to Deep which will at least run somewhere.
 
 c=d - Deep nodes format (limited recognition among source ports) 
 
@@ -1422,6 +1430,41 @@ PrBoom-Plus v2.6.2um DOES support it, but Prboom-Plus v2.5.1.5 doesn't.
 
 Compression may occassionally result in smaller file size than even
 vanilla format.
+
+c=D - Prefer vanilla, switch to Deep nodes on overflow
+
+Note the capital "D", not lower case "d". This will try to
+build nodes in vanilla format, and only switch to deep nodes format
+if results cannot be represented in vanilla format whatsoever,
+even with unsigned integers. It should be noted that there is
+a parameter (under "Debug and other hidden parameters", 
+"--detailnodes") that has a different default behavior for vanilla 
+and Deep nodes formats, this option will use the default for
+ _vanilla_ format, which is heuristically determine whether map 
+ is detailed enough to warrant a switch to a more accurate partition 
+strategy, as opposed to always force it. Thus the output of a map
+with this option and "c=d" option may differ even when conversion
+happens and you are have enabled determinism, unless you also
+directly specify the same --detailnodes enable/disable 
+unconditionally for "c=D" and "c=d", like this:
+vigilantbsp -na=2c=d bigMap.wad -d --detailnodes -o bigMap_o.wad
+vigilantbsp -na=2c=D bigMap.wad -d --detailnodes -o bigMap_o.wad
+will give you the same output (assuming the map requires DeeP nodes
+format and cannot be built correctly in vanilla nodes format).
+
+Selection of this option will NOT cause multi-tree modes to select
+tree with inferior characteristics that can be represented in 
+vanilla (unsigned) nodes format over trees with superior 
+characteristics that need DeeP nodes to be properly represented.
+Even though indeed different trees might happen to be build in 
+different formats during the multi-tree build process. It is not
+very likely this will have any impact, though, as usually trees
+that need DeeP format will be inferior anyway, and because it
+is even more unlikely that vanilla format trees would actually
+fit under signed limits (and thus be able to be loaded in
+ vanilla, and not limit-removing source port) if some other 
+ trees require deep format to build.
+
 
 Note about VERY long lines (where DX or DY <= -32768 or > 32767) -
 all currently supported node formats struggle to represent them, 
@@ -1953,6 +1996,8 @@ Options are:
 	used. 
 	If building DeeP format nodes, accurate algorithm will be used
 	regardless (when using this option)
+	If using "prefer vanilla, switch to Deep nodes on overflow",
+	the _vanilla_ default will be used, that is, the heuristic.
 	
 	--detailnodes=1 
 	(alternative way to specify: --detailnodes- )

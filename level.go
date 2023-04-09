@@ -171,7 +171,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			if copyLump {
 				tmpBuf := make([]byte, le[idx].Size, le[idx].Size)
 				f.ReadAt(tmpBuf, int64(le[idx].FilePos))
-				wriBus.SendRawLump(tmpBuf, idx, "")
+				wriBus.SendRawLump(tmpBuf, idx, "", "")
 			}
 		}
 		// Using linedefs and vertices when avaiable, generate both BLOCKMAP
@@ -358,7 +358,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 					(config.MultiTreeMode == MULTITREE_HARD), // global config
 				width: treeWidth,
 			}
-			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA {
+			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA ||
+				nodeType == NODETYPE_VANILLA_OR_DEEP {
 
 				go NodesGenerator(nodesInput)
 
@@ -371,6 +372,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				Log.Panic("Node format not implemented (internal number: %d)\n",
 					nodeType)
 			}
+			// NOTE don't access nodesInput after launching NodesGenerator.
+			// NodesGenerator can edit nodesInput fields without synchronization
 		}
 	}
 
@@ -420,7 +423,7 @@ func (l *Level) WaitForAndWriteData() {
 			// don't forget to write reject too
 			// Log.Printf("Waiting for REJECT...\n")
 			rejectData := <-l.RejectChan
-			l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT")
+			l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT", "")
 		}
 
 		// Wait for blockmap builder to complete its work, then write results
@@ -428,7 +431,7 @@ func (l *Level) WaitForAndWriteData() {
 			// Log.Printf("Waiting for BLOCKMAP...\n")
 			bmdata := <-l.BlockmapLumpChannel
 			//close(l.BlockmapLumpChannel)
-			l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP")
+			l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
 		}
 	} else {
 		// Parallel wait
@@ -475,12 +478,12 @@ func (l *Level) WaitForAndWriteData() {
 				case BRANCH_REJECT:
 					{
 						rejectData := (recv.Interface()).([]byte)
-						l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT")
+						l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT", "")
 					}
 				case BRANCH_BLOCKMAP:
 					{
 						bmdata := (recv.Interface()).([]byte)
-						l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP")
+						l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
 					}
 				default:
 					{
@@ -502,30 +505,42 @@ func (l *Level) WaitForAndWriteData() {
 
 func (l *Level) WriteNodes(nodesResult NodesResult) {
 	l.wriBus.SendGenericLump(l.newLines.GetLinedefs(),
-		l.LinedefsLumpIdx, "LINEDEFS") // only vertices renumbering might have happened, nothing else... yet
+		l.LinedefsLumpIdx, "LINEDEFS", "") // only vertices renumbering might have happened, nothing else... yet
 	l.wriBus.SendGenericLump(l.newLines.GetVertices(),
-		l.VerticesLumpIdx, "VERTEXES")
+		l.VerticesLumpIdx, "VERTEXES", "")
 	if nodesResult.deepNodes != nil {
 		// write deep nodes
+		s := " [deep]"
+		if nodesResult.deepNodes == nil {
+			s = " [empty]"
+		}
 		l.wriBus.SendGenericLump(nodesResult.deepSegs,
-			l.SegsLumpIdx, "SEGS")
+			l.SegsLumpIdx, "SEGS", s)
 		l.wriBus.SendGenericLump(nodesResult.deepSubsectors,
-			l.SSectorsLumpIdx, "SSECTORS")
+			l.SSectorsLumpIdx, "SSECTORS", s)
 		l.wriBus.SendDeepNodesLump(nodesResult.deepNodes,
-			l.NodesLumpIdx, "NODES")
+			l.NodesLumpIdx, "NODES", s)
 	} else if nodesResult.rawNodes != nil {
 		// write Zdoom extended or compressed nodes
-		l.wriBus.SendRawLump(nil, l.SegsLumpIdx, "SEGS")
-		l.wriBus.SendRawLump(nil, l.SSectorsLumpIdx, "SSECTORS")
-		l.wriBus.SendRawLump(nodesResult.rawNodes, l.NodesLumpIdx, "NODES")
+		s := " [zdoom ext]"
+		if nodesResult.compressed {
+			s = " [zdoom comp]"
+		}
+		l.wriBus.SendRawLump(nil, l.SegsLumpIdx, "SEGS", " [empty]")
+		l.wriBus.SendRawLump(nil, l.SSectorsLumpIdx, "SSECTORS", " [empty]")
+		l.wriBus.SendRawLump(nodesResult.rawNodes, l.NodesLumpIdx, "NODES", s)
 	} else {
 		// write standard nodes
+		s := " [van/lr]"
+		if nodesResult.nodes == nil {
+			s = " [empty]"
+		}
 		l.wriBus.SendGenericLump(nodesResult.segs,
-			l.SegsLumpIdx, "SEGS")
+			l.SegsLumpIdx, "SEGS", s)
 		l.wriBus.SendGenericLump(nodesResult.subsectors,
-			l.SSectorsLumpIdx, "SSECTORS")
+			l.SSectorsLumpIdx, "SSECTORS", s)
 		l.wriBus.SendGenericLump(nodesResult.nodes,
-			l.NodesLumpIdx, "NODES")
+			l.NodesLumpIdx, "NODES", s)
 	}
 }
 

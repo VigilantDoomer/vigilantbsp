@@ -90,6 +90,7 @@ type ZExt_NodesWork struct {
 	sidenessCache    *SidenessCache
 	zenScores        []ZExt_DepthScoreBundle
 	qallocSupers     *ZExt_Superblock
+	upgradableToDeep bool
 
 	stkExtra map[*NodeInProcess]StkNodeExtraData
 
@@ -140,6 +141,12 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	input.lines.PruneUnusedVertices()
 
 	input.lines.DetectPolyobjects()
+
+	upgradableToDeep := false
+	if input.nodeType == NODETYPE_VANILLA_OR_DEEP {
+		input.nodeType = NODETYPE_VANILLA
+		upgradableToDeep = true
+	}
 
 	allSegs, intVertices := ZExt_createSegs(input.lines, input.sidedefs,
 		input.linesToIgnore, input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
@@ -268,7 +275,8 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		sidenessCache: &SidenessCache{
 			maxKnownAlias: 0,
 		},
-		width: input.width,
+		width:            input.width,
+		upgradableToDeep: upgradableToDeep,
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -351,10 +359,15 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 	Log.Printf("Splits reused already created vertices to avoid duplicates: %d times\n", workData.vertexExists)
 
+	if workData.upgradableToDeep && workData.nodeType == NODETYPE_VANILLA &&
+		workData.tooManySegsCantFix(true) {
+		workData.upgradeToDeep()
+	}
+
 	if input.stkNode && config.Deterministic {
-		if input.nodeType == NODETYPE_VANILLA {
+		if workData.nodeType == NODETYPE_VANILLA {
 			workData.RearrangeBSPVanilla(rootNode)
-		} else if input.nodeType == NODETYPE_DEEP {
+		} else if workData.nodeType == NODETYPE_DEEP {
 			workData.RearrangeBSPDeep(rootNode)
 		} else {
 			workData.RearrangeBSPExtended(rootNode)
@@ -362,7 +375,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 
 	Log.Printf("Height of left and right subtrees = (%d,%d)\n", hLeft, hRight)
-	if input.nodeType == NODETYPE_VANILLA {
+	if workData.nodeType == NODETYPE_VANILLA {
 		workData.reverseNodes(rootNode)
 	} else {
 
@@ -373,11 +386,19 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 	}
 
+	if workData.upgradableToDeep {
+		if workData.nodeType == NODETYPE_DEEP {
+			Log.Printf("I have switched to DeeP nodes format to avoid overflow.\n")
+		} else {
+			Log.Printf("I have kept nodes in vanilla format.\n")
+		}
+	}
+
 	if uint32(workData.totals.numSSectors)&workData.SsectorMask == workData.SsectorMask {
 		Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
 			workData.totals.numSSectors)
 		workData.emptyNodesLumps()
-	} else if workData.tooManySegsCantFix() {
+	} else if workData.tooManySegsCantFix(false) {
 		Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
 			len(workData.segs))
 		workData.emptyNodesLumps()
@@ -390,13 +411,13 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			input.lines.Len())
 	}
 
-	if input.nodeType == NODETYPE_DEEP {
+	if workData.nodeType == NODETYPE_DEEP {
 		input.nodesChan <- NodesResult{
 			deepNodes:      workData.deepNodes,
 			deepSegs:       workData.deepSegs,
 			deepSubsectors: workData.deepSubsectors,
 		}
-	} else if input.nodeType == NODETYPE_VANILLA {
+	} else if workData.nodeType == NODETYPE_VANILLA {
 		input.nodesChan <- NodesResult{
 			nodes:      workData.nodes,
 			segs:       workData.segs,
@@ -409,7 +430,8 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		} else {
 
 			input.nodesChan <- NodesResult{
-				rawNodes: workData.getZdoomNodesBytes(),
+				rawNodes:   workData.getZdoomNodesBytes(),
+				compressed: workData.nodeType == NODETYPE_ZDOOM_COMPRESSED,
 			}
 		}
 	}
@@ -1093,7 +1115,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 	state := w.isItConvex(lefts)
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
@@ -1115,7 +1137,7 @@ func ZExt_CreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, supe
 	state = w.isItConvex(rights)
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
@@ -1161,6 +1183,33 @@ func (s *ZExt_NodeSeg) getFlip() int16 {
 func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
 
 	log.Panic("Function that was not supposed to be called was called.\n")
+}
+
+func (w *ZExt_NodesWork) upgradeToDeep() {
+	if w.deepSegs != nil {
+		Log.Panic("upgradeToDeep called twice on the same NodesWork structure (programmer error)\n")
+	}
+	w.deepSegs = make([]DeepSeg, len(w.segs))
+	for i := range w.segs {
+		w.deepSegs[i].Angle = w.segs[i].Angle
+		w.deepSegs[i].EndVertex = uint32(w.segs[i].EndVertex)
+		w.deepSegs[i].StartVertex = uint32(w.segs[i].StartVertex)
+		w.deepSegs[i].Flip = w.segs[i].Flip
+		w.deepSegs[i].Linedef = w.segs[i].Linedef
+		w.deepSegs[i].Offset = w.segs[i].Offset
+	}
+	w.deepSubsectors = make([]DeepSubSector, len(w.subsectors))
+	firstSeg := uint32(0)
+	for i := range w.subsectors {
+
+		w.deepSubsectors[i].FirstSeg = firstSeg
+		w.deepSubsectors[i].SegCount = w.subsectors[i].SegCount
+		firstSeg += uint32(w.subsectors[i].SegCount)
+	}
+	w.segs = nil
+	w.subsectors = nil
+	w.SsectorMask = SSECTOR_DEEP_MASK
+	w.nodeType = NODETYPE_DEEP
 }
 
 func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
@@ -1740,7 +1789,7 @@ func (w *ZExt_NodesWork) emptyNodesLumps() {
 	w.subsectors = nil
 }
 
-func (w *ZExt_NodesWork) tooManySegsCantFix() bool {
+func (w *ZExt_NodesWork) tooManySegsCantFix(dryRun bool) bool {
 
 	if w.segs == nil {
 		return false
@@ -1753,8 +1802,18 @@ func (w *ZExt_NodesWork) tooManySegsCantFix() bool {
 	UNSIGNED_MAXSEGINDEX := uint16(65535)
 	VANILLA_MAXSEGINDEX := uint16(32767)
 
+	if dryRun {
+		if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
+			couldFix, _ := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX, true)
+			if !couldFix {
+				return true
+			}
+		}
+		return false
+	}
+
 	if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX)
+		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX, false)
 		if !couldFix {
 			return true
 		}
@@ -1762,7 +1821,7 @@ func (w *ZExt_NodesWork) tooManySegsCantFix() bool {
 			pivotSsector)
 		Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
 	} else if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX)
+		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX, false)
 		if !couldFix {
 			Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
 
@@ -1789,11 +1848,16 @@ func (w *ZExt_NodesWork) lastSubsectorOverflows(maxSegIndex uint16) bool {
 	return false
 }
 
-func (w *ZExt_NodesWork) fitSegsToTarget(maxSegIndex uint16) (bool, int) {
+func (w *ZExt_NodesWork) fitSegsToTarget(maxSegIndex uint16, dryRun bool) (bool, int) {
 	newMaxSegIndex := uint32(len(w.segs)) - w.totals.maxSegCountInSubsector
 	if newMaxSegIndex > uint32(maxSegIndex) {
 
 		return false, 0
+	}
+
+	if dryRun {
+
+		return true, -1
 	}
 
 	biggestSubsector := -1
@@ -1847,8 +1911,8 @@ func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 		Dy:     node.Dy,
 		Rbox:   node.Rbox,
 		Lbox:   node.Lbox,
-		LChild: int16(node.LChild),
-		RChild: int16(node.RChild),
+		LChild: convertToSsectorMask(node.LChild, w.SsectorMask),
+		RChild: convertToSsectorMask(node.RChild, w.SsectorMask),
 	}
 
 	w.nreverse++
@@ -1909,8 +1973,8 @@ func (w *ZExt_NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) u
 		Dy:     node.Dy,
 		Rbox:   node.Rbox,
 		Lbox:   node.Lbox,
-		LChild: int16(node.LChild),
-		RChild: int16(node.RChild),
+		LChild: convertToSsectorMask(node.LChild, w.SsectorMask),
+		RChild: convertToSsectorMask(node.RChild, w.SsectorMask),
 	}
 	return idx
 }
@@ -3879,7 +3943,7 @@ func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else {
 		res.nextL = ZExt_CreateNodeForSingleSector(w, lefts, leftBox, leftsSuper)
@@ -3893,7 +3957,7 @@ func ZExt_CreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else {
 		res.nextR = ZExt_CreateNodeForSingleSector(w, rights, rightBox, rightsSuper)
@@ -4408,7 +4472,7 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 	state := w.isItConvex(lefts)
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
@@ -4427,7 +4491,7 @@ func ZExt_MTP_CreateRootNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 	state = w.isItConvex(rights)
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
@@ -4822,15 +4886,13 @@ func (s *ZExt_Superblock) AddSegToSuper(seg *ZExt_NodeSeg) {
 
 		if block.sectors != nil {
 			sec := seg.sector
-			if _, ex := block.secMap[sec]; !ex {
+			if !block.markAndRecall(block.sectors, sec) {
 				block.sectors = append(block.sectors, sec)
-				block.secMap[sec] = struct{}{}
 			}
 		} else if block.secEquivs != nil {
 			sec := seg.secEquiv
-			if _, ex := block.secMap[sec]; !ex {
+			if !block.markAndRecall(block.secEquivs, sec) {
 				block.secEquivs = append(block.secEquivs, sec)
-				block.secMap[sec] = struct{}{}
 			}
 		}
 		if block.SuperIsLeaf() {
@@ -4907,9 +4969,6 @@ func (s *ZExt_Superblock) InitSectorsIfNeeded(template *ZExt_Superblock) {
 	}
 	if template.secEquivs != nil {
 		s.secEquivs = make([]uint16, 0)
-	}
-	if template.secMap != nil {
-		s.secMap = make(map[uint16]struct{})
 	}
 }
 
@@ -5020,6 +5079,31 @@ func ZExt_BoxOnLineSide(box *ZExt_Superblock, part *ZExt_NodeSeg) int {
 	return 0
 }
 
+func (block *ZExt_Superblock) markAndRecall(arr []uint16, sec uint16) bool {
+	if len(arr) <= 4 {
+
+		for _, chk := range arr {
+			if chk == sec {
+				return true
+			}
+		}
+		return false
+	}
+
+	if block.secMap == nil {
+
+		block.secMap = make(map[uint16]struct{}, 64)
+		for _, chk := range arr {
+			block.secMap[chk] = struct{}{}
+		}
+	}
+	if _, ex := block.secMap[sec]; !ex {
+		block.secMap[sec] = struct{}{}
+		return false
+	}
+	return true
+}
+
 func (w *ZExt_NodesWork) getNewSuperblock(template *ZExt_Superblock) *ZExt_Superblock {
 	if w.qallocSupers == nil {
 		ret := &ZExt_Superblock{}
@@ -5031,17 +5115,11 @@ func (w *ZExt_NodesWork) getNewSuperblock(template *ZExt_Superblock) *ZExt_Super
 	w.qallocSupers = w.qallocSupers.subs[0]
 	ret.subs[0] = nil
 	ret.nwlink = w
-	needMap := false
 	if ret.sectors != nil {
 		ret.sectors = ret.sectors[:0]
-		needMap = true
 	}
 	if ret.secEquivs != nil {
 		ret.secEquivs = ret.secEquivs[:0]
-		needMap = true
-	}
-	if needMap {
-		ret.secMap = make(map[uint16]struct{})
 	}
 	return ret
 }
@@ -5086,10 +5164,8 @@ func (w *ZExt_NodesWork) newSuperblockNoProto() *ZExt_Superblock {
 	ret := &ZExt_Superblock{}
 	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
 		ret.sectors = make([]uint16, 0)
-		ret.secMap = make(map[uint16]struct{})
 	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
 		ret.secEquivs = make([]uint16, 0)
-		ret.secMap = make(map[uint16]struct{})
 	}
 	return ret
 }
@@ -6556,7 +6632,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		state := w.isItConvex(lefts)
 		if state == CONVEX_SUBSECTOR {
 			res.nextL = nil
-			res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+			res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(leftsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.LChild = 0
@@ -6584,7 +6660,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		state = w.isItConvex(rights)
 		if state == CONVEX_SUBSECTOR {
 			res.nextR = nil
-			res.RChild = w.CreateSSector(rights) | w.SsectorMask
+			res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(rightsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.RChild = 0
@@ -6641,7 +6717,7 @@ func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox
 	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else {
 		res.nextL = ZExt_StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
@@ -6655,7 +6731,7 @@ func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox
 	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else {
 		res.nextR = ZExt_StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)

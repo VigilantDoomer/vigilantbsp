@@ -72,7 +72,7 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else { // only NONCONVEX_ONESECTOR can be here
 		res.nextL = CreateNodeForSingleSector(w, lefts, leftBox, leftsSuper)
@@ -87,7 +87,7 @@ func CreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else { // only NONCONVEX_ONESECTOR can be here
 		res.nextR = CreateNodeForSingleSector(w, rights, rightBox, rightsSuper)

@@ -36,6 +36,7 @@ type WriteBusRequest struct {
 	deepData []DeepNode
 	lumpIdx  int
 	lumpName string
+	postfix  string
 }
 
 type WriteBus struct {
@@ -76,17 +77,17 @@ func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool,
 		case WRI_TYPE_BYTES:
 			{
 				WriteSliceLump(req.bData, &(b.curPos), b.fout, b.le, req.lumpIdx,
-					req.lumpName)
+					req.lumpName, req.postfix)
 			}
 		case WRI_TYPE_INTERFACE:
 			{
 				ConvertAndWriteGenericLump(req.intfData, &(b.curPos), b.fout,
-					b.le, req.lumpIdx, req.lumpName)
+					b.le, req.lumpIdx, req.lumpName, req.postfix)
 			}
 		case WRI_TYPE_DEEPNODES:
 			{
 				ConvertAndWriteDeepNodes(req.deepData, &(b.curPos), b.fout,
-					b.le, req.lumpIdx, req.lumpName)
+					b.le, req.lumpIdx, req.lumpName, req.postfix)
 			}
 		case WRI_TYPE_SYNC:
 			{
@@ -107,12 +108,14 @@ func (b *WriteBus) WriteBusLoop(ch <-chan WriteBusRequest, chFinish chan<- bool,
 
 // Sends lump to bus to write
 // Lump data is stored in byte form, no conversion needed
-func (c *WriteBusControl) SendRawLump(data []byte, lumpIdx int, s string) {
+func (c *WriteBusControl) SendRawLump(data []byte, lumpIdx int, s string,
+	postfix string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_BYTES,
 		bData:    data,
 		lumpIdx:  lumpIdx,
 		lumpName: s,
+		postfix:  postfix,
 	}
 	c.ch <- envl
 }
@@ -121,12 +124,13 @@ func (c *WriteBusControl) SendRawLump(data []byte, lumpIdx int, s string) {
 // Lump data is represented as a structure or an array(slice) of something
 // different than bytes - conversion to respective byte order must be applied
 func (c *WriteBusControl) SendGenericLump(data interface{},
-	lumpIdx int, s string) {
+	lumpIdx int, s string, postfix string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_INTERFACE,
 		intfData: data,
 		lumpIdx:  lumpIdx,
 		lumpName: s,
+		postfix:  postfix,
 	}
 	c.ch <- envl
 }
@@ -135,12 +139,13 @@ func (c *WriteBusControl) SendGenericLump(data interface{},
 // A DeepNodes signature needs to be prepended to data, and data needs to be
 // converted to a proper byte order
 func (c *WriteBusControl) SendDeepNodesLump(data []DeepNode, lumpIdx int,
-	s string) {
+	s string, postfix string) {
 	envl := WriteBusRequest{
 		tpeIndex: WRI_TYPE_DEEPNODES,
 		deepData: data,
 		lumpIdx:  lumpIdx,
 		lumpName: s,
+		postfix:  postfix,
 	}
 	c.ch <- envl
 }

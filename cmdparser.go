@@ -738,6 +738,8 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					c.NodeType = NODETYPE_ZDOOM_EXTENDED
 				} else if bytes.Equal(p[1:3], []byte("=z")) {
 					c.NodeType = NODETYPE_ZDOOM_COMPRESSED
+				} else if bytes.Equal(p[1:3], []byte("=D")) {
+					c.NodeType = NODETYPE_VANILLA_OR_DEEP
 				} else {
 					Log.Error("Unknown value for NODES format.\n")
 				}

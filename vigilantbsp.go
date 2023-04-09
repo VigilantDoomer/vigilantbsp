@@ -908,7 +908,7 @@ func main() {
 		if le[idx].Size != 0 {
 			tmpBuf := make([]byte, le[idx].Size, le[idx].Size)
 			f.ReadAt(tmpBuf, int64(le[idx].FilePos))
-			wriBus.SendRawLump(tmpBuf, idx, "")
+			wriBus.SendRawLump(tmpBuf, idx, "", "")
 		} else if (idx == 0) && ZeroOffsetFirstLump {
 			// first lump has zero size, if we set zero offset we can steal some bytes
 			// for our zero byte pool for empty zero-filled reject lumps. Do it.

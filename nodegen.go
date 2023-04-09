@@ -62,8 +62,8 @@ import (
 // - the earliest seg wins). It remains to be seen if sorting segs is still
 // necessary when forming a subsector
 
-const SSECTOR_NORMAL_MASK = 0x8000
-const SSECTOR_DEEP_MASK = 0x80000000
+const SSECTOR_NORMAL_MASK = uint32(0x8000)
+const SSECTOR_DEEP_MASK = uint32(0x80000000)
 
 const DETAILED_LEVEL_THRESHOLD = 500
 
@@ -128,6 +128,7 @@ type NodesResult struct {
 	deepSegs       []DeepSeg
 	deepNodes      []DeepNode
 	rawNodes       []byte // for Zdoom extended/compressed nodes - all data sans the signature
+	compressed     bool
 }
 
 type NodesTotals struct {
@@ -199,6 +200,7 @@ type NodesWork struct {
 	sidenessCache    *SidenessCache
 	zenScores        []DepthScoreBundle
 	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP ideato decrease allocations
+	upgradableToDeep bool        // whether, when building vanilla nodes, can upgrade to DeeP format on overflow
 
 	stkExtra map[*NodeInProcess]StkNodeExtraData // TODO make a better implementation: map with a pointer key is not really a good thing
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
@@ -325,6 +327,12 @@ func NodesGenerator(input *NodesInput) {
 	// perform detection of polyobjects (sectors containing polyobjects must not
 	// be split if possible)
 	input.lines.DetectPolyobjects()
+
+	upgradableToDeep := false
+	if input.nodeType == NODETYPE_VANILLA_OR_DEEP {
+		input.nodeType = NODETYPE_VANILLA
+		upgradableToDeep = true
+	}
 
 	allSegs, intVertices := createSegs(input.lines, input.sidedefs,
 		input.linesToIgnore, input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
@@ -453,12 +461,13 @@ func NodesGenerator(input *NodesInput) {
 		minorIsBetter:    MinorCmpFuncFromOption(input.minorIsBetterUser),
 		multipart:        input.minorIsBetterUser == MINOR_CMP_DEPTH,
 		depthArtifacts:   input.depthArtifacts,
-		nodeType:         input.nodeType,
+		nodeType:         input.nodeType, // this *MAY* change during nodebuilding process or after
 		doLinesIntersect: doLinesIntersect,
 		sidenessCache: &SidenessCache{
 			maxKnownAlias: 0,
 		},
-		width: input.width,
+		width:            input.width,
+		upgradableToDeep: upgradableToDeep,
 	}
 	if input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
 		input.nodeType == NODETYPE_ZDOOM_COMPRESSED {
@@ -570,10 +579,15 @@ func NodesGenerator(input *NodesInput) {
 
 	Log.Printf("Splits reused already created vertices to avoid duplicates: %d times\n", workData.vertexExists)
 
+	if workData.upgradableToDeep && workData.nodeType == NODETYPE_VANILLA &&
+		workData.tooManySegsCantFix(true) {
+		workData.upgradeToDeep()
+	}
+
 	if input.stkNode && config.Deterministic { // reference to global: config
-		if input.nodeType == NODETYPE_VANILLA {
+		if workData.nodeType == NODETYPE_VANILLA {
 			workData.RearrangeBSPVanilla(rootNode)
-		} else if input.nodeType == NODETYPE_DEEP {
+		} else if workData.nodeType == NODETYPE_DEEP {
 			workData.RearrangeBSPDeep(rootNode)
 		} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
 			workData.RearrangeBSPExtended(rootNode)
@@ -581,7 +595,7 @@ func NodesGenerator(input *NodesInput) {
 	}
 
 	Log.Printf("Height of left and right subtrees = (%d,%d)\n", hLeft, hRight)
-	if input.nodeType == NODETYPE_VANILLA {
+	if workData.nodeType == NODETYPE_VANILLA {
 		workData.reverseNodes(rootNode)
 	} else {
 		// Same node structure for Deep, Extended and Compressed non-GL nodes
@@ -611,12 +625,20 @@ func NodesGenerator(input *NodesInput) {
 		//	workData.totals.preciousSplit)
 	}
 
+	if workData.upgradableToDeep {
+		if workData.nodeType == NODETYPE_DEEP {
+			Log.Printf("I have switched to DeeP nodes format to avoid overflow.\n")
+		} else {
+			Log.Printf("I have kept nodes in vanilla format.\n")
+		}
+	}
+
 	// Now we can actually UNDO all our hard work if limits were exceeded
 	if uint32(workData.totals.numSSectors)&workData.SsectorMask == workData.SsectorMask {
 		Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
 			workData.totals.numSSectors)
 		workData.emptyNodesLumps()
-	} else if workData.tooManySegsCantFix() {
+	} else if workData.tooManySegsCantFix(false) {
 		Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
 			len(workData.segs))
 		workData.emptyNodesLumps()
@@ -629,13 +651,13 @@ func NodesGenerator(input *NodesInput) {
 			input.lines.Len())
 	}
 
-	if input.nodeType == NODETYPE_DEEP {
+	if workData.nodeType == NODETYPE_DEEP {
 		input.nodesChan <- NodesResult{
 			deepNodes:      workData.deepNodes,
 			deepSegs:       workData.deepSegs,
 			deepSubsectors: workData.deepSubsectors,
 		}
-	} else if input.nodeType == NODETYPE_VANILLA {
+	} else if workData.nodeType == NODETYPE_VANILLA {
 		input.nodesChan <- NodesResult{
 			nodes:      workData.nodes,
 			segs:       workData.segs,
@@ -650,7 +672,8 @@ func NodesGenerator(input *NodesInput) {
 			// Ok, so we need to write whole bytestream. And we will allocate
 			// it all in memory for now, for simplicity
 			input.nodesChan <- NodesResult{
-				rawNodes: workData.getZdoomNodesBytes(),
+				rawNodes:   workData.getZdoomNodesBytes(),
+				compressed: workData.nodeType == NODETYPE_ZDOOM_COMPRESSED,
 			}
 		}
 	}
@@ -1164,6 +1187,15 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 	// TODO check that stuff is within limits. Currently node lumps are emptied
 	// AFTER the whole process completes if limit for current format was
 	// exceeded. Might try to detect condition earlier?
+
+	w.totals.numSSectors++
+	if w.upgradableToDeep && w.nodeType == NODETYPE_VANILLA &&
+		(uint32(w.totals.numSSectors)&SSECTOR_NORMAL_MASK) != 0 {
+		// switch to DeeP nodes
+		w.mlog.Printf("Subsector limit reached for vanilla nodes format. Switching to DeeP nodes format.\n")
+		w.upgradeToDeep()
+	}
+
 	var subsectorIdx uint32
 	var oldNumSegs uint32
 	if w.nodeType == NODETYPE_DEEP {
@@ -1176,7 +1208,6 @@ func (w *NodesWork) CreateSSector(tmps *NodeSeg) uint32 {
 		oldNumSegs = uint32(len(w.segs))
 	}
 
-	w.totals.numSSectors++
 	var currentCount uint32
 	if w.nodeType == NODETYPE_DEEP {
 		w.deepSubsectors[subsectorIdx].FirstSeg = oldNumSegs
@@ -1241,6 +1272,12 @@ func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
 		idx: uint32(idx),
 	})
 	w.vertexCache[rec] = idx
+	if w.upgradableToDeep && w.nodeType == NODETYPE_VANILLA &&
+		len(w.vertices) > 65536 {
+		// switch to DeeP nodes
+		w.mlog.Printf("Vertices limit reached for vanilla nodes format. Switching to DeeP nodes format.\n")
+		w.upgradeToDeep()
+	}
 	return &(w.vertices[idx])
 }
 
@@ -1856,7 +1893,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	state := w.isItConvex(lefts)
 	if state == CONVEX_SUBSECTOR {
 		res.nextL = nil
-		res.LChild = w.CreateSSector(lefts) | w.SsectorMask
+		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextL = w.createNodeSS(w, lefts, leftBox, leftsSuper)
@@ -1879,7 +1916,7 @@ func CreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) 
 	state = w.isItConvex(rights)
 	if state == CONVEX_SUBSECTOR {
 		res.nextR = nil
-		res.RChild = w.CreateSSector(rights) | w.SsectorMask
+		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else if state == NONCONVEX_ONESECTOR {
 		res.nextR = w.createNodeSS(w, rights, rightBox, rightsSuper)
@@ -1944,6 +1981,36 @@ func getFirstSegExtended(ssubsectors []uint32, ssector uint32) uint32 {
 func suppressErrorDueToExtraLogImport(ts *NodeSeg) {
 	// Notice it is lower case "log" that I never use in actually called code
 	log.Panic("Function that was not supposed to be called was called.\n")
+}
+
+// upgradeToDeep is called when limits were exceeded while building vanilla
+// nodes. User gave consent to switch to DeeP nodes format to overflow
+// This can be called either during or after the nodebuilding process
+func (w *NodesWork) upgradeToDeep() {
+	if w.deepSegs != nil {
+		Log.Panic("upgradeToDeep called twice on the same NodesWork structure (programmer error)\n")
+	}
+	w.deepSegs = make([]DeepSeg, len(w.segs))
+	for i := range w.segs {
+		w.deepSegs[i].Angle = w.segs[i].Angle
+		w.deepSegs[i].EndVertex = uint32(w.segs[i].EndVertex)
+		w.deepSegs[i].StartVertex = uint32(w.segs[i].StartVertex)
+		w.deepSegs[i].Flip = w.segs[i].Flip
+		w.deepSegs[i].Linedef = w.segs[i].Linedef
+		w.deepSegs[i].Offset = w.segs[i].Offset
+	}
+	w.deepSubsectors = make([]DeepSubSector, len(w.subsectors))
+	firstSeg := uint32(0)
+	for i := range w.subsectors {
+		// w.subsectors[i].FirstSeg is uint16 and can't be relied upon
+		w.deepSubsectors[i].FirstSeg = firstSeg
+		w.deepSubsectors[i].SegCount = w.subsectors[i].SegCount
+		firstSeg += uint32(w.subsectors[i].SegCount)
+	}
+	w.segs = nil
+	w.subsectors = nil
+	w.SsectorMask = SSECTOR_DEEP_MASK
+	w.nodeType = NODETYPE_DEEP
 }
 
 /*---------------------------------------------------------------------------*
