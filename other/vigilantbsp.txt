@@ -1007,9 +1007,9 @@ than algorithms that analyze only segs and not sectors, and,
 as anecdotal evidence suggests, on most maps this produces results 
 comparable to deliberately visplane-aware algorithms but with less 
 segs and better tree balance. (i.e. there exists maps where
-visplane-aware algorithms fail to eliminate more vpos than this 
+visplane-aware algorithms don't eliminate any more vpos than this
 algorithm does, although there also exist maps when at least
- dvanced visplane reduction eliminates more vpos).
+advanced visplane reduction eliminates more vpos).
 
 The results produced by this algorithms are most similar, but not
 identical, to the depth algorithm of Zennode/ZokumBSP (also

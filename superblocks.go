@@ -355,3 +355,78 @@ func BoxOnLineSide(box *Superblock, part *NodeSeg) int {
 	}
 	return 0
 }
+
+func (w *NodesWork) getNewSuperblock(template *Superblock) *Superblock {
+	if w.qallocSupers == nil {
+		ret := &Superblock{}
+		ret.InitSectorsIfNeeded(template)
+		ret.nwlink = w
+		return ret
+	}
+	ret := w.qallocSupers
+	w.qallocSupers = w.qallocSupers.subs[0] // see returnSuperblockToPool
+	ret.subs[0] = nil
+	ret.nwlink = w
+	needMap := false
+	if ret.sectors != nil { // shall give same result as template.sectors != nil
+		ret.sectors = ret.sectors[:0]
+		needMap = true
+	}
+	if ret.secEquivs != nil { // shall give same result as template.secEquivs != nil
+		ret.secEquivs = ret.secEquivs[:0]
+		needMap = true
+	}
+	if needMap {
+		ret.secMap = make(map[uint16]struct{})
+	}
+	return ret
+}
+
+func (w *NodesWork) returnSuperblockToPool(block *Superblock) {
+	if block.segs == nil {
+		// pseudoSuperblock - don't touch! shared between threadds
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
+	block.segs = nil
+	block.secMap = nil
+	block.realNum = 0
+	block.parent = nil
+	block.nwlink = nil
+	// qallocSupers is pool of reusable (but limited to current thread)
+	// superblocks chained via subs[0]
+	block.subs[0] = w.qallocSupers
+	w.qallocSupers = block
+}
+
+func (w *NodesWork) dismissChildrenToSuperblockPool(block *Superblock) {
+	if block.segs == nil {
+		// pseudoSuperblock - don't touch! shared between threadds
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
+}
+
+func (w *NodesWork) newSuperblockNoProto() *Superblock {
+	ret := &Superblock{}
+	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
+		ret.sectors = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
+	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
+		ret.secEquivs = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
+	}
+	return ret
+}

@@ -132,16 +132,6 @@ type ZExt_IntersectionContext struct {
 	lex, lsx, ley, lsy ZNumber
 }
 
-type ZExt_VertexMap struct {
-	w          *ZExt_NodesWork
-	Grid       [][]*FloatVertex
-	Snapshot   []int
-	BlocksWide int
-	BlocksTall int
-	MinX, MinY float64
-	MaxX, MaxY float64
-}
-
 func ZExt_NodesGenerator(input *NodesInput) {
 	start := time.Now()
 
@@ -437,339 +427,6 @@ func (n ZNumber) Floor16() int16 {
 	return int16(n)
 }
 
-func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
-	switch userOption {
-	case PICKNODE_TRADITIONAL:
-		{
-			return ZExt_PickNode_traditional
-		}
-	case PICKNODE_VISPLANE:
-		{
-			return ZExt_PickNode_visplaneKillough
-		}
-	case PICKNODE_VISPLANE_ADV:
-		{
-			return ZExt_PickNode_visplaneVigilant
-		}
-	case PICKNODE_MAELSTROM:
-		{
-			return ZExt_PickNode_maelstrom
-		}
-	case PICKNODE_ZENLIKE:
-		{
-			return ZExt_PickNode_ZennodeDepth
-		}
-	default:
-		{
-			Log.Panic("Invalid argument\n")
-			return nil
-		}
-	}
-}
-
-func ZExt_CreateNodeSSFromOption(userOption int) ZExt_CreateNodeSSFunc {
-	if userOption == PICKNODE_VISPLANE_ADV {
-		return ZExt_CreateNodeForSingleSector
-	}
-	return ZExt_CreateNode
-}
-
-func ZExt_StkCreateNodeSSFromOption(userOption int) ZExt_StkCreateNodeSSFunc {
-	if userOption == PICKNODE_VISPLANE_ADV {
-		return ZExt_StkCreateNodeForSingleSector
-	}
-	return ZExt_StkCreateNode
-}
-
-func ZExt_StkSingleSectorDivisorFromOption(userOption int) ZExt_SingleSectorDivisorFunc {
-	if userOption == PICKNODE_VISPLANE_ADV {
-		return ZExt_VigilantSingleSectorDivisor
-	}
-	return ZExt_DefaultSingleSectorDivisor
-}
-
-func (w *ZExt_NodesWork) emptyNodesLumps() {
-	w.deepNodes = nil
-	w.deepSegs = nil
-	w.deepSubsectors = nil
-	w.nodes = nil
-	w.segs = nil
-	w.subsectors = nil
-}
-
-func (w *ZExt_NodesWork) tooManySegsCantFix() bool {
-
-	if w.segs == nil {
-		return false
-	}
-	l := len(w.subsectors)
-	if l == 0 {
-		return true
-	}
-
-	UNSIGNED_MAXSEGINDEX := uint16(65535)
-	VANILLA_MAXSEGINDEX := uint16(32767)
-
-	if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX)
-		if !couldFix {
-			return true
-		}
-		Log.Printf("You almost exceeded UNSIGNED addressable seg limit in SSECTORS (that would have made it invalid for all ports) - managed to reorder segs to avoid that. Changed subsector: %d\n",
-			pivotSsector)
-		Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
-	} else if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX)
-		if !couldFix {
-			Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
-
-		} else {
-			Log.Printf("You almost exceeded vanilla addressable seg limit in SSECTORS - managed to reorder segs to avoid that. Changed subsector: %d\n",
-				pivotSsector)
-		}
-	}
-
-	return false
-}
-
-func (w *ZExt_NodesWork) lastSubsectorOverflows(maxSegIndex uint16) bool {
-	l := len(w.subsectors)
-	firstSeg := int(w.subsectors[l-1].FirstSeg)
-	segCnt := int(w.subsectors[l-1].SegCount)
-	if len(w.segs) > (firstSeg + segCnt) {
-
-		return true
-	}
-	if firstSeg > int(maxSegIndex) {
-		return true
-	}
-	return false
-}
-
-func (w *ZExt_NodesWork) fitSegsToTarget(maxSegIndex uint16) (bool, int) {
-	newMaxSegIndex := uint32(len(w.segs)) - w.totals.maxSegCountInSubsector
-	if newMaxSegIndex > uint32(maxSegIndex) {
-
-		return false, 0
-	}
-
-	biggestSubsector := -1
-	for i := len(w.subsectors) - 1; i >= 0; i-- {
-		if uint32(w.subsectors[i].SegCount) == w.totals.maxSegCountInSubsector {
-			biggestSubsector = i
-		}
-	}
-	if biggestSubsector == -1 {
-		Log.Panic("Couldn't find subsector whose seg count matches computed maximum. (programmer error)\n")
-	}
-
-	newAddr := uint16(0)
-	if biggestSubsector > 0 {
-		newAddr = w.subsectors[biggestSubsector-1].FirstSeg +
-			w.subsectors[biggestSubsector-1].SegCount
-	}
-
-	pivot := w.subsectors[biggestSubsector].FirstSeg
-	pivot2 := pivot + w.subsectors[biggestSubsector].SegCount
-
-	w.segs = append(w.segs[:pivot], append(w.segs[pivot2:], w.segs[pivot:pivot2]...)...)
-	for i := biggestSubsector + 1; i < len(w.subsectors); i++ {
-		w.subsectors[i].FirstSeg = newAddr
-		newAddr += w.subsectors[i].SegCount
-	}
-	w.subsectors[biggestSubsector].FirstSeg = uint16(newMaxSegIndex)
-	return true, biggestSubsector
-}
-
-func ZExt_createSegs(lines WriteableLines, sidedefs []Sidedef,
-	linesToIgnore []bool, extNode bool) ([]*ZExt_NodeSeg, []ZExt_NodeVertex) {
-	res := make([]*ZExt_NodeSeg, 0, 65536)
-	var rootCs, lastCs *ZExt_NodeSeg
-
-	var cull *Culler
-	if config.CullInvisibleSegs != CULL_SEGS_DONT {
-
-		cull = new(Culler)
-
-		if config.CullInvisibleSegs == CULL_SEGS_SLOPPY {
-			cull.SetMode(CREATE_SEGS_SLOPPY, sidedefs)
-		} else {
-			cull.SetMode(CREATE_SEGS, sidedefs)
-		}
-		cull.SetWriteableLines(lines)
-	}
-
-	myVertices := make([]ZExt_NodeVertex, lines.GetVerticesCount())
-	l := lines.Len()
-	for i := uint16(0); i < l; i++ {
-		if linesToIgnore != nil && linesToIgnore[i] {
-			continue
-		}
-		x1, y1, x2, y2 := lines.GetAllXY(i)
-		vidx1, vidx2 := lines.GetLinedefVertices(i)
-		ZExt_storeNodeVertex(myVertices, x1, y1, uint32(vidx1))
-		ZExt_storeNodeVertex(myVertices, x2, y2, uint32(vidx2))
-		if x1 == x2 && y1 == y2 {
-			continue
-		}
-
-		culled := cull.AddLine(i)
-		if lines.IsDoNotRender(i) {
-			Log.Verbose(1, "Linedef %d will not be rendered because it was either tagged so (tag 998) or assigned an action with numeric code 1086.\n",
-				i)
-			continue
-		}
-
-		if culled {
-			continue
-		} else {
-
-			firstSdef := lines.GetSidedefIndex(i, true)
-			secondSdef := lines.GetSidedefIndex(i, false)
-			ZExt_addSegsPerLine(myVertices, i, lines, vidx1, vidx2, firstSdef, secondSdef,
-				&rootCs, &lastCs, sidedefs, &res, extNode)
-		}
-
-	}
-
-	cull.Analyze()
-
-	unculled := false
-	for cull.SpewBack() {
-		line := cull.GetLine()
-		vidx1, vidx2 := lines.GetLinedefVertices(line)
-		firstSdef := lines.GetSidedefIndex(line, true)
-		secondSdef := lines.GetSidedefIndex(line, false)
-		if cull.GetMode() == CREATE_SEGS_SLOPPY {
-
-			Log.Verbose(1, "Linedef %d will be rendered after all, I think sector %d may be self-referencing.\n",
-				line, sidedefs[firstSdef].Sector)
-		} else {
-			Log.Verbose(1, "Linedef %d will be rendered after all - used to create self-referencing effect for sector %d.\n",
-				line, sidedefs[firstSdef].Sector)
-		}
-
-		ZExt_addSegsPerLine(myVertices, line, lines, vidx1, vidx2, firstSdef, secondSdef,
-			&rootCs, &lastCs, sidedefs, &res, extNode)
-		unculled = true
-	}
-
-	if unculled {
-
-		ZExt_restoreSegOrder(res)
-	}
-
-	return res, myVertices
-}
-
-func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines WriteableLines, vidx1, vidx2 int,
-	firstSdef, secondSdef uint16, rootCs **ZExt_NodeSeg, lastCs **ZExt_NodeSeg, sidedefs []Sidedef,
-	res *[]*ZExt_NodeSeg, extNode bool) {
-	var lcs, rcs *ZExt_NodeSeg
-	horizon := lines.IsHorizonEffect(i)
-	action := lines.GetAction(i)
-	bamEffect := lines.GetBAMEffect(i)
-
-	if firstSdef != SIDEDEF_NONE {
-		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
-
-			if action == 1085 {
-				Log.Verbose(1, "Will not create seg for front sidedef of linedef %d - instructed so by action's numeric code set to 1085 on linedef.\n",
-					i)
-			} else {
-				lcs = ZExt_addSeg(myVertices, i, vidx1, vidx2, rootCs,
-					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
-				*res = append(*res, lcs)
-			}
-		} else {
-
-			Log.Verbose(1, "Will not create seg for FRONT sidedef of linedef %d (because BSPNOSEG was used as lower texture)\n", i)
-		}
-	} else {
-		Log.Printf("Warning: linedef %d doesn't have front sidedef\n", i)
-	}
-	if secondSdef != SIDEDEF_NONE {
-		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
-
-			if action == 1084 {
-				Log.Verbose(1, "Will not create seg for BACK sidedef of linedef %d - instructed so by action's numeric code set to 1084 on linedef.\n",
-					i)
-			} else {
-				rcs = ZExt_addSeg(myVertices, i, vidx2, vidx1, rootCs,
-					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
-				rcs.flags |= SEG_FLAG_FLIP
-				*res = append(*res, rcs)
-			}
-		} else {
-
-			Log.Verbose(1, "Will not create seg for back sidedef of linedef %d (because BSPNOSEG was used as lower texture)\n", i)
-		}
-	} else if uint16(lines.GetFlags(i))&LF_TWOSIDED != 0 {
-		Log.Printf("Warning: linedef %d is marked as 2-sided but doesn't have back sidedef\n", i)
-	}
-	if extNode && (horizon || bamEffect.Action != BAM_NOSPECIAL) {
-
-		Log.Verbose(1, "Linedef %d has BAM or horizon effect specified, but it cannot be supported in Zdoom nodes format and so will be ignored.\n",
-			i)
-	}
-	if lcs != nil && rcs != nil {
-
-		lcs.partner = rcs
-		rcs.partner = lcs
-	}
-}
-
-func ZExt_storeNodeVertex(vs []ZExt_NodeVertex, x, y int, idx uint32) {
-	vs[idx] = ZExt_NodeVertex{
-		X:   ZNumber(x),
-		Y:   ZNumber(y),
-		idx: idx,
-	}
-}
-
-func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt_NodeSeg, sdef *Sidedef, lastCs **ZExt_NodeSeg, horizon bool, bamEffect BAMEffect) *ZExt_NodeSeg {
-	s := new(ZExt_NodeSeg)
-	if *lastCs == nil {
-		*rootCs = s
-		*lastCs = s
-	} else {
-		(*lastCs).next = s
-		*lastCs = s
-	}
-	s.next = nil
-	s.StartVertex = &(vs[vidx1])
-	s.EndVertex = &(vs[vidx2])
-	s.sector = sdef.Sector
-	s.partner = nil
-	s.pex = s.EndVertex.X
-	s.psx = s.StartVertex.X
-	s.pdx = s.pex - s.psx
-	s.pey = s.EndVertex.Y
-	s.psy = s.StartVertex.Y
-	s.pdy = s.pey - s.psy
-	s.perp = s.pdx*s.psy - s.psx*s.pdy
-	s.Linedef = i
-	flen := math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
-	s.len = ZNumber(flen)
-	s.Offset = 0
-	if bamEffect.Action == BAM_REPLACE {
-
-		s.Angle = bamEffect.Value
-	} else {
-
-		s.Angle = int16(ZExt_computeAngle(s.pdx, s.pdy))
-
-		if bamEffect.Action == BAM_ADDITIVE {
-			s.Angle += bamEffect.Value
-		}
-	}
-
-	if horizon {
-		s.Angle += int16(float64(sdef.XOffset) * float64(65536.0/360.0))
-	}
-	return s
-}
-
 func ZExt_computeAngle(dx, dy ZNumber) int {
 	w := math.Atan2(float64(dy), float64(dx)) * float64(65536.0/(math.Pi*2))
 
@@ -779,34 +436,6 @@ func ZExt_computeAngle(dx, dy ZNumber) int {
 
 	return int(w)
 }
-
-func ZExt_restoreSegOrder(segs []*ZExt_NodeSeg) {
-	sort.Sort(ZExt_InitialSegOrderByLinedef(segs))
-	for i, x := range segs {
-		if i < len(segs)-1 {
-			x.next = segs[i+1]
-		} else {
-			x.next = nil
-		}
-	}
-
-	for _, x := range segs {
-		if x.partner != nil && x.next != x.partner && x.partner.next != x {
-			x.partner = nil
-			Log.Verbose(1, "restoreSegOrder: partner was not referencing a neighbor seg!\n")
-		}
-	}
-}
-
-type ZExt_InitialSegOrderByLinedef []*ZExt_NodeSeg
-
-func (x ZExt_InitialSegOrderByLinedef) Len() int { return len(x) }
-func (x ZExt_InitialSegOrderByLinedef) Less(i, j int) bool {
-
-	return (x[i].Linedef < x[j].Linedef) ||
-		(x[i].Linedef == x[j].Linedef && x[i].getFlip() < x[j].getFlip())
-}
-func (x ZExt_InitialSegOrderByLinedef) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
 func ZExt_FindLimits(ts *ZExt_NodeSeg) *NodeBounds {
 	var r NodeBounds
@@ -1518,125 +1147,289 @@ func (w *ZExt_NodesWork) dumpMultiSectorSegs(ts *ZExt_NodeSeg) {
 	w.mlog.Verbose(1, buf.String())
 }
 
-func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
-	if w.nodes == nil {
-		w.nodes = make([]Node, w.totals.numNodes)
-		w.nreverse = 0
-	}
-	if config.StraightNodes {
-
-		return w.convertNodesStraight(node, uint32(w.totals.numNodes-1))
-	}
-	if node.nextR != nil {
-		node.RChild = w.reverseNodes(node.nextR)
-	}
-	if node.nextL != nil {
-		node.LChild = w.reverseNodes(node.nextL)
-	}
-
-	w.nodes[w.nreverse] = Node{
-		X:      node.X,
-		Y:      node.Y,
-		Dx:     node.Dx,
-		Dy:     node.Dy,
-		Rbox:   node.Rbox,
-		Lbox:   node.Lbox,
-		LChild: int16(node.LChild),
-		RChild: int16(node.RChild),
-	}
-
-	w.nreverse++
-	return w.nreverse - 1
+func (n ZNumber) ToFixed16Dot16() int32 {
+	return int32(float64(n) * FIXED16DOT16_MULTIPLIER)
 }
 
-func (w *ZExt_NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
-	if w.deepNodes == nil {
-		w.deepNodes = make([]DeepNode, w.totals.numNodes)
-		w.nreverse = 0
+func (s *ZExt_NodeSeg) getFlip() int16 {
+	if s.flags&SEG_FLAG_FLIP != 0 {
+		return 1
 	}
-	if config.StraightNodes {
-
-		return w.convertDeepNodesStraight(node, uint32(w.totals.numNodes-1))
-	}
-	if node.nextR != nil {
-		node.RChild = w.reverseDeepNodes(node.nextR)
-	}
-	if node.nextL != nil {
-		node.LChild = w.reverseDeepNodes(node.nextL)
-	}
-
-	w.deepNodes[w.nreverse] = DeepNode{
-		X:      node.X,
-		Y:      node.Y,
-		Dx:     node.Dx,
-		Dy:     node.Dy,
-		Rbox:   node.Rbox,
-		Lbox:   node.Lbox,
-		LChild: int32(node.LChild),
-		RChild: int32(node.RChild),
-	}
-
-	w.nreverse++
-	return w.nreverse - 1
+	return 0
 }
 
-func (w *ZExt_NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32 {
-	rnode := w.nreverse
-	lnode := w.nreverse
-	if node.nextR != nil {
-		w.nreverse++
-	}
-	if node.nextL != nil {
-		w.nreverse++
-	}
-	if node.nextR != nil {
-		node.RChild = w.convertNodesStraight(node.nextR, rnode)
-		lnode++
-	}
-	if node.nextL != nil {
-		node.LChild = w.convertNodesStraight(node.nextL, lnode)
-	}
-	w.nodes[idx] = Node{
-		X:      node.X,
-		Y:      node.Y,
-		Dx:     node.Dx,
-		Dy:     node.Dy,
-		Rbox:   node.Rbox,
-		Lbox:   node.Lbox,
-		LChild: int16(node.LChild),
-		RChild: int16(node.RChild),
-	}
-	return idx
+func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
+
+	log.Panic("Function that was not supposed to be called was called.\n")
 }
 
-func (w *ZExt_NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) uint32 {
-	rnode := w.nreverse
-	lnode := w.nreverse
-	if node.nextR != nil {
-		w.nreverse++
+func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
+	switch userOption {
+	case PICKNODE_TRADITIONAL:
+		{
+			return ZExt_PickNode_traditional
+		}
+	case PICKNODE_VISPLANE:
+		{
+			return ZExt_PickNode_visplaneKillough
+		}
+	case PICKNODE_VISPLANE_ADV:
+		{
+			return ZExt_PickNode_visplaneVigilant
+		}
+	case PICKNODE_MAELSTROM:
+		{
+			return ZExt_PickNode_maelstrom
+		}
+	case PICKNODE_ZENLIKE:
+		{
+			return ZExt_PickNode_ZennodeDepth
+		}
+	default:
+		{
+			Log.Panic("Invalid argument\n")
+			return nil
+		}
 	}
-	if node.nextL != nil {
-		w.nreverse++
-	}
-	if node.nextR != nil {
-		node.RChild = w.convertDeepNodesStraight(node.nextR, rnode)
-		lnode++
-	}
-	if node.nextL != nil {
-		node.LChild = w.convertDeepNodesStraight(node.nextL, lnode)
-	}
-	w.deepNodes[idx] = DeepNode{
-		X:      node.X,
-		Y:      node.Y,
-		Dx:     node.Dx,
-		Dy:     node.Dy,
-		Rbox:   node.Rbox,
-		Lbox:   node.Lbox,
-		LChild: int32(node.LChild),
-		RChild: int32(node.RChild),
-	}
-	return idx
 }
+
+func ZExt_CreateNodeSSFromOption(userOption int) ZExt_CreateNodeSSFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return ZExt_CreateNodeForSingleSector
+	}
+	return ZExt_CreateNode
+}
+
+func ZExt_StkCreateNodeSSFromOption(userOption int) ZExt_StkCreateNodeSSFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return ZExt_StkCreateNodeForSingleSector
+	}
+	return ZExt_StkCreateNode
+}
+
+func ZExt_StkSingleSectorDivisorFromOption(userOption int) ZExt_SingleSectorDivisorFunc {
+	if userOption == PICKNODE_VISPLANE_ADV {
+		return ZExt_VigilantSingleSectorDivisor
+	}
+	return ZExt_DefaultSingleSectorDivisor
+}
+
+func ZExt_createSegs(lines WriteableLines, sidedefs []Sidedef,
+	linesToIgnore []bool, extNode bool) ([]*ZExt_NodeSeg, []ZExt_NodeVertex) {
+	res := make([]*ZExt_NodeSeg, 0, 65536)
+	var rootCs, lastCs *ZExt_NodeSeg
+
+	var cull *Culler
+	if config.CullInvisibleSegs != CULL_SEGS_DONT {
+
+		cull = new(Culler)
+
+		if config.CullInvisibleSegs == CULL_SEGS_SLOPPY {
+			cull.SetMode(CREATE_SEGS_SLOPPY, sidedefs)
+		} else {
+			cull.SetMode(CREATE_SEGS, sidedefs)
+		}
+		cull.SetWriteableLines(lines)
+	}
+
+	myVertices := make([]ZExt_NodeVertex, lines.GetVerticesCount())
+	l := lines.Len()
+	for i := uint16(0); i < l; i++ {
+		if linesToIgnore != nil && linesToIgnore[i] {
+			continue
+		}
+		x1, y1, x2, y2 := lines.GetAllXY(i)
+		vidx1, vidx2 := lines.GetLinedefVertices(i)
+		ZExt_storeNodeVertex(myVertices, x1, y1, uint32(vidx1))
+		ZExt_storeNodeVertex(myVertices, x2, y2, uint32(vidx2))
+		if x1 == x2 && y1 == y2 {
+			continue
+		}
+
+		culled := cull.AddLine(i)
+		if lines.IsDoNotRender(i) {
+			Log.Verbose(1, "Linedef %d will not be rendered because it was either tagged so (tag 998) or assigned an action with numeric code 1086.\n",
+				i)
+			continue
+		}
+
+		if culled {
+			continue
+		} else {
+
+			firstSdef := lines.GetSidedefIndex(i, true)
+			secondSdef := lines.GetSidedefIndex(i, false)
+			ZExt_addSegsPerLine(myVertices, i, lines, vidx1, vidx2, firstSdef, secondSdef,
+				&rootCs, &lastCs, sidedefs, &res, extNode)
+		}
+
+	}
+
+	cull.Analyze()
+
+	unculled := false
+	for cull.SpewBack() {
+		line := cull.GetLine()
+		vidx1, vidx2 := lines.GetLinedefVertices(line)
+		firstSdef := lines.GetSidedefIndex(line, true)
+		secondSdef := lines.GetSidedefIndex(line, false)
+		if cull.GetMode() == CREATE_SEGS_SLOPPY {
+
+			Log.Verbose(1, "Linedef %d will be rendered after all, I think sector %d may be self-referencing.\n",
+				line, sidedefs[firstSdef].Sector)
+		} else {
+			Log.Verbose(1, "Linedef %d will be rendered after all - used to create self-referencing effect for sector %d.\n",
+				line, sidedefs[firstSdef].Sector)
+		}
+
+		ZExt_addSegsPerLine(myVertices, line, lines, vidx1, vidx2, firstSdef, secondSdef,
+			&rootCs, &lastCs, sidedefs, &res, extNode)
+		unculled = true
+	}
+
+	if unculled {
+
+		ZExt_restoreSegOrder(res)
+	}
+
+	return res, myVertices
+}
+
+func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines WriteableLines, vidx1, vidx2 int,
+	firstSdef, secondSdef uint16, rootCs **ZExt_NodeSeg, lastCs **ZExt_NodeSeg, sidedefs []Sidedef,
+	res *[]*ZExt_NodeSeg, extNode bool) {
+	var lcs, rcs *ZExt_NodeSeg
+	horizon := lines.IsHorizonEffect(i)
+	action := lines.GetAction(i)
+	bamEffect := lines.GetBAMEffect(i)
+
+	if firstSdef != SIDEDEF_NONE {
+		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
+
+			if action == 1085 {
+				Log.Verbose(1, "Will not create seg for front sidedef of linedef %d - instructed so by action's numeric code set to 1085 on linedef.\n",
+					i)
+			} else {
+				lcs = ZExt_addSeg(myVertices, i, vidx1, vidx2, rootCs,
+					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
+				*res = append(*res, lcs)
+			}
+		} else {
+
+			Log.Verbose(1, "Will not create seg for FRONT sidedef of linedef %d (because BSPNOSEG was used as lower texture)\n", i)
+		}
+	} else {
+		Log.Printf("Warning: linedef %d doesn't have front sidedef\n", i)
+	}
+	if secondSdef != SIDEDEF_NONE {
+		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
+
+			if action == 1084 {
+				Log.Verbose(1, "Will not create seg for BACK sidedef of linedef %d - instructed so by action's numeric code set to 1084 on linedef.\n",
+					i)
+			} else {
+				rcs = ZExt_addSeg(myVertices, i, vidx2, vidx1, rootCs,
+					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
+				rcs.flags |= SEG_FLAG_FLIP
+				*res = append(*res, rcs)
+			}
+		} else {
+
+			Log.Verbose(1, "Will not create seg for back sidedef of linedef %d (because BSPNOSEG was used as lower texture)\n", i)
+		}
+	} else if uint16(lines.GetFlags(i))&LF_TWOSIDED != 0 {
+		Log.Printf("Warning: linedef %d is marked as 2-sided but doesn't have back sidedef\n", i)
+	}
+	if extNode && (horizon || bamEffect.Action != BAM_NOSPECIAL) {
+
+		Log.Verbose(1, "Linedef %d has BAM or horizon effect specified, but it cannot be supported in Zdoom nodes format and so will be ignored.\n",
+			i)
+	}
+	if lcs != nil && rcs != nil {
+
+		lcs.partner = rcs
+		rcs.partner = lcs
+	}
+}
+
+func ZExt_storeNodeVertex(vs []ZExt_NodeVertex, x, y int, idx uint32) {
+	vs[idx] = ZExt_NodeVertex{
+		X:   ZNumber(x),
+		Y:   ZNumber(y),
+		idx: idx,
+	}
+}
+
+func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt_NodeSeg, sdef *Sidedef, lastCs **ZExt_NodeSeg, horizon bool, bamEffect BAMEffect) *ZExt_NodeSeg {
+	s := new(ZExt_NodeSeg)
+	if *lastCs == nil {
+		*rootCs = s
+		*lastCs = s
+	} else {
+		(*lastCs).next = s
+		*lastCs = s
+	}
+	s.next = nil
+	s.StartVertex = &(vs[vidx1])
+	s.EndVertex = &(vs[vidx2])
+	s.sector = sdef.Sector
+	s.partner = nil
+	s.pex = s.EndVertex.X
+	s.psx = s.StartVertex.X
+	s.pdx = s.pex - s.psx
+	s.pey = s.EndVertex.Y
+	s.psy = s.StartVertex.Y
+	s.pdy = s.pey - s.psy
+	s.perp = s.pdx*s.psy - s.psx*s.pdy
+	s.Linedef = i
+	flen := math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
+	s.len = ZNumber(flen)
+	s.Offset = 0
+	if bamEffect.Action == BAM_REPLACE {
+
+		s.Angle = bamEffect.Value
+	} else {
+
+		s.Angle = int16(ZExt_computeAngle(s.pdx, s.pdy))
+
+		if bamEffect.Action == BAM_ADDITIVE {
+			s.Angle += bamEffect.Value
+		}
+	}
+
+	if horizon {
+		s.Angle += int16(float64(sdef.XOffset) * float64(65536.0/360.0))
+	}
+	return s
+}
+
+func ZExt_restoreSegOrder(segs []*ZExt_NodeSeg) {
+	sort.Sort(ZExt_InitialSegOrderByLinedef(segs))
+	for i, x := range segs {
+		if i < len(segs)-1 {
+			x.next = segs[i+1]
+		} else {
+			x.next = nil
+		}
+	}
+
+	for _, x := range segs {
+		if x.partner != nil && x.next != x.partner && x.partner.next != x {
+			x.partner = nil
+			Log.Verbose(1, "restoreSegOrder: partner was not referencing a neighbor seg!\n")
+		}
+	}
+}
+
+type ZExt_InitialSegOrderByLinedef []*ZExt_NodeSeg
+
+func (x ZExt_InitialSegOrderByLinedef) Len() int { return len(x) }
+func (x ZExt_InitialSegOrderByLinedef) Less(i, j int) bool {
+
+	return (x[i].Linedef < x[j].Linedef) ||
+		(x[i].Linedef == x[j].Linedef && x[i].getFlip() < x[j].getFlip())
+}
+func (x ZExt_InitialSegOrderByLinedef) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
 func (ni *NodesInput) ZExt_applySectorEquivalence(allSegs []*ZExt_NodeSeg, sectorEquiv []uint16) {
 	for i, _ := range allSegs {
@@ -1652,54 +1445,6 @@ func (w *ZExt_NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *ZExt_Superbl
 		ret.AddSegToSuper(seg)
 	}
 	return ret
-}
-
-func (w *ZExt_NodesWork) newSuperblockNoProto() *ZExt_Superblock {
-	ret := &ZExt_Superblock{}
-	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
-		ret.sectors = make([]uint16, 0)
-		ret.secMap = make(map[uint16]struct{})
-	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
-		ret.secEquivs = make([]uint16, 0)
-		ret.secMap = make(map[uint16]struct{})
-	}
-	return ret
-}
-
-func (w *ZExt_NodesWork) getZdoomNodesBytes() []byte {
-	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
-		int(w.zdoomVertexHeader.ReusedOriginalVertices))
-	w.zdoomVertices = make([]ZdoomNode_Vertex,
-		w.zdoomVertexHeader.NumExtendedVertices)
-	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
-		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
-		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
-	}
-	var writ *ZStream
-	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
-		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
-	} else {
-		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
-	}
-
-	vertexHeader := *(w.zdoomVertexHeader)
-	binary.Write(writ, binary.LittleEndian, vertexHeader)
-	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
-	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
-	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
-	binary.Write(writ, binary.LittleEndian, w.deepNodes)
-	ret, err := writ.FinalizeAndGetBytes()
-	if err != nil {
-		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
-	}
-	return ret
-}
-
-func (n ZNumber) ToFixed16Dot16() int32 {
-	return int32(float64(n) * FIXED16DOT16_MULTIPLIER)
 }
 
 func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
@@ -1807,6 +1552,16 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	}
 
 	return newW
+}
+
+type ZExt_VertexMap struct {
+	w          *ZExt_NodesWork
+	Grid       [][]*FloatVertex
+	Snapshot   []int
+	BlocksWide int
+	BlocksTall int
+	MinX, MinY float64
+	MaxX, MaxY float64
 }
 
 func ZExt_CreateVertexMap(w *ZExt_NodesWork, minx, miny, maxx, maxy int) *ZExt_VertexMap {
@@ -1976,78 +1731,249 @@ func ZExt_PopulateVertexCache(cache map[SimpleVertex]int, allSegs []*ZExt_NodeSe
 	}
 }
 
-func (s *ZExt_NodeSeg) getFlip() int16 {
-	if s.flags&SEG_FLAG_FLIP != 0 {
-		return 1
-	}
-	return 0
+func (w *ZExt_NodesWork) emptyNodesLumps() {
+	w.deepNodes = nil
+	w.deepSegs = nil
+	w.deepSubsectors = nil
+	w.nodes = nil
+	w.segs = nil
+	w.subsectors = nil
 }
 
-func (w *ZExt_NodesWork) getNewSuperblock(template *ZExt_Superblock) *ZExt_Superblock {
-	if w.qallocSupers == nil {
-		ret := &ZExt_Superblock{}
-		ret.InitSectorsIfNeeded(template)
-		ret.nwlink = w
-		return ret
+func (w *ZExt_NodesWork) tooManySegsCantFix() bool {
+
+	if w.segs == nil {
+		return false
 	}
-	ret := w.qallocSupers
-	w.qallocSupers = w.qallocSupers.subs[0]
-	ret.subs[0] = nil
-	ret.nwlink = w
-	needMap := false
-	if ret.sectors != nil {
-		ret.sectors = ret.sectors[:0]
-		needMap = true
+	l := len(w.subsectors)
+	if l == 0 {
+		return true
 	}
-	if ret.secEquivs != nil {
-		ret.secEquivs = ret.secEquivs[:0]
-		needMap = true
+
+	UNSIGNED_MAXSEGINDEX := uint16(65535)
+	VANILLA_MAXSEGINDEX := uint16(32767)
+
+	if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
+		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX)
+		if !couldFix {
+			return true
+		}
+		Log.Printf("You almost exceeded UNSIGNED addressable seg limit in SSECTORS (that would have made it invalid for all ports) - managed to reorder segs to avoid that. Changed subsector: %d\n",
+			pivotSsector)
+		Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
+	} else if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
+		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX)
+		if !couldFix {
+			Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
+
+		} else {
+			Log.Printf("You almost exceeded vanilla addressable seg limit in SSECTORS - managed to reorder segs to avoid that. Changed subsector: %d\n",
+				pivotSsector)
+		}
 	}
-	if needMap {
-		ret.secMap = make(map[uint16]struct{})
+
+	return false
+}
+
+func (w *ZExt_NodesWork) lastSubsectorOverflows(maxSegIndex uint16) bool {
+	l := len(w.subsectors)
+	firstSeg := int(w.subsectors[l-1].FirstSeg)
+	segCnt := int(w.subsectors[l-1].SegCount)
+	if len(w.segs) > (firstSeg + segCnt) {
+
+		return true
+	}
+	if firstSeg > int(maxSegIndex) {
+		return true
+	}
+	return false
+}
+
+func (w *ZExt_NodesWork) fitSegsToTarget(maxSegIndex uint16) (bool, int) {
+	newMaxSegIndex := uint32(len(w.segs)) - w.totals.maxSegCountInSubsector
+	if newMaxSegIndex > uint32(maxSegIndex) {
+
+		return false, 0
+	}
+
+	biggestSubsector := -1
+	for i := len(w.subsectors) - 1; i >= 0; i-- {
+		if uint32(w.subsectors[i].SegCount) == w.totals.maxSegCountInSubsector {
+			biggestSubsector = i
+		}
+	}
+	if biggestSubsector == -1 {
+		Log.Panic("Couldn't find subsector whose seg count matches computed maximum. (programmer error)\n")
+	}
+
+	newAddr := uint16(0)
+	if biggestSubsector > 0 {
+		newAddr = w.subsectors[biggestSubsector-1].FirstSeg +
+			w.subsectors[biggestSubsector-1].SegCount
+	}
+
+	pivot := w.subsectors[biggestSubsector].FirstSeg
+	pivot2 := pivot + w.subsectors[biggestSubsector].SegCount
+
+	w.segs = append(w.segs[:pivot], append(w.segs[pivot2:], w.segs[pivot:pivot2]...)...)
+	for i := biggestSubsector + 1; i < len(w.subsectors); i++ {
+		w.subsectors[i].FirstSeg = newAddr
+		newAddr += w.subsectors[i].SegCount
+	}
+	w.subsectors[biggestSubsector].FirstSeg = uint16(newMaxSegIndex)
+	return true, biggestSubsector
+}
+
+func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
+	if w.nodes == nil {
+		w.nodes = make([]Node, w.totals.numNodes)
+		w.nreverse = 0
+	}
+	if config.StraightNodes {
+
+		return w.convertNodesStraight(node, uint32(w.totals.numNodes-1))
+	}
+	if node.nextR != nil {
+		node.RChild = w.reverseNodes(node.nextR)
+	}
+	if node.nextL != nil {
+		node.LChild = w.reverseNodes(node.nextL)
+	}
+
+	w.nodes[w.nreverse] = Node{
+		X:      node.X,
+		Y:      node.Y,
+		Dx:     node.Dx,
+		Dy:     node.Dy,
+		Rbox:   node.Rbox,
+		Lbox:   node.Lbox,
+		LChild: int16(node.LChild),
+		RChild: int16(node.RChild),
+	}
+
+	w.nreverse++
+	return w.nreverse - 1
+}
+
+func (w *ZExt_NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
+	if w.deepNodes == nil {
+		w.deepNodes = make([]DeepNode, w.totals.numNodes)
+		w.nreverse = 0
+	}
+	if config.StraightNodes {
+
+		return w.convertDeepNodesStraight(node, uint32(w.totals.numNodes-1))
+	}
+	if node.nextR != nil {
+		node.RChild = w.reverseDeepNodes(node.nextR)
+	}
+	if node.nextL != nil {
+		node.LChild = w.reverseDeepNodes(node.nextL)
+	}
+
+	w.deepNodes[w.nreverse] = DeepNode{
+		X:      node.X,
+		Y:      node.Y,
+		Dx:     node.Dx,
+		Dy:     node.Dy,
+		Rbox:   node.Rbox,
+		Lbox:   node.Lbox,
+		LChild: int32(node.LChild),
+		RChild: int32(node.RChild),
+	}
+
+	w.nreverse++
+	return w.nreverse - 1
+}
+
+func (w *ZExt_NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32 {
+	rnode := w.nreverse
+	lnode := w.nreverse
+	if node.nextR != nil {
+		w.nreverse++
+	}
+	if node.nextL != nil {
+		w.nreverse++
+	}
+	if node.nextR != nil {
+		node.RChild = w.convertNodesStraight(node.nextR, rnode)
+		lnode++
+	}
+	if node.nextL != nil {
+		node.LChild = w.convertNodesStraight(node.nextL, lnode)
+	}
+	w.nodes[idx] = Node{
+		X:      node.X,
+		Y:      node.Y,
+		Dx:     node.Dx,
+		Dy:     node.Dy,
+		Rbox:   node.Rbox,
+		Lbox:   node.Lbox,
+		LChild: int16(node.LChild),
+		RChild: int16(node.RChild),
+	}
+	return idx
+}
+
+func (w *ZExt_NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) uint32 {
+	rnode := w.nreverse
+	lnode := w.nreverse
+	if node.nextR != nil {
+		w.nreverse++
+	}
+	if node.nextL != nil {
+		w.nreverse++
+	}
+	if node.nextR != nil {
+		node.RChild = w.convertDeepNodesStraight(node.nextR, rnode)
+		lnode++
+	}
+	if node.nextL != nil {
+		node.LChild = w.convertDeepNodesStraight(node.nextL, lnode)
+	}
+	w.deepNodes[idx] = DeepNode{
+		X:      node.X,
+		Y:      node.Y,
+		Dx:     node.Dx,
+		Dy:     node.Dy,
+		Rbox:   node.Rbox,
+		Lbox:   node.Lbox,
+		LChild: int32(node.LChild),
+		RChild: int32(node.RChild),
+	}
+	return idx
+}
+
+func (w *ZExt_NodesWork) getZdoomNodesBytes() []byte {
+	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
+		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	w.zdoomVertices = make([]ZdoomNode_Vertex,
+		w.zdoomVertexHeader.NumExtendedVertices)
+	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
+		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
+		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
+	}
+	var writ *ZStream
+	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
+		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
+	} else {
+		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
+	}
+
+	vertexHeader := *(w.zdoomVertexHeader)
+	binary.Write(writ, binary.LittleEndian, vertexHeader)
+	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
+	binary.Write(writ, binary.LittleEndian, w.deepNodes)
+	ret, err := writ.FinalizeAndGetBytes()
+	if err != nil {
+		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
 	}
 	return ret
-}
-
-func (w *ZExt_NodesWork) returnSuperblockToPool(block *ZExt_Superblock) {
-	if block.segs == nil {
-
-		return
-	}
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-		w.returnSuperblockToPool(block.subs[num])
-		block.subs[num] = nil
-	}
-	block.segs = nil
-	block.secMap = nil
-	block.realNum = 0
-	block.parent = nil
-	block.nwlink = nil
-
-	block.subs[0] = w.qallocSupers
-	w.qallocSupers = block
-}
-
-func (w *ZExt_NodesWork) dismissChildrenToSuperblockPool(block *ZExt_Superblock) {
-	if block.segs == nil {
-
-		return
-	}
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-		w.returnSuperblockToPool(block.subs[num])
-		block.subs[num] = nil
-	}
-}
-
-func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
-
-	log.Panic("Function that was not supposed to be called was called.\n")
 }
 
 type ZExt_SegMinorBundle struct {
@@ -5094,6 +5020,80 @@ func ZExt_BoxOnLineSide(box *ZExt_Superblock, part *ZExt_NodeSeg) int {
 	return 0
 }
 
+func (w *ZExt_NodesWork) getNewSuperblock(template *ZExt_Superblock) *ZExt_Superblock {
+	if w.qallocSupers == nil {
+		ret := &ZExt_Superblock{}
+		ret.InitSectorsIfNeeded(template)
+		ret.nwlink = w
+		return ret
+	}
+	ret := w.qallocSupers
+	w.qallocSupers = w.qallocSupers.subs[0]
+	ret.subs[0] = nil
+	ret.nwlink = w
+	needMap := false
+	if ret.sectors != nil {
+		ret.sectors = ret.sectors[:0]
+		needMap = true
+	}
+	if ret.secEquivs != nil {
+		ret.secEquivs = ret.secEquivs[:0]
+		needMap = true
+	}
+	if needMap {
+		ret.secMap = make(map[uint16]struct{})
+	}
+	return ret
+}
+
+func (w *ZExt_NodesWork) returnSuperblockToPool(block *ZExt_Superblock) {
+	if block.segs == nil {
+
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
+	block.segs = nil
+	block.secMap = nil
+	block.realNum = 0
+	block.parent = nil
+	block.nwlink = nil
+
+	block.subs[0] = w.qallocSupers
+	w.qallocSupers = block
+}
+
+func (w *ZExt_NodesWork) dismissChildrenToSuperblockPool(block *ZExt_Superblock) {
+	if block.segs == nil {
+
+		return
+	}
+	for num := 0; num < 2; num++ {
+		if block.subs[num] == nil {
+			continue
+		}
+		w.returnSuperblockToPool(block.subs[num])
+		block.subs[num] = nil
+	}
+}
+
+func (w *ZExt_NodesWork) newSuperblockNoProto() *ZExt_Superblock {
+	ret := &ZExt_Superblock{}
+	if w.pickNodeUser == PICKNODE_VISPLANE || w.pickNodeUser == PICKNODE_ZENLIKE {
+		ret.sectors = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
+	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
+		ret.secEquivs = make([]uint16, 0)
+		ret.secMap = make(map[uint16]struct{})
+	}
+	return ret
+}
+
 type ZExt_DepthScoreBundle struct {
 	seg            *ZExt_NodeSeg
 	preciousSplit  int
@@ -6095,29 +6095,6 @@ type ZExt_RearrangeTracker struct {
 	cntVerts           int
 }
 
-type ZExt_StkQueue struct {
-	tasks      []ZExt_StkQueueTask
-	depthLimit int
-	cur        int
-
-	tmp *ZExt_StkQueueTask
-}
-
-type ZExt_StkQueueTask struct {
-	action       int
-	num          int
-	parentNum    int
-	isRightChild bool
-	depth        int
-	seg          *ZExt_NodeSeg
-	box          *NodeBounds
-	super        *ZExt_Superblock
-	leftChild    int
-	rightChild   int
-	parts        []PartSeg
-	node         *NodeInProcess
-}
-
 func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess) {
 	if w.vertexExists > 0 {
 
@@ -6483,6 +6460,29 @@ func (w *ZExt_NodesWork) reallyRearrangeExtendedVertices(translate []int) {
 	w.vertices = newVertices
 }
 
+type ZExt_StkQueue struct {
+	tasks      []ZExt_StkQueueTask
+	depthLimit int
+	cur        int
+
+	tmp *ZExt_StkQueueTask
+}
+
+type ZExt_StkQueueTask struct {
+	action       int
+	num          int
+	parentNum    int
+	isRightChild bool
+	depth        int
+	seg          *ZExt_NodeSeg
+	box          *NodeBounds
+	super        *ZExt_Superblock
+	leftChild    int
+	rightChild   int
+	parts        []PartSeg
+	node         *NodeInProcess
+}
+
 func ZExt_StkEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
 	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
 	w.parts = make([]*ZExt_NodeSeg, 0)
@@ -6537,6 +6537,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		res.Y = int16(w.nodeY)
 		res.Dx = int16(w.nodeDx)
 		res.Dy = int16(w.nodeDy)
+
 		w.stkExtra[res] = StkNodeExtraData{
 			vstart: vstart,
 			vend:   vend,

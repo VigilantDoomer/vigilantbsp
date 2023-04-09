@@ -305,7 +305,7 @@ func (w *NodesWork) WhichSideCached(part, check *NodeSeg,
 	c *IntersectionContext) uint8 {
 	if part.alias == 0 || part.alias > w.sidenessCache.maxKnownAlias ||
 		(check.flags&SEG_FLAG_NOCACHE != 0) {
-		// can't cache
+		// not in cache
 		return w.WhichSideInternal(check, c)
 	}
 	negate := part.flags&SEG_FLAG_GLOBAL_FLIP != 0
