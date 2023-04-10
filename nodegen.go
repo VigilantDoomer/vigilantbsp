@@ -229,24 +229,28 @@ type NodeBounds struct {
 	Ymax int
 }
 
+// April 2023 reordered struct for faster access to very hot fields (flattened
+// coordinates for use in intersection calculations). Still have problems with
+// CPU cache misses (apparently) on visplane-aware partitioners when accessing
+// these
 type NodeSeg struct {
+	psx, psy, pex, pey Number // start, end coordinates
+	pdx, pdy, perp     Number // used in intersection calculations
+	len                Number
+	nextInSuper        *NodeSeg // not yet ready to port everything to superblock use, need conventional "next" to be separate field
+	next               *NodeSeg
+	partner            *NodeSeg
+	alias              int
+	sector             uint16
+	secEquiv           uint16 // only initialized if sectorEquivalencies are computed
+	flags              uint8  // flip and flags for internal use go here
+	sidenessIdx        int    // uses to linearize access to sidenessCache (since the traversal happens through superblocks and not in seg creation order)
+	block              *Superblock
 	StartVertex        *NodeVertex
 	EndVertex          *NodeVertex
 	Angle              int16
 	Linedef            uint16
-	flags              uint8  // flip and flags for internal use go here
 	Offset             uint16 // distance along linedef to start of seg
-	next               *NodeSeg
-	partner            *NodeSeg
-	psx, psy, pex, pey Number // start, end coordinates
-	pdx, pdy, perp     Number // used in intersection calculations
-	len                Number
-	sector             uint16
-	secEquiv           uint16 // only initialized if sectorEquivalencies are computed
-	alias              int
-	block              *Superblock
-	nextInSuper        *NodeSeg // not yet ready to port everything to superblock use, need conventional "next" to be separate field
-	sidenessIdx        int      // uses to linearize access to sidenessCache (since the traversal happens through superblocks and not in seg creation order)
 }
 
 type NodeInProcess struct {
@@ -308,6 +312,11 @@ const (
 	// This flag has no correlation with SEG_FLAG_FLIP - the two must never be
 	// confused!
 	SEG_FLAG_GLOBAL_FLIP = uint8(0x04)
+	// SEG_FLAG_PRECIOUS - seg belongs to precious linedef, and (in case
+	// preciousness comes from being a border of polyobject containing sector),
+	// is on the side where it matters (sector referenced by seg contains
+	// polyobject)
+	SEG_FLAG_PRECIOUS = uint8(0x08)
 )
 
 const (
@@ -1649,8 +1658,7 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 	val := w.doLinesIntersect(c)
 	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 		// Partition intersects this seg in tmps parameter, so it needs to be split
-		if w.lines.IsTaggedPrecious(atmps.Linedef) &&
-			!w.lines.SectorIgnorePrecious(atmps.sector) {
+		if atmps.flags&SEG_FLAG_PRECIOUS != 0 {
 			// undesirable split MIGHT have occured. Hexen.wad actually has lot
 			// of setups that are non-convex sectors, etc. so this doesn't
 			// necessarily mean things were broken
@@ -1675,8 +1683,7 @@ func (w *NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*NodeSeg,
 		news.Offset = uint16(splitDist(w.lines, news))
 		w.totals.segSplits++
 		if atmps.partner != nil {
-			if w.lines.IsTaggedPrecious(atmps.partner.Linedef) &&
-				!w.lines.SectorIgnorePrecious(atmps.partner.sector) {
+			if atmps.partner.flags&SEG_FLAG_PRECIOUS != 0 {
 				w.totals.preciousSplit++
 			}
 			w.totals.segSplits++

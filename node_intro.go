@@ -319,6 +319,7 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 	horizon := lines.IsHorizonEffect(i)
 	action := lines.GetAction(i)
 	bamEffect := lines.GetBAMEffect(i) // support for linedef actions = 1080...1083
+	preciousLine := lines.IsTaggedPrecious(i)
 	// FIXME what if sidedef index is invalid? Well, so far it looks like we
 	// don't perform validity check for ANY references (say, from lines to
 	// vertices)
@@ -329,8 +330,10 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 				Log.Verbose(1, "Will not create seg for front sidedef of linedef %d - instructed so by action's numeric code set to 1085 on linedef.\n",
 					i)
 			} else {
+				sdef := &(sidedefs[firstSdef])
 				lcs = addSeg(myVertices, i, vidx1, vidx2, rootCs,
-					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
+					sdef, lastCs, horizon, bamEffect,
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
 				*res = append(*res, lcs)
 			}
 		} else {
@@ -347,8 +350,10 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 				Log.Verbose(1, "Will not create seg for BACK sidedef of linedef %d - instructed so by action's numeric code set to 1084 on linedef.\n",
 					i)
 			} else {
+				sdef := &(sidedefs[secondSdef])
 				rcs = addSeg(myVertices, i, vidx2, vidx1, rootCs,
-					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
+					sdef, lastCs, horizon, bamEffect,
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
 				rcs.flags |= SEG_FLAG_FLIP
 				*res = append(*res, rcs)
 			}
@@ -388,7 +393,8 @@ func storeNodeVertex(vs []NodeVertex, x, y int, idx uint32) {
 }
 
 func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
-	sdef *Sidedef, lastCs **NodeSeg, horizon bool, bamEffect BAMEffect) *NodeSeg {
+	sdef *Sidedef, lastCs **NodeSeg, horizon bool, bamEffect BAMEffect,
+	precious bool) *NodeSeg {
 	s := new(NodeSeg)
 	if *lastCs == nil {
 		*rootCs = s
@@ -413,6 +419,10 @@ func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	flen := math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
 	s.len = Number(flen)
 	s.Offset = 0
+	if precious {
+		s.flags |= SEG_FLAG_PRECIOUS
+	}
+
 	if bamEffect.Action == BAM_REPLACE { // zokumbsp actions 1081, 1083
 		// Completely replaces value, computation not needed
 		s.Angle = bamEffect.Value

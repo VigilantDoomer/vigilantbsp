@@ -285,6 +285,7 @@ func PickNode_traditional(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // many splits early so that cost exceed bestcost
 func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 	part *NodeSeg, tot, diff, cost *int, bestcost int, minors *MinorCosts) bool {
+forblock:
 
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
@@ -325,8 +326,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 					// VigilantDoomer: so is a tag on a linedef, or on a sector?
 					// Currently put on the linedef, but damn, there are other special
 					// tag values >= 900, not sure if I should give them this meaning too
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -354,8 +354,7 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 				// This fixes the problem with Hexen map05 (Guardian of Steel)
 				// polyobject recipient sector 275 getting broken. AJ-BSP and
 				// ZDBSP also use this solution
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -385,17 +384,20 @@ func (w *NodesWork) evalPartitionWorker_Traditional(block *Superblock,
 			*diff -= 2
 		}
 	}
+
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_Traditional(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_Traditional(block.subs[0], part, tot, diff,
 			cost, bestcost, minors) {
 			return true
 		}
+	}
+
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	// no "bad seg" was found
@@ -631,6 +633,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number,
 	minors *MinorCosts) bool {
 
+forblock:
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
 	//       all the segs within it at once.  Only when the partition
@@ -676,8 +679,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 					// treat it as precious; i.e. don't split it unless all other options
 					// are exhausted. This is used to protect deep water and invisible
 					// lifts/stairs from being messed up accidentally by splits. - Killough
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -704,8 +706,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 				// This fixes the problem with Hexen map05 (Guardian of Steel)
 				// polyobject recipient sector 275 getting broken. AJ-BSP and
 				// ZDBSP also use this solution
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -736,17 +737,20 @@ func (w *NodesWork) evalPartitionWorker_VisplaneKillough(block *Superblock,
 		}
 		w.sectorHits[check.sector] |= mask
 	}
+
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_VisplaneKillough(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_VisplaneKillough(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, minors) {
 			return true
 		}
+	}
+
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	// no "bad seg" was found
@@ -1145,6 +1149,8 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 	part *NodeSeg, tot, diff, cost *int, bestcost int, slen *Number,
 	hasLeft *bool, minors *MinorCosts) bool {
 
+forblock:
+
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
 	//       all the segs within it at once.  Only when the partition
@@ -1191,8 +1197,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 					// treat it as precious; i.e. don't split it unless all other options
 					// are exhausted. This is used to protect deep water and invisible
 					// lifts/stairs from being messed up accidentally by splits. - Killough
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 						// If this seg will have to be split anyway, prefer
 						// it done by axis-aligned partition line for better
 						// Hexen polyobj compatibility
@@ -1222,8 +1227,7 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 				// This fixes the problem with Hexen map05 (Guardian of Steel)
 				// polyobject recipient sector 275 getting broken. AJ-BSP and
 				// ZDBSP also use this solution
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -1264,17 +1268,20 @@ func (w *NodesWork) evalPartitionWorker_VisplaneVigilant(block *Superblock,
 		// -- VigilantDoomer
 		w.sectorHits[check.secEquiv] |= mask
 	}
+
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_VisplaneVigilant(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_VisplaneVigilant(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, hasLeft, minors) {
 			return true
 		}
+	}
+
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	// no "bad seg" was found
@@ -1296,10 +1303,10 @@ func (w *NodesWork) VigilantGuard_IsBadPartition(part, ts *NodeSeg, cnt int) boo
 	// soon as there is something that will go to the left side
 	// Partition line coords
 	c := &IntersectionContext{
-		psx: part.StartVertex.X,
-		psy: part.StartVertex.Y,
-		pex: part.EndVertex.X,
-		pey: part.EndVertex.Y,
+		psx: part.psx,
+		psy: part.psy,
+		pex: part.pex,
+		pey: part.pey,
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
@@ -1309,10 +1316,10 @@ func (w *NodesWork) VigilantGuard_IsBadPartition(part, ts *NodeSeg, cnt int) boo
 	for check := ts; check != nil; check = check.next { // Check partition against all Segs
 		// get state of lines' relation to each other
 		leftside := false
-		c.lsx = check.StartVertex.X
-		c.lsy = check.StartVertex.Y
-		c.lex = check.EndVertex.X
-		c.ley = check.EndVertex.Y
+		c.lsx = check.psx
+		c.lsy = check.psy
+		c.lex = check.pex
+		c.ley = check.pey
 		val := w.doLinesIntersect(c)
 		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 			tot++
@@ -1455,7 +1462,7 @@ func (w *NodesWork) GetPartitionLength_VigilantWay(part *NodeSeg, bbox *NodeBoun
 
 	if contextStart.equalToWithEpsilon(contextEnd) {
 		w.mlog.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
-			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
+			part.psx, part.psy, part.pex, part.pey,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 			contextStart.X, contextStart.Y, contextEnd.X, contextEnd.Y)
 		return 0
@@ -1692,6 +1699,7 @@ func PickNode_maelstrom(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 	part *NodeSeg, tot, diff, cost *int, bestcost int) bool {
 
+forblock:
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
 	//       all the segs within it at once.  Only when the partition
@@ -1730,8 +1738,7 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 					// lifts/stairs from being messed up accidentally by splits. - Killough
 					// VigilantDoomer: don't select such partitions in maelstrom
 					// fast path - we have a traditional path to fall back to
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 						return true
 					}
 
@@ -1749,8 +1756,7 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 				// This fixes the problem with Hexen map05 (Guardian of Steel)
 				// polyobject recipient sector 275 getting broken. AJ-BSP and
 				// ZDBSP also use this solution
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					// VigilantDoomer: don't select such partitions in maelstrom
 					// fast path - we have a traditional path to fall back to
@@ -1777,17 +1783,20 @@ func (w *NodesWork) evalPartitionWorker_Maelstrom(block *Superblock,
 			*diff -= 2
 		}
 	}
+
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_Maelstrom(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_Maelstrom(block.subs[0], part, tot, diff,
 			cost, bestcost) {
 			return true
 		}
+	}
+
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	// no "bad seg" was found
@@ -1884,10 +1893,10 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			copy(w.sectorHits[j:], w.sectorHits[:j])
 		}
 
-		c.psx = part.StartVertex.X
-		c.psy = part.StartVertex.Y
-		c.pex = part.EndVertex.X
-		c.pey = part.EndVertex.Y
+		c.psx = part.psx
+		c.psy = part.psy
+		c.pex = part.pex
+		c.pey = part.pey
 		c.pdx = c.psx - c.pex
 		c.pdy = c.psy - c.pey
 
@@ -1983,6 +1992,7 @@ func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
 	part *NodeSeg, c *IntersectionContext, cost *int, slen *Number,
 	bundle *DepthScoreBundle, inter *ZenIntermediary, minors *MinorCosts) bool {
 
+forblock:
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
 	//       all the segs within it at once.  Only when the partition
@@ -2027,8 +2037,7 @@ func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
 				// Split line
 				inter.segS++
 				mask = uint8(0xFF)
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) {
+				if check.flags&SEG_FLAG_PRECIOUS != 0 {
 					bundle.preciousSplit++
 				}
 			} else {
@@ -2046,8 +2055,7 @@ func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
 					inter.segR++
 					checkPrecious = true
 				}
-				if checkPrecious && w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if checkPrecious && (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					passingThrough(part, check) &&
 					!w.PartIsPolyobjSide(part, check) {
 					// passing through vertex is bad for polyobject support (cue
@@ -2078,17 +2086,20 @@ func (w *NodesWork) evalPartitionWorker_ZennodeDepth(block *Superblock,
 
 		w.sectorHits[check.sector] |= mask
 	}
+
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_ZennodeDepth(block.subs[num], part, c,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_ZennodeDepth(block.subs[0], part, c,
 			cost, slen, bundle, inter, minors) {
 			return true
 		}
+	}
+
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	// no "bad seg" was found

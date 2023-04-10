@@ -19,6 +19,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"math"
 )
 
@@ -75,8 +76,13 @@ import (
 // #pragma replace_prototype *NodesWork.SetNodeCoords with *NodesWork.ZSetNodeCoords_Proto
 // #pragma replace_prototype *NodesWork.updateSegLenBetter with *NodesWork.ZupdateSegLenBetter_Proto
 // #pragma replace_prototype *NodesWork.SegOrLineToVertexPairC with *NodesWork.ZSegOrLineToVertexPairC_Proto
+// #pragma replace_prototype *NodesWork.upgradeToDeep with *NodesWork.ZupgradeToDeep_Proto
 // #pragma replace_prototype vetAliasTransfer with ZVetAliasTransfer_Proto
 // #pragma replace_prototype vetAliasTransfer2 with ZVetAliasTransfer2_Proto
+// #pragma replace_prototype *NodesWork.tooManySegsCantFix with *NodesWork.ZtooManySegsCantFix_Proto
+// #pragma replace_prototype *NodesWork.getZdoomNodesBytes with *NodesWork.ZgetZdoomNodesBytes_Proto
+// #pragma replace_prototype *NodesWork.reverseNodes with *NodesWork.ZreverseNodes_Proto
+// #pragma replace_prototype *NodesWork.convertNodesStraight with *NodesWork.ZconvertNodesStraight_Proto
 
 // Finally, we need to assign the core function - which will include all other
 // generated stuff in its calltree - to a predefined callback. The generated
@@ -562,4 +568,54 @@ func ZVetAliasTransfer2_Proto(part, check *NodeSeg) bool {
 	c.ley = check.pey
 	val := doLinesIntersectStandard(c) // will be intercepted of course
 	return (val&1 != 0) && (val&16 != 0)
+}
+
+func (w *NodesWork) ZupgradeToDeep_Proto() {
+	// Unused; deleted to shrink executable
+}
+
+func (w *NodesWork) ZtooManySegsCantFix_Proto(dryRun bool) bool {
+	return false
+}
+
+func (w *NodesWork) ZgetZdoomNodesBytes_Proto() []byte {
+	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
+		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	w.zdoomVertices = make([]ZdoomNode_Vertex,
+		w.zdoomVertexHeader.NumExtendedVertices)
+	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
+		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
+		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
+	}
+	var writ *ZStream
+	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
+		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
+	} else {
+		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
+	}
+	// NOTE always LittleEndian per Zdoom specs
+	vertexHeader := *(w.zdoomVertexHeader)
+	binary.Write(writ, binary.LittleEndian, vertexHeader)
+	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
+	binary.Write(writ, binary.LittleEndian, w.deepNodes)
+	ret, err := writ.FinalizeAndGetBytes()
+	if err != nil {
+		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
+	}
+	return ret
+}
+
+func (w *NodesWork) ZreverseNodes_Proto(node *NodeInProcess) uint32 {
+	// unreachable function dummied out to reduce executable size
+	return uint32(0)
+}
+
+func (w *NodesWork) ZconvertNodesStraight_Proto(node *NodeInProcess, idx uint32) uint32 {
+	// unreachable function dummied out to reduce executable size
+	return uint32(0)
 }

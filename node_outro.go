@@ -16,10 +16,6 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-import (
-	"encoding/binary"
-)
-
 // node_outro.go contains functions called after BSP tree is built (and in
 // case of multi-tree modes, the best one is chosen), but needs to be written
 // in the way lump format specifies, and perhaps fit under limits
@@ -317,33 +313,7 @@ func (w *NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) ui
 }
 
 func (w *NodesWork) getZdoomNodesBytes() []byte {
-	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
-		int(w.zdoomVertexHeader.ReusedOriginalVertices))
-	w.zdoomVertices = make([]ZdoomNode_Vertex,
-		w.zdoomVertexHeader.NumExtendedVertices)
-	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
-		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
-		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
-	}
-	var writ *ZStream
-	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
-		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
-	} else {
-		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
-	}
-	// NOTE always LittleEndian per Zdoom specs
-	vertexHeader := *(w.zdoomVertexHeader)
-	binary.Write(writ, binary.LittleEndian, vertexHeader)
-	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
-	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
-	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
-	binary.Write(writ, binary.LittleEndian, w.deepNodes)
-	ret, err := writ.FinalizeAndGetBytes()
-	if err != nil {
-		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
-	}
-	return ret
+	// stub, replaced in zdefs.go with ZgetZdoomNodesBytes_Proto
+	// This is done to reduce compiled executable size
+	return nil
 }

@@ -1048,10 +1048,11 @@ func (r *FastRejectWork) checkLOS(src, tgt *TransLine) bool {
 				line := myWorld.solidSet.lines[i]
 				if (line.start == *common) || (line.end == *common) {
 					more = true
+					break
 				}
 			}
-
 			if !more {
+
 				return true
 			}
 		}
@@ -2058,8 +2059,6 @@ func (w *FastRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 	isVisible := *(w.rejectTableIJ(key.index, sector.index)) == VIS_VISIBLE
 	isUnknown := *(w.rejectTableIJ(key.index, sector.index)) == VIS_UNKNOWN
 
-	done := false
-
 	if isUnknown {
 		ptr := lines
 		for ptr[0] != nil {
@@ -2075,24 +2074,17 @@ func (w *FastRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 							if ShouldTest(srcLine, uint16(key.index), tgtLine, uint16(sector.index)) {
 								if w.testLinePair(srcLine, tgtLine) {
 									w.markPairVisible(srcLine, tgtLine)
-									done = true
-									break
+									goto done
 								}
 							}
 						}
 					}
-					if done {
-						break
-					}
 				}
-			}
-			if done {
-				break
 			}
 		}
 	}
 
-	if !done && !isVisible {
+	if !isVisible {
 
 		graph := sector.graph
 
@@ -2121,17 +2113,15 @@ func (w *FastRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 			}
 		}
 
-	} else {
-		done = true
+		return
 	}
 
-	if done {
+done:
 
-		for i := 0; i < sector.numNeighbors; i++ {
-			child := sector.neighbors[i]
-			if child.graphParent == sector {
-				w.ProcessSectorLines(key, root, child, lines)
-			}
+	for i := 0; i < sector.numNeighbors; i++ {
+		child := sector.neighbors[i]
+		if child.graphParent == sector {
+			w.ProcessSectorLines(key, root, child, lines)
 		}
 	}
 }
@@ -2185,25 +2175,18 @@ func (w *FastRejectWork) ProcessSector(sector *RejSector) {
 		for i := 0; i < graph.numSectors; i++ {
 			tgtSector := graph.sectors[i]
 			if *(w.rejectTableIJ(sector.index, tgtSector.index)) == VIS_UNKNOWN {
-				next := false
 				for j := 0; j < sector.numLines; j++ {
 					srcLine := sector.lines[j]
 					for k := 0; k < tgtSector.numLines; k++ {
 						tgtLine := tgtSector.lines[k]
 						if w.testLinePair(srcLine, tgtLine) {
 							w.markPairVisible(srcLine, tgtLine)
-							next = true
-							break
+							goto next
 						}
 					}
-					if next {
-						break
-					}
-				}
-				if next {
-					continue
 				}
 				w.markVisibility(sector.index, tgtSector.index, VIS_HIDDEN)
+			next:
 			}
 		}
 	}

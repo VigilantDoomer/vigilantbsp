@@ -267,8 +267,6 @@ func (w *RejectWork) ProcessSectorLines(key, root, sector *RejSector,
 	isVisible := *(w.rejectTableIJ(key.index, sector.index)) == VIS_VISIBLE
 	isUnknown := *(w.rejectTableIJ(key.index, sector.index)) == VIS_UNKNOWN
 
-	done := false
-
 	if isUnknown {
 		ptr := lines
 		for ptr[0] != nil {
@@ -284,25 +282,18 @@ func (w *RejectWork) ProcessSectorLines(key, root, sector *RejSector,
 							if ShouldTest(srcLine, uint16(key.index), tgtLine, uint16(sector.index)) {
 								if w.testLinePair(srcLine, tgtLine) {
 									w.markPairVisible(srcLine, tgtLine)
-									done = true // the fuck with people still using goto in C++
-									break
+									goto done
 								}
 							}
 						}
 					}
-					if done {
-						break
-					}
 				}
-			}
-			if done {
-				break
 			}
 		}
 	}
 
 	// Another f-rant about use of goto was here, since deleted
-	if !done && !isVisible { // if it was not made visible before, we hide it
+	if !isVisible { // if it was not made visible before, we hide it
 
 		graph := sector.graph
 
@@ -333,18 +324,16 @@ func (w *RejectWork) ProcessSectorLines(key, root, sector *RejSector,
 				}
 			}
 		}
-
-	} else {
-		done = true
+		// Must not reach "done" label from here
+		return
 	}
 
-	if done {
-		// Continue checking all of our children
-		for i := 0; i < sector.numNeighbors; i++ {
-			child := sector.neighbors[i]
-			if child.graphParent == sector {
-				w.ProcessSectorLines(key, root, child, lines)
-			}
+done:
+	// Continue checking all of our children
+	for i := 0; i < sector.numNeighbors; i++ {
+		child := sector.neighbors[i]
+		if child.graphParent == sector {
+			w.ProcessSectorLines(key, root, child, lines)
 		}
 	}
 }
@@ -402,25 +391,18 @@ func (w *RejectWork) ProcessSector(sector *RejSector) {
 		for i := 0; i < graph.numSectors; i++ {
 			tgtSector := graph.sectors[i]
 			if *(w.rejectTableIJ(sector.index, tgtSector.index)) == VIS_UNKNOWN {
-				next := false
 				for j := 0; j < sector.numLines; j++ {
 					srcLine := sector.lines[j]
 					for k := 0; k < tgtSector.numLines; k++ {
 						tgtLine := tgtSector.lines[k]
 						if w.testLinePair(srcLine, tgtLine) {
 							w.markPairVisible(srcLine, tgtLine)
-							next = true
-							break
+							goto next
 						}
 					}
-					if next {
-						break
-					}
-				}
-				if next {
-					continue
 				}
 				w.markVisibility(sector.index, tgtSector.index, VIS_HIDDEN)
+			next:
 			}
 		}
 	}

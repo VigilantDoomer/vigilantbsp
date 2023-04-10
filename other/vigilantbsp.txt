@@ -2182,11 +2182,10 @@ A rebuild of Akeldama on my rather dated quad-core machine with and without
 acceleration:
 1. vigilantbsp -na=2m=3 -b- -r- -d akeldama.wad -o akeldama_mtree3.wad --speedtree-
 took 2h 39 m 33 seconds (without acceleration, peak memory usage 
-around 700Mb if memory serves)
+around 700Mb)
 2. vigilantbsp -na=2m=3 -b- -r- -d akeldama.wad -o akeldama_speedtree.wad
 took 2h 22 m 35 seconds (with acceleration implicitly on as its the
-new default, peak memory usage around 1Gb, but that memory usage is 
-what I've seen by eye rather than precise report)
+new default, peak memory usage around 1Gb)
 
 
 Closing comments in regards to --memprofile and --cpuprofile options:

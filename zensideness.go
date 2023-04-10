@@ -128,6 +128,7 @@ func (w *NodesWork) precomputeAliasesForCache(ts *NodeSeg, super *Superblock) in
 func (w *NodesWork) evalComputeAliasesWorker(block *Superblock, part *NodeSeg,
 	c *IntersectionContext) {
 
+forblock:
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
 	//       all the segs within it at once.  Only when the partition
@@ -162,12 +163,14 @@ func (w *NodesWork) evalComputeAliasesWorker(block *Superblock, part *NodeSeg,
 
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
+	if block.subs[0] != nil {
+		w.evalComputeAliasesWorker(block.subs[0], part, c)
+	}
 
-		w.evalComputeAliasesWorker(block.subs[num], part, c)
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 }
 
@@ -253,6 +256,7 @@ func (w *NodesWork) computeAndLockSidenessCache(ts *NodeSeg, super *Superblock) 
 func (w *NodesWork) evalComputeSidenessCache(block *Superblock, part *NodeSeg,
 	c *IntersectionContext) {
 
+forblock:
 	// -AJA- this is the heart of my superblock idea, it tests the
 	//       _whole_ block against the partition line to quickly handle
 	//       all the segs within it at once.  Only when the partition
@@ -274,30 +278,35 @@ func (w *NodesWork) evalComputeSidenessCache(block *Superblock, part *NodeSeg,
 
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
+	if block.subs[0] != nil {
+		w.evalComputeSidenessCache(block.subs[0], part, c)
+	}
 
-		w.evalComputeSidenessCache(block.subs[num], part, c)
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 }
 
 func (w *NodesWork) storeEntireBlockSideness(block *Superblock, part *NodeSeg,
 	sideness uint8) {
 
+forblock:
 	for check := block.segs; check != nil; check = check.nextInSuper {
 		w.storeSidenessDirectly(part, check, sideness)
 	}
 
 	// handle sub-blocks recursively
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
+	if block.subs[0] != nil {
+		w.storeEntireBlockSideness(block.subs[0], part, sideness)
+	}
 
-		w.storeEntireBlockSideness(block.subs[num], part, sideness)
+	// tail call eliminated for second block
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 }
 

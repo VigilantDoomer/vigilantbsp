@@ -108,23 +108,23 @@ type ZExt_NodeVertex struct {
 }
 
 type ZExt_NodeSeg struct {
+	psx, psy, pex, pey ZNumber
+	pdx, pdy, perp     ZNumber
+	len                ZNumber
+	nextInSuper        *ZExt_NodeSeg
+	next               *ZExt_NodeSeg
+	partner            *ZExt_NodeSeg
+	alias              int
+	sector             uint16
+	secEquiv           uint16
+	flags              uint8
+	sidenessIdx        int
+	block              *ZExt_Superblock
 	StartVertex        *ZExt_NodeVertex
 	EndVertex          *ZExt_NodeVertex
 	Angle              int16
 	Linedef            uint16
-	flags              uint8
 	Offset             uint16
-	next               *ZExt_NodeSeg
-	partner            *ZExt_NodeSeg
-	psx, psy, pex, pey ZNumber
-	pdx, pdy, perp     ZNumber
-	len                ZNumber
-	sector             uint16
-	secEquiv           uint16
-	alias              int
-	block              *ZExt_Superblock
-	nextInSuper        *ZExt_NodeSeg
-	sidenessIdx        int
 }
 
 type ZExt_IntersectionContext struct {
@@ -928,8 +928,7 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 	val := w.doLinesIntersect(c)
 	if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 
-		if w.lines.IsTaggedPrecious(atmps.Linedef) &&
-			!w.lines.SectorIgnorePrecious(atmps.sector) {
+		if atmps.flags&SEG_FLAG_PRECIOUS != 0 {
 
 			w.totals.preciousSplit++
 		}
@@ -952,8 +951,7 @@ func (w *ZExt_NodesWork) CategoriseAndMaybeDivideSeg(addToRs []*ZExt_NodeSeg, ad
 		news.Offset = uint16(ZExt_splitDist(w.lines, news))
 		w.totals.segSplits++
 		if atmps.partner != nil {
-			if w.lines.IsTaggedPrecious(atmps.partner.Linedef) &&
-				!w.lines.SectorIgnorePrecious(atmps.partner.sector) {
+			if atmps.partner.flags&SEG_FLAG_PRECIOUS != 0 {
 				w.totals.preciousSplit++
 			}
 			w.totals.segSplits++
@@ -1185,33 +1183,6 @@ func ZExt_suppressErrorDueToExtraLogImport(ts *ZExt_NodeSeg) {
 	log.Panic("Function that was not supposed to be called was called.\n")
 }
 
-func (w *ZExt_NodesWork) upgradeToDeep() {
-	if w.deepSegs != nil {
-		Log.Panic("upgradeToDeep called twice on the same NodesWork structure (programmer error)\n")
-	}
-	w.deepSegs = make([]DeepSeg, len(w.segs))
-	for i := range w.segs {
-		w.deepSegs[i].Angle = w.segs[i].Angle
-		w.deepSegs[i].EndVertex = uint32(w.segs[i].EndVertex)
-		w.deepSegs[i].StartVertex = uint32(w.segs[i].StartVertex)
-		w.deepSegs[i].Flip = w.segs[i].Flip
-		w.deepSegs[i].Linedef = w.segs[i].Linedef
-		w.deepSegs[i].Offset = w.segs[i].Offset
-	}
-	w.deepSubsectors = make([]DeepSubSector, len(w.subsectors))
-	firstSeg := uint32(0)
-	for i := range w.subsectors {
-
-		w.deepSubsectors[i].FirstSeg = firstSeg
-		w.deepSubsectors[i].SegCount = w.subsectors[i].SegCount
-		firstSeg += uint32(w.subsectors[i].SegCount)
-	}
-	w.segs = nil
-	w.subsectors = nil
-	w.SsectorMask = SSECTOR_DEEP_MASK
-	w.nodeType = NODETYPE_DEEP
-}
-
 func ZExt_PickNodeFuncFromOption(userOption int) ZExt_PickNodeFunc {
 	switch userOption {
 	case PICKNODE_TRADITIONAL:
@@ -1351,6 +1322,7 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 	horizon := lines.IsHorizonEffect(i)
 	action := lines.GetAction(i)
 	bamEffect := lines.GetBAMEffect(i)
+	preciousLine := lines.IsTaggedPrecious(i)
 
 	if firstSdef != SIDEDEF_NONE {
 		if !bytes.Equal(sidedefs[firstSdef].LoName[:], []byte("BSPNOSEG")) {
@@ -1359,8 +1331,10 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 				Log.Verbose(1, "Will not create seg for front sidedef of linedef %d - instructed so by action's numeric code set to 1085 on linedef.\n",
 					i)
 			} else {
+				sdef := &(sidedefs[firstSdef])
 				lcs = ZExt_addSeg(myVertices, i, vidx1, vidx2, rootCs,
-					&(sidedefs[firstSdef]), lastCs, horizon, bamEffect)
+					sdef, lastCs, horizon, bamEffect,
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
 				*res = append(*res, lcs)
 			}
 		} else {
@@ -1377,8 +1351,10 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 				Log.Verbose(1, "Will not create seg for BACK sidedef of linedef %d - instructed so by action's numeric code set to 1084 on linedef.\n",
 					i)
 			} else {
+				sdef := &(sidedefs[secondSdef])
 				rcs = ZExt_addSeg(myVertices, i, vidx2, vidx1, rootCs,
-					&(sidedefs[secondSdef]), lastCs, horizon, bamEffect)
+					sdef, lastCs, horizon, bamEffect,
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
 				rcs.flags |= SEG_FLAG_FLIP
 				*res = append(*res, rcs)
 			}
@@ -1409,7 +1385,8 @@ func ZExt_storeNodeVertex(vs []ZExt_NodeVertex, x, y int, idx uint32) {
 	}
 }
 
-func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt_NodeSeg, sdef *Sidedef, lastCs **ZExt_NodeSeg, horizon bool, bamEffect BAMEffect) *ZExt_NodeSeg {
+func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt_NodeSeg, sdef *Sidedef, lastCs **ZExt_NodeSeg, horizon bool, bamEffect BAMEffect,
+	precious bool) *ZExt_NodeSeg {
 	s := new(ZExt_NodeSeg)
 	if *lastCs == nil {
 		*rootCs = s
@@ -1434,6 +1411,10 @@ func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt
 	flen := math.Sqrt(float64(s.pdx)*float64(s.pdx) + float64(s.pdy)*float64(s.pdy))
 	s.len = ZNumber(flen)
 	s.Offset = 0
+	if precious {
+		s.flags |= SEG_FLAG_PRECIOUS
+	}
+
 	if bamEffect.Action == BAM_REPLACE {
 
 		s.Angle = bamEffect.Value
@@ -1789,51 +1770,6 @@ func (w *ZExt_NodesWork) emptyNodesLumps() {
 	w.subsectors = nil
 }
 
-func (w *ZExt_NodesWork) tooManySegsCantFix(dryRun bool) bool {
-
-	if w.segs == nil {
-		return false
-	}
-	l := len(w.subsectors)
-	if l == 0 {
-		return true
-	}
-
-	UNSIGNED_MAXSEGINDEX := uint16(65535)
-	VANILLA_MAXSEGINDEX := uint16(32767)
-
-	if dryRun {
-		if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
-			couldFix, _ := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX, true)
-			if !couldFix {
-				return true
-			}
-		}
-		return false
-	}
-
-	if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(UNSIGNED_MAXSEGINDEX, false)
-		if !couldFix {
-			return true
-		}
-		Log.Printf("You almost exceeded UNSIGNED addressable seg limit in SSECTORS (that would have made it invalid for all ports) - managed to reorder segs to avoid that. Changed subsector: %d\n",
-			pivotSsector)
-		Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
-	} else if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
-		couldFix, pivotSsector := w.fitSegsToTarget(VANILLA_MAXSEGINDEX, false)
-		if !couldFix {
-			Log.Printf("Too many segs to run in vanilla, need ports that treat FirstSeg field in SUBSECTORS as unsigned.\n")
-
-		} else {
-			Log.Printf("You almost exceeded vanilla addressable seg limit in SSECTORS - managed to reorder segs to avoid that. Changed subsector: %d\n",
-				pivotSsector)
-		}
-	}
-
-	return false
-}
-
 func (w *ZExt_NodesWork) lastSubsectorOverflows(maxSegIndex uint16) bool {
 	l := len(w.subsectors)
 	firstSeg := int(w.subsectors[l-1].FirstSeg)
@@ -1888,37 +1824,6 @@ func (w *ZExt_NodesWork) fitSegsToTarget(maxSegIndex uint16, dryRun bool) (bool,
 	return true, biggestSubsector
 }
 
-func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
-	if w.nodes == nil {
-		w.nodes = make([]Node, w.totals.numNodes)
-		w.nreverse = 0
-	}
-	if config.StraightNodes {
-
-		return w.convertNodesStraight(node, uint32(w.totals.numNodes-1))
-	}
-	if node.nextR != nil {
-		node.RChild = w.reverseNodes(node.nextR)
-	}
-	if node.nextL != nil {
-		node.LChild = w.reverseNodes(node.nextL)
-	}
-
-	w.nodes[w.nreverse] = Node{
-		X:      node.X,
-		Y:      node.Y,
-		Dx:     node.Dx,
-		Dy:     node.Dy,
-		Rbox:   node.Rbox,
-		Lbox:   node.Lbox,
-		LChild: convertToSsectorMask(node.LChild, w.SsectorMask),
-		RChild: convertToSsectorMask(node.RChild, w.SsectorMask),
-	}
-
-	w.nreverse++
-	return w.nreverse - 1
-}
-
 func (w *ZExt_NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 	if w.deepNodes == nil {
 		w.deepNodes = make([]DeepNode, w.totals.numNodes)
@@ -1950,35 +1855,6 @@ func (w *ZExt_NodesWork) reverseDeepNodes(node *NodeInProcess) uint32 {
 	return w.nreverse - 1
 }
 
-func (w *ZExt_NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32 {
-	rnode := w.nreverse
-	lnode := w.nreverse
-	if node.nextR != nil {
-		w.nreverse++
-	}
-	if node.nextL != nil {
-		w.nreverse++
-	}
-	if node.nextR != nil {
-		node.RChild = w.convertNodesStraight(node.nextR, rnode)
-		lnode++
-	}
-	if node.nextL != nil {
-		node.LChild = w.convertNodesStraight(node.nextL, lnode)
-	}
-	w.nodes[idx] = Node{
-		X:      node.X,
-		Y:      node.Y,
-		Dx:     node.Dx,
-		Dy:     node.Dy,
-		Rbox:   node.Rbox,
-		Lbox:   node.Lbox,
-		LChild: convertToSsectorMask(node.LChild, w.SsectorMask),
-		RChild: convertToSsectorMask(node.RChild, w.SsectorMask),
-	}
-	return idx
-}
-
 func (w *ZExt_NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint32) uint32 {
 	rnode := w.nreverse
 	lnode := w.nreverse
@@ -2006,38 +1882,6 @@ func (w *ZExt_NodesWork) convertDeepNodesStraight(node *NodeInProcess, idx uint3
 		RChild: int32(node.RChild),
 	}
 	return idx
-}
-
-func (w *ZExt_NodesWork) getZdoomNodesBytes() []byte {
-	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
-		int(w.zdoomVertexHeader.ReusedOriginalVertices))
-	w.zdoomVertices = make([]ZdoomNode_Vertex,
-		w.zdoomVertexHeader.NumExtendedVertices)
-	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
-		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
-		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
-	}
-	var writ *ZStream
-	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
-		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
-	} else {
-		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
-	}
-
-	vertexHeader := *(w.zdoomVertexHeader)
-	binary.Write(writ, binary.LittleEndian, vertexHeader)
-	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
-	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
-	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
-	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
-	binary.Write(writ, binary.LittleEndian, w.deepNodes)
-	ret, err := writ.FinalizeAndGetBytes()
-	if err != nil {
-		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
-	}
-	return ret
 }
 
 type ZExt_SegMinorBundle struct {
@@ -2142,6 +1986,7 @@ func ZExt_PickNode_traditional(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBo
 }
 
 func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock, part *ZExt_NodeSeg, tot, diff, cost *int, bestcost int, minors *MinorCosts) bool {
+forblock:
 
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
@@ -2169,8 +2014,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock,
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 
 						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2193,8 +2037,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock,
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2221,15 +2064,16 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Traditional(block *ZExt_Superblock,
 		}
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_Traditional(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_Traditional(block.subs[0], part, tot, diff,
 			cost, bestcost, minors) {
 			return true
 		}
+	}
+
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	return false
@@ -2392,6 +2236,8 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superblock, part *ZExt_NodeSeg, tot, diff, cost *int, bestcost int, slen *ZNumber,
 	minors *MinorCosts) bool {
 
+forblock:
+
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
 
@@ -2427,8 +2273,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 
 						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2450,8 +2295,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2481,15 +2325,16 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneKillough(block *ZExt_Superb
 		w.sectorHits[check.sector] |= mask
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_VisplaneKillough(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_VisplaneKillough(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, minors) {
 			return true
 		}
+	}
+
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	return false
@@ -2775,6 +2620,8 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superblock, part *ZExt_NodeSeg, tot, diff, cost *int, bestcost int, slen *ZNumber,
 	hasLeft *bool, minors *MinorCosts) bool {
 
+forblock:
+
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
 
@@ -2811,8 +2658,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 
 						if part.pdx != 0 && part.pdy != 0 {
 							*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2837,8 +2683,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 					if part.pdx != 0 && part.pdy != 0 {
 						*cost += w.pickNodeFactor * PRECIOUS_MULTIPLY * 2
@@ -2874,15 +2719,16 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 		w.sectorHits[check.secEquiv] |= mask
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_VisplaneVigilant(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_VisplaneVigilant(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, hasLeft, minors) {
 			return true
 		}
+	}
+
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	return false
@@ -2891,10 +2737,10 @@ func (w *ZExt_NodesWork) evalPartitionWorker_VisplaneVigilant(block *ZExt_Superb
 func (w *ZExt_NodesWork) VigilantGuard_IsBadPartition(part, ts *ZExt_NodeSeg, cnt int) bool {
 
 	c := &ZExt_IntersectionContext{
-		psx: part.StartVertex.X,
-		psy: part.StartVertex.Y,
-		pex: part.EndVertex.X,
-		pey: part.EndVertex.Y,
+		psx: part.psx,
+		psy: part.psy,
+		pex: part.pex,
+		pey: part.pey,
 	}
 	c.pdx = c.psx - c.pex
 	c.pdy = c.psy - c.pey
@@ -2904,10 +2750,10 @@ func (w *ZExt_NodesWork) VigilantGuard_IsBadPartition(part, ts *ZExt_NodeSeg, cn
 	for check := ts; check != nil; check = check.next {
 
 		leftside := false
-		c.lsx = check.StartVertex.X
-		c.lsy = check.StartVertex.Y
-		c.lex = check.EndVertex.X
-		c.ley = check.EndVertex.Y
+		c.lsx = check.psx
+		c.lsy = check.psy
+		c.lex = check.pex
+		c.ley = check.pey
 		val := w.doLinesIntersect(c)
 		if ((val&2 != 0) && (val&64 != 0)) || ((val&4 != 0) && (val&32 != 0)) {
 			tot++
@@ -3031,7 +2877,7 @@ func (w *ZExt_NodesWork) GetPartitionLength_VigilantWay(part *ZExt_NodeSeg, bbox
 
 	if contextStart.equalToWithEpsilon(contextEnd) {
 		w.mlog.Verbose(2, "Partition line seems to have zero length inside the node box (%v,%v)-(%v,%v) in (%v,%v,%v,%v) yielded (%v,%v)-(%v,%v).\n",
-			part.StartVertex.X, part.StartVertex.Y, part.EndVertex.X, part.EndVertex.Y,
+			part.psx, part.psy, part.pex, part.pey,
 			bbox.Xmax, bbox.Ymax, bbox.Xmin, bbox.Ymin,
 			contextStart.X, contextStart.Y, contextEnd.X, contextEnd.Y)
 		return 0
@@ -3234,6 +3080,8 @@ func ZExt_PickNode_maelstrom(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBoun
 
 func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, part *ZExt_NodeSeg, tot, diff, cost *int, bestcost int) bool {
 
+forblock:
+
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
 
@@ -3260,8 +3108,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 				d := ZNumber((ZWideNumber(l) * ZWideNumber(a)) / (ZWideNumber(a) - ZWideNumber(b)))
 				if d >= 2 {
 
-					if w.lines.IsTaggedPrecious(check.Linedef) &&
-						!w.lines.SectorIgnorePrecious(check.sector) {
+					if check.flags&SEG_FLAG_PRECIOUS != 0 {
 						return true
 					}
 
@@ -3276,8 +3123,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 				}
 			} else {
 
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					!w.PartIsPolyobjSide(part, check) {
 
 					return true
@@ -3300,15 +3146,16 @@ func (w *ZExt_NodesWork) evalPartitionWorker_Maelstrom(block *ZExt_Superblock, p
 		}
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_Maelstrom(block.subs[num], part, tot, diff,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_Maelstrom(block.subs[0], part, tot, diff,
 			cost, bestcost) {
 			return true
 		}
+	}
+
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	return false
@@ -3385,10 +3232,10 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 			copy(w.sectorHits[j:], w.sectorHits[:j])
 		}
 
-		c.psx = part.StartVertex.X
-		c.psy = part.StartVertex.Y
-		c.pex = part.EndVertex.X
-		c.pey = part.EndVertex.Y
+		c.psx = part.psx
+		c.psy = part.psy
+		c.pex = part.pex
+		c.pey = part.pey
 		c.pdx = c.psx - c.pex
 		c.pdy = c.psy - c.pey
 
@@ -3475,6 +3322,8 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock, part *ZExt_NodeSeg, c *ZExt_IntersectionContext, cost *int, slen *ZNumber,
 	bundle *ZExt_DepthScoreBundle, inter *ZenIntermediary, minors *MinorCosts) bool {
 
+forblock:
+
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
 
@@ -3515,8 +3364,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock
 
 				inter.segS++
 				mask = uint8(0xFF)
-				if w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) {
+				if check.flags&SEG_FLAG_PRECIOUS != 0 {
 					bundle.preciousSplit++
 				}
 			} else {
@@ -3533,8 +3381,7 @@ func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock
 					inter.segR++
 					checkPrecious = true
 				}
-				if checkPrecious && w.lines.IsTaggedPrecious(check.Linedef) &&
-					!w.lines.SectorIgnorePrecious(check.sector) &&
+				if checkPrecious && (check.flags&SEG_FLAG_PRECIOUS != 0) &&
 					ZExt_passingThrough(part, check) &&
 					!w.PartIsPolyobjSide(part, check) {
 
@@ -3562,15 +3409,16 @@ func (w *ZExt_NodesWork) evalPartitionWorker_ZennodeDepth(block *ZExt_Superblock
 		w.sectorHits[check.sector] |= mask
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
-
-		if w.evalPartitionWorker_ZennodeDepth(block.subs[num], part, c,
+	if block.subs[0] != nil {
+		if w.evalPartitionWorker_ZennodeDepth(block.subs[0], part, c,
 			cost, slen, bundle, inter, minors) {
 			return true
 		}
+	}
+
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 
 	return false
@@ -4843,6 +4691,56 @@ func ZExt_vetAliasTransfer2(part, check *ZExt_NodeSeg) bool {
 	return (val&1 != 0) && (val&16 != 0)
 }
 
+func (w *ZExt_NodesWork) upgradeToDeep() {
+
+}
+
+func (w *ZExt_NodesWork) tooManySegsCantFix(dryRun bool) bool {
+	return false
+}
+
+func (w *ZExt_NodesWork) getZdoomNodesBytes() []byte {
+	w.zdoomVertexHeader.NumExtendedVertices = uint32(len(w.vertices) -
+		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	w.zdoomVertices = make([]ZdoomNode_Vertex,
+		w.zdoomVertexHeader.NumExtendedVertices)
+	for i, srcv := range w.vertices[w.zdoomVertexHeader.ReusedOriginalVertices:] {
+		w.zdoomVertices[i].X = srcv.X.ToFixed16Dot16()
+		w.zdoomVertices[i].Y = srcv.Y.ToFixed16Dot16()
+	}
+	var writ *ZStream
+	if w.nodeType == NODETYPE_ZDOOM_COMPRESSED {
+		writ = CreateZStream(ZNODES_COMPRESSED_SIG[:], true)
+	} else {
+		writ = CreateZStream(ZNODES_PLAIN_SIG[:], false)
+	}
+
+	vertexHeader := *(w.zdoomVertexHeader)
+	binary.Write(writ, binary.LittleEndian, vertexHeader)
+	binary.Write(writ, binary.LittleEndian, w.zdoomVertices)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSubsectors)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSubsectors)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.zdoomSegs)))
+	binary.Write(writ, binary.LittleEndian, w.zdoomSegs)
+	binary.Write(writ, binary.LittleEndian, uint32(len(w.deepNodes)))
+	binary.Write(writ, binary.LittleEndian, w.deepNodes)
+	ret, err := writ.FinalizeAndGetBytes()
+	if err != nil {
+		Log.Panic("IO error at writing Zdoom nodes stream: %s\n", err.Error())
+	}
+	return ret
+}
+
+func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
+
+	return uint32(0)
+}
+
+func (w *ZExt_NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32 {
+
+	return uint32(0)
+}
+
 type ZExt_Superblock struct {
 	parent *ZExt_Superblock
 
@@ -5927,6 +5825,8 @@ func (w *ZExt_NodesWork) precomputeAliasesForCache(ts *ZExt_NodeSeg, super *ZExt
 
 func (w *ZExt_NodesWork) evalComputeAliasesWorker(block *ZExt_Superblock, part *ZExt_NodeSeg, c *ZExt_IntersectionContext) {
 
+forblock:
+
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
 		return
@@ -5954,12 +5854,13 @@ func (w *ZExt_NodesWork) evalComputeAliasesWorker(block *ZExt_Superblock, part *
 		}
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
+	if block.subs[0] != nil {
+		w.evalComputeAliasesWorker(block.subs[0], part, c)
+	}
 
-		w.evalComputeAliasesWorker(block.subs[num], part, c)
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 }
 
@@ -6031,6 +5932,8 @@ func (w *ZExt_NodesWork) computeAndLockSidenessCache(ts *ZExt_NodeSeg, super *ZE
 
 func (w *ZExt_NodesWork) evalComputeSidenessCache(block *ZExt_Superblock, part *ZExt_NodeSeg, c *ZExt_IntersectionContext) {
 
+forblock:
+
 	num := ZExt_BoxOnLineSide(block, part)
 	if num < 0 {
 
@@ -6046,27 +5949,30 @@ func (w *ZExt_NodesWork) evalComputeSidenessCache(block *ZExt_Superblock, part *
 		w.computeAndCacheSideness(part, check, c)
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
+	if block.subs[0] != nil {
+		w.evalComputeSidenessCache(block.subs[0], part, c)
+	}
 
-		w.evalComputeSidenessCache(block.subs[num], part, c)
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 }
 
 func (w *ZExt_NodesWork) storeEntireBlockSideness(block *ZExt_Superblock, part *ZExt_NodeSeg, sideness uint8) {
 
+forblock:
 	for check := block.segs; check != nil; check = check.nextInSuper {
 		w.storeSidenessDirectly(part, check, sideness)
 	}
 
-	for num := 0; num < 2; num++ {
-		if block.subs[num] == nil {
-			continue
-		}
+	if block.subs[0] != nil {
+		w.storeEntireBlockSideness(block.subs[0], part, sideness)
+	}
 
-		w.storeEntireBlockSideness(block.subs[num], part, sideness)
+	if block.subs[1] != nil {
+		block = block.subs[1]
+		goto forblock
 	}
 }
 

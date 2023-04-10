@@ -511,9 +511,6 @@ func (l *Level) WriteNodes(nodesResult NodesResult) {
 	if nodesResult.deepNodes != nil {
 		// write deep nodes
 		s := " [deep]"
-		if nodesResult.deepNodes == nil {
-			s = " [empty]"
-		}
 		l.wriBus.SendGenericLump(nodesResult.deepSegs,
 			l.SegsLumpIdx, "SEGS", s)
 		l.wriBus.SendGenericLump(nodesResult.deepSubsectors,
@@ -531,6 +528,7 @@ func (l *Level) WriteNodes(nodesResult NodesResult) {
 		l.wriBus.SendRawLump(nodesResult.rawNodes, l.NodesLumpIdx, "NODES", s)
 	} else {
 		// write standard nodes
+		// also handles failure condition for all node formats
 		s := " [van/lr]"
 		if nodesResult.nodes == nil {
 			s = " [empty]"

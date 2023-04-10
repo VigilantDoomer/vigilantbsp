@@ -1642,10 +1642,11 @@ func (r *RejectWork) checkLOS(src, tgt *TransLine) bool {
 				line := myWorld.solidSet.lines[i]
 				if (line.start == *common) || (line.end == *common) {
 					more = true
+					break
 				}
 			}
-			// The two lines touch and there are no lines blocking them
 			if !more {
+				// The two lines touch and there are no lines blocking them
 				return true
 			}
 		}
