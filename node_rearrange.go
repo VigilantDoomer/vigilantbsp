@@ -21,6 +21,10 @@ package main
 // could match byte-for-byte results obtained by building BSP tree the
 // traditional depth-first way. Uses are:
 // 1. Determinism in hard multi-tree mode when number of threads > 1
+// TODO determinism in multi-tree mode is better guaranteed by some other
+// mechanism. It is too hard to write this stuff to work in all cases, like
+// segs having to move under limit, or Zdoom extended/compressed nodes with
+// their float grid that might indeed select coordinates depending on order
 // 2. Verification via building wad in single-tree mode with --stknode debug
 // parameter and without it, both with determinism - file should match
 // 3. Avoid slowdowns in game engine caused by irregular layout of structures
@@ -39,6 +43,7 @@ type RearrangeTracker struct {
 	totals             *NodesTotals
 	vertices           []NodeVertex
 	subsectors         []SubSector
+	firstSegs          []int // used instead of subsectors[i].FirstSeg
 	segs               []Seg // game format for actual SEGS lump
 	deepSubsectors     []DeepSubSector
 	deepSegs           []DeepSeg
@@ -46,41 +51,37 @@ type RearrangeTracker struct {
 	zdoomSegs          []ZdoomNode_Seg
 	verticeRenumbering []int // index is original index, value is new index
 	cntVerts           int
+	vertexCache        map[SimpleVertex]int
+	vertexMap          *VertexMap
 }
 
 // RearrangeBSPVanilla tries to arrange the BSP tree built with this method
 // so that the wad output matches what the traditional method (recursion) would
-// produce, in deterministic mode. Only for levels within vanilla seg and
-// subsector count limits, though
-// This is for debug purposes mainly
-func (w *NodesWork) RearrangeBSPVanilla(node *NodeInProcess) {
-	if w.vertexExists > 0 {
-		// doom.wad, doom2.wad, hr2final.wad all have at least one affected map
-		// On some maps, rearrangement would succeed even with duplicate
-		// vertices prevention measure taking effect beforehand. However, when
-		// it doesn't, it would either trigger a panic, or produce broken map,
-		// so until algorithm is thorougly adapted to the existence of vertex
-		// deduplication, this limitation is to be enforced.
-		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
-		return
-	}
-	if len(w.segs) > 32767 || len(w.subsectors) > 32767 {
-		// Don't risk rearrangement breaking what could otherwise work
-		// Also, fields may contain incorrect values if limit is exceeded
-		Log.Printf("RearrangeBSP: cancelled (segs / subsectors are out of guaranteed vanilla range).\n")
-		return
-	}
-	track := &RearrangeTracker{
-		totals:     &NodesTotals{},
-		segs:       make([]Seg, 0, cap(w.segs)),
-		subsectors: make([]SubSector, 0, cap(w.subsectors)),
-		vertices:   make([]NodeVertex, 0, cap(w.vertices)),
-	}
+// produce. Only for levels within vanilla seg and subsector count limits,
+// though
+func (w *NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
+	pristineVertexCache map[SimpleVertex]int,
+	pristineVertexMap *VertexMap) {
 
+	track := &RearrangeTracker{
+		totals:      &NodesTotals{},
+		segs:        make([]Seg, 0, cap(w.segs)),
+		subsectors:  make([]SubSector, 0, cap(w.subsectors)),
+		firstSegs:   make([]int, len(w.subsectors)),
+		vertices:    make([]NodeVertex, 0, cap(w.vertices)),
+		vertexCache: pristineVertexCache,
+		vertexMap:   pristineVertexMap,
+	}
 	if !w.identifyLinedefVertices(track) {
 		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
 		return
 	}
+	firstSeg := 0
+	for i := range w.subsectors {
+		track.firstSegs[i] = firstSeg
+		firstSeg += int(w.subsectors[i].SegCount)
+	}
+	w.rearrangeVertices(node, track)
 	// Recursively arrange subsectors, segs and vertices created specifically
 	// for segs according to node tree traversal order, which should match how
 	// these structures would be arranged by default CreateNode function
@@ -102,18 +103,19 @@ func (w *NodesWork) RearrangeBSPVanilla(node *NodeInProcess) {
 }
 
 func (w *NodesWork) rearrangeVanilla(node *NodeInProcess, track *RearrangeTracker) {
-	w.rearrangeVertices(node, track)
 	if node.nextL != nil {
 		w.rearrangeVanilla(node.nextL, track)
 	} else {
-		ssector := &(w.subsectors[node.LChild & ^w.SsectorMask])
-		node.LChild = w.putSubsector(ssector, track) | w.SsectorMask
+		ssidx := node.LChild & ^SSECTOR_DEEP_MASK
+		ssector := &(w.subsectors[ssidx])
+		node.LChild = w.putSubsector(ssector, track, ssidx) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
 		w.rearrangeVanilla(node.nextR, track)
 	} else {
-		ssector := &(w.subsectors[node.RChild & ^w.SsectorMask])
-		node.RChild = w.putSubsector(ssector, track) | w.SsectorMask
+		ssidx := node.RChild & ^SSECTOR_DEEP_MASK
+		ssector := &(w.subsectors[ssidx])
+		node.RChild = w.putSubsector(ssector, track, ssidx) | SSECTOR_DEEP_MASK
 	}
 }
 
@@ -122,28 +124,50 @@ func (w *NodesWork) rearrangeVertices(node *NodeInProcess, track *RearrangeTrack
 	if !ok {
 		Log.Panic("rearrangeVertices: failed to retrieve extra information on node-in-process structure.\n")
 	}
-	//Log.Printf("Range [%d-%d]\n", ex.vstart, ex.vend)
 	for i := ex.vstart; i < ex.vend; i++ {
-		if track.verticeRenumbering[i] >= 0 {
-			Log.Panic("vertex already numbered\n")
+		v := w.vertexSink[i]
+		if track.verticeRenumbering[v] >= 0 {
+			continue
 		}
-		track.verticeRenumbering[i] = track.cntVerts
-		track.cntVerts++
+		siv := SimpleVertex{
+			X: int(w.vertices[v].X),
+			Y: int(w.vertices[v].Y),
+		}
+
+		v2, ex := track.vertexCache[siv]
+		if ex {
+			track.verticeRenumbering[v] = v2
+		} else {
+			track.vertexCache[siv] = track.cntVerts
+			track.verticeRenumbering[v] = track.cntVerts
+			track.cntVerts++
+			track.vertices = append(track.vertices, w.vertices[v])
+		}
+	}
+
+	if node.nextL != nil {
+		w.rearrangeVertices(node.nextL, track)
+	}
+	if node.nextR != nil {
+		w.rearrangeVertices(node.nextR, track)
 	}
 }
 
-func (w *NodesWork) putSubsector(ssector *SubSector, track *RearrangeTracker) uint32 {
+func (w *NodesWork) putSubsector(ssector *SubSector, track *RearrangeTracker,
+	ssIdx uint32) uint32 {
 	idx := track.totals.numSSectors
 	track.totals.numSSectors++
-	v := w.putSegs(ssector, track)
+	v := w.putSegs(ssector, track, ssIdx)
 	track.subsectors = append(track.subsectors, v)
 	return uint32(idx)
 }
 
-func (w *NodesWork) putSegs(orig *SubSector, track *RearrangeTracker) SubSector {
+func (w *NodesWork) putSegs(orig *SubSector, track *RearrangeTracker,
+	ssIdx uint32) SubSector {
 	firstSeg := track.totals.numSegs
-	for _, seg := range w.segs[orig.FirstSeg : orig.FirstSeg+orig.SegCount] {
-		seg2 := seg // copy, will be changed
+	for _, seg := range w.segs[track.firstSegs[ssIdx] : track.firstSegs[ssIdx]+
+		int(orig.SegCount)] {
+		seg2 := seg // copy struct data - will be changed
 		w.renumberSegVertices(&seg2, track)
 		track.segs = append(track.segs, seg2)
 		track.totals.numSegs++
@@ -210,15 +234,17 @@ func (w *NodesWork) identifyLinedefVertices(track *RearrangeTracker) bool {
 	}
 	Log.Printf("debug: cntVerts (original) == %d\n", track.cntVerts)
 	track.verticeRenumbering = translate
+
+	for i := 0; i < track.cntVerts; i++ {
+		track.vertices = append(track.vertices, w.vertices[i])
+	}
 	return true
 }
 
 // RearrangeBSPDeep - see RearrangeBSPVanilla's description
-func (w *NodesWork) RearrangeBSPDeep(node *NodeInProcess) {
-	if w.vertexExists > 0 {
-		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
-		return
-	}
+func (w *NodesWork) RearrangeBSPDeep(node *NodeInProcess,
+	pristineVertexCache map[SimpleVertex]int,
+	pristineVertexMap *VertexMap) {
 	// FIXME Mixing uint32 and int for indexing vertices
 	// Investigate impact - might need to build map that requires vertice indices
 	// larger than int32, in 32-bit address space, maybe we have trouble
@@ -228,11 +254,14 @@ func (w *NodesWork) RearrangeBSPDeep(node *NodeInProcess) {
 		deepSegs:       make([]DeepSeg, 0, cap(w.deepSegs)),
 		deepSubsectors: make([]DeepSubSector, 0, cap(w.deepSubsectors)),
 		vertices:       make([]NodeVertex, 0, cap(w.vertices)),
+		vertexCache:    pristineVertexCache,
+		vertexMap:      pristineVertexMap,
 	}
 	if !w.identifyLinedefVertices(track) {
 		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
 		return
 	}
+	w.rearrangeVertices(node, track)
 	w.rearrangeDeep(node, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
@@ -250,18 +279,17 @@ func (w *NodesWork) RearrangeBSPDeep(node *NodeInProcess) {
 }
 
 func (w *NodesWork) rearrangeDeep(node *NodeInProcess, track *RearrangeTracker) {
-	w.rearrangeVertices(node, track)
 	if node.nextL != nil {
 		w.rearrangeDeep(node.nextL, track)
 	} else {
-		ssector := &(w.deepSubsectors[node.LChild & ^w.SsectorMask])
-		node.LChild = w.putDeepSubsector(ssector, track) | w.SsectorMask
+		ssector := &(w.deepSubsectors[node.LChild & ^SSECTOR_DEEP_MASK])
+		node.LChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
 		w.rearrangeDeep(node.nextR, track)
 	} else {
-		ssector := &(w.deepSubsectors[node.RChild & ^w.SsectorMask])
-		node.RChild = w.putDeepSubsector(ssector, track) | w.SsectorMask
+		ssector := &(w.deepSubsectors[node.RChild & ^SSECTOR_DEEP_MASK])
+		node.RChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 }
 
@@ -279,7 +307,7 @@ func (w *NodesWork) putDeepSegs(orig *DeepSubSector,
 	firstSeg := track.totals.numSegs
 	view := w.deepSegs[orig.FirstSeg : orig.FirstSeg+uint32(orig.SegCount)]
 	for _, seg := range view {
-		seg2 := seg // copy, will be changed
+		seg2 := seg // copy struct data - will be changed
 		w.renumberDeepSegVertices(&seg2, track)
 		track.deepSegs = append(track.deepSegs, seg2)
 		track.totals.numSegs++
@@ -307,11 +335,9 @@ func (w *NodesWork) renumberDeepSegVertices(seg *DeepSeg,
 // value, but zdoomVertexHeader.NumExtendedVertices does not (is set to zero
 // instead) and is only set *much* later, when extended nodes are about to get
 // written
-func (w *NodesWork) RearrangeBSPExtended(node *NodeInProcess) {
-	if w.vertexExists > 0 {
-		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
-		return
-	}
+func (w *NodesWork) RearrangeBSPExtended(node *NodeInProcess,
+	pristineVertexCache map[SimpleVertex]int,
+	pristineVertexMap *VertexMap) {
 	// FIXME Mixing uint32 and int for indexing vertices
 	// Investigate impact - might need to build map that requires vertice indices
 	// larger than int32, in 32-bit address space, maybe we have trouble
@@ -320,38 +346,39 @@ func (w *NodesWork) RearrangeBSPExtended(node *NodeInProcess) {
 		totals:          &NodesTotals{},
 		zdoomSegs:       make([]ZdoomNode_Seg, 0, cap(w.zdoomSegs)),
 		zdoomSubsectors: make([]uint32, 0, cap(w.zdoomSubsectors)),
+		vertexCache:     pristineVertexCache,
+		vertexMap:       pristineVertexMap,
+		vertices:        make([]NodeVertex, 0, cap(w.vertices)),
 	}
 	w.initTranslateVectorForExtended(track)
+	w.rearrangeExtendedVertices(node, track)
 	w.rearrangeExtended(node, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
-		uint32(track.cntVerts) != (uint32(len(w.vertices))-
-			w.zdoomVertexHeader.ReusedOriginalVertices) {
+		uint32(track.cntVerts) != uint32(len(track.vertices)) {
 		Log.Panic("RearrangeBSP: BSP structures length not identical after rearrangement segs:%d:%d ssectors:%d:%d verts:%d:%d\n",
 			w.totals.numSegs, track.totals.numSegs,
 			w.totals.numSSectors, track.totals.numSSectors,
-			track.cntVerts, uint32(len(w.vertices))-
-				w.zdoomVertexHeader.ReusedOriginalVertices)
+			track.cntVerts, uint32(len(track.vertices)))
 	}
 	w.zdoomSegs = track.zdoomSegs
 	w.zdoomSubsectors = track.zdoomSubsectors
-	w.reallyRearrangeExtendedVertices(track.verticeRenumbering)
+	w.reallyRearrangeExtendedVertices(track.verticeRenumbering, track)
 	Log.Printf("RearrangeBSP: done\n")
 }
 
 func (w *NodesWork) rearrangeExtended(node *NodeInProcess, track *RearrangeTracker) {
-	w.rearrangeExtendedVertices(node, track)
 	if node.nextL != nil {
 		w.rearrangeExtended(node.nextL, track)
 	} else {
-		ssector := node.LChild & ^w.SsectorMask
-		node.LChild = w.putExtendedSubsector(ssector, track) | w.SsectorMask
+		ssector := node.LChild & ^SSECTOR_DEEP_MASK
+		node.LChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
 		w.rearrangeExtended(node.nextR, track)
 	} else {
-		ssector := node.RChild & ^w.SsectorMask
-		node.RChild = w.putExtendedSubsector(ssector, track) | w.SsectorMask
+		ssector := node.RChild & ^SSECTOR_DEEP_MASK
+		node.RChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 }
 
@@ -383,30 +410,35 @@ func (w *NodesWork) renumberExtendedSegVertices(seg *ZdoomNode_Seg,
 	track *RearrangeTracker) {
 	reused := w.zdoomVertexHeader.ReusedOriginalVertices
 	if seg.StartVertex >= reused {
-		s := seg.StartVertex - reused
+		s := seg.StartVertex
 		if track.verticeRenumbering[s] < 0 {
 			Log.Panic("vertex was not renumbered at proper place\n")
 		}
-		seg.StartVertex = uint32(track.verticeRenumbering[s]) + reused
+		seg.StartVertex = uint32(track.verticeRenumbering[s])
 	}
 	if seg.EndVertex >= reused {
-		e := seg.EndVertex - reused
+		e := seg.EndVertex
 		if track.verticeRenumbering[e] < 0 {
 			Log.Panic("vertex was not renumbered at proper place\n")
 		}
-		seg.EndVertex = uint32(track.verticeRenumbering[e]) + reused
+		seg.EndVertex = uint32(track.verticeRenumbering[e])
 	}
 }
 
 func (w *NodesWork) initTranslateVectorForExtended(track *RearrangeTracker) {
-	numVerts := uint32(len(w.vertices) -
-		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	numVerts := uint32(len(w.vertices))
 	translate := make([]int, numVerts)
 	track.cntVerts = 0
 	for i, _ := range translate { // Unmark all vertices
 		translate[i] = -1
 	}
 	track.verticeRenumbering = translate
+	for i := 0; i < int(w.zdoomVertexHeader.ReusedOriginalVertices); i++ {
+		track.vertices = append(track.vertices, w.vertices[i])
+		track.cntVerts++
+		translate[i] = i
+	}
+
 }
 
 func (w *NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
@@ -415,30 +447,52 @@ func (w *NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
 	if !ok {
 		Log.Panic("rearrangeExtendedVertices: failed to retrieve extra information on node-in-process structure.\n")
 	}
-	reused := w.zdoomVertexHeader.ReusedOriginalVertices
-	dstart := ex.vstart - int64(reused)
-	dend := ex.vend - int64(reused)
-	for i := dstart; i < dend; i++ {
-		if track.verticeRenumbering[i] >= 0 {
-			Log.Panic("vertex already numbered\n")
+
+	for i := ex.vstart; i < ex.vend; i++ {
+		v := w.vertexSink[i]
+		vv := w.vertices[v]
+		// definitely not SelectVertexClose, that stuff fails to even have
+		// the same vertice count on iwad maps as compared to non-stknode
+		// But it is not necessary SelectVertexExact would always deliver
+		// byte-for-byte matching output against non-stknode, either, just have
+		// not run into that case yet
+		fv := track.vertexMap.SelectVertexExact(float64(vv.X), float64(vv.Y),
+			track.cntVerts)
+		if fv.Id != track.cntVerts {
+			track.verticeRenumbering[v] = fv.Id
+		} else {
+			nv := track.cntVerts
+			track.verticeRenumbering[v] = nv
+			track.vertices = append(track.vertices, NodeVertex{
+				X:   Number(fv.X),
+				Y:   Number(fv.Y),
+				idx: uint32(nv),
+			})
+			track.cntVerts++
 		}
-		track.verticeRenumbering[i] = track.cntVerts
-		track.cntVerts++
+	}
+
+	if node.nextL != nil {
+		w.rearrangeExtendedVertices(node.nextL, track)
+	}
+	if node.nextR != nil {
+		w.rearrangeExtendedVertices(node.nextR, track)
 	}
 }
 
-func (w *NodesWork) reallyRearrangeExtendedVertices(translate []int) {
+func (w *NodesWork) reallyRearrangeExtendedVertices(translate []int,
+	track *RearrangeTracker) {
 	reused := w.zdoomVertexHeader.ReusedOriginalVertices
-	if len(translate) != (len(w.vertices) - int(reused)) {
+	if len(translate) != len(w.vertices) {
 		Log.Panic("reallyRearrangeExtendedVertices: failed translation (length don't match) %d != %d",
-			len(translate), len(w.vertices)-int(reused))
+			len(translate), len(w.vertices))
 	}
-	newVertices := make([]NodeVertex, len(w.vertices))
+	newVertices := track.vertices
 	for i, _ := range w.vertices[:reused] {
 		newVertices[i] = w.vertices[i]
 	}
 	for i, _ := range w.vertices[reused:] {
-		newVertices[uint32(translate[i])+reused] =
+		newVertices[uint32(translate[i])] =
 			w.vertices[uint32(i)+reused]
 	}
 	w.vertices = newVertices

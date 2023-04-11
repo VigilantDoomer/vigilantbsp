@@ -18,6 +18,10 @@
 // rejectSymmDefs.go
 package main
 
+import (
+	"io"
+)
+
 // -----------------------------------------------------------------------------
 // Block of pragma directives
 //
@@ -39,6 +43,7 @@ package main
 // #pragma replace_prototype *RejectWork.markVisibilityGroup with *RejectWork.markVisibilityGroupSymmNoop
 // #pragma replace_prototype *RejectWork.mixerIJ with *RejectWork.mixerIJSymmNoop
 // #pragma replace_prototype *RejectWork.DFSGetNeighborsAndGroupsiblings with *RejectWork.DFSGetNeighborsAndGroupsiblingsSymm
+// #pragma replace_prototype *RejectWork.reportDoForDistance with *RejectWork.reportDoForDistanceSymm
 // #pragma init getSymmRejectWorkIntf with morphed getRejectWorkIntf
 
 // -----------------------------------------------------------------------------
@@ -88,7 +93,8 @@ func (r *RejectWork) rejectTableIJSymm(i, j int) *uint8 {
 	if i > j {
 		i, j = j, i
 	}
-	return &(r.rejectTable[i*r.numSectors+j-((i*(i+1))>>1)])
+	return &r.rejectTable[uint64(i)*(uint64(r.numSectors)<<1-1-uint64(i))>>1+
+		uint64(j)]
 }
 
 func (r *RejectWork) getResultSymm() []byte {
@@ -147,7 +153,8 @@ func (r *RejectWork) symmMoveIJ(i, j *int) {
 func (r *RejectWork) prepareRejectSymm() {
 	// The working table size (uses bytes not bits).
 	// Extra 7 bytes to simplify getResult() method
-	tableSize := r.numSectors*r.numSectors - (r.numSectors-1)*r.numSectors/2 + 7
+	tableSize := uint64(r.numSectors)*uint64(r.numSectors) -
+		uint64(r.numSectors-1)*uint64(r.numSectors)/2 + 7
 	r.rejectTable = make([]uint8, tableSize, tableSize)
 	for i, _ := range r.rejectTable {
 		r.rejectTable[i] = 0
@@ -156,4 +163,21 @@ func (r *RejectWork) prepareRejectSymm() {
 
 func (r *RejectWork) DFSGetNeighborsAndGroupsiblingsSymm(s *RejSector) []*RejSector {
 	return s.neighbors
+}
+
+func (r *RejectWork) reportDoForDistanceSymm(w io.Writer, distance uint16) {
+	r.printfln(w, "# %s All sectors with LOS distance>%d are reported",
+		r.mapName, distance)
+	for i := 0; i < r.numSectors; i++ {
+		for j := i + 1; j < r.numSectors; j++ {
+			// According to manual, only _mutually_ visible sectors that
+			// exceed the specified length are to be reported
+			// But in symmetric reject case, mutual visibility can be checked
+			// in just one direction...
+			if *(r.distanceTableIJ(i, j)) > distance &&
+				!isHidden(*(r.rejectTableIJ(i, j))) {
+				r.printfln(w, "%d,%d", i, j)
+			}
+		}
+	}
 }

@@ -1436,21 +1436,14 @@ c=D - Prefer vanilla, switch to Deep nodes on overflow
 Note the capital "D", not lower case "d". This will try to
 build nodes in vanilla format, and only switch to deep nodes format
 if results cannot be represented in vanilla format whatsoever,
-even with unsigned integers. It should be noted that there is
-a parameter (under "Debug and other hidden parameters", 
-"--detailnodes") that has a different default behavior for vanilla 
-and Deep nodes formats, this option will use the default for
- _vanilla_ format, which is heuristically determine whether map 
- is detailed enough to warrant a switch to a more accurate partition 
-strategy, as opposed to always force it. Thus the output of a map
-with this option and "c=d" option may differ even when conversion
-happens and you are have enabled determinism, unless you also
-directly specify the same --detailnodes enable/disable 
-unconditionally for "c=D" and "c=d", like this:
-vigilantbsp -na=2c=d bigMap.wad -d --detailnodes -o bigMap_o.wad
-vigilantbsp -na=2c=D bigMap.wad -d --detailnodes -o bigMap_o.wad
-will give you the same output (assuming the map requires DeeP nodes
-format and cannot be built correctly in vanilla nodes format).
+even with unsigned integers. Nodes that were converted will not
+necessary be identical to those which were built in DeeP format
+from the start, as the build process will be initialized with
+defaults for vanilla format, for example: "Debug and other 
+hidden parameters", "--detailnodes" defaults to heuristic in
+ vanilla, while for DeeP format specified explicity, the default
+is to assume map always needs proper detailing support. But c=D
+ will use heuristic just like vanilla.
 
 Selection of this option will NOT cause multi-tree modes to select
 tree with inferior characteristics that can be represented in 

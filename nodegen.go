@@ -201,6 +201,10 @@ type NodesWork struct {
 	zenScores        []DepthScoreBundle
 	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP ideato decrease allocations
 	upgradableToDeep bool        // whether, when building vanilla nodes, can upgrade to DeeP format on overflow
+	// vertexSink is used to track all AddVertex requests by returned indices
+	// (even when vertex was not added). stknode installs this for
+	// node_rearrange
+	vertexSink []int
 
 	stkExtra map[*NodeInProcess]StkNodeExtraData // TODO make a better implementation: map with a pointer key is not really a good thing
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
@@ -317,6 +321,11 @@ const (
 	// is on the side where it matters (sector referenced by seg contains
 	// polyobject)
 	SEG_FLAG_PRECIOUS = uint8(0x08)
+	//SEG_FLAG_COALESCE - seg belongs to a sector tagged >= 900, and as per
+	// Killough, they can be mixed with other sectors in one subsector. Used to
+	// implement transparent door effect. Flag is used to avoid lookup into
+	// NodesWork.sectors structure
+	SEG_FLAG_COALESCE = uint8(0x10) // hex 10, dec 16
 )
 
 const (
@@ -345,7 +354,7 @@ func NodesGenerator(input *NodesInput) {
 
 	allSegs, intVertices := createSegs(input.lines, input.sidedefs,
 		input.linesToIgnore, input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
-			input.nodeType == NODETYPE_ZDOOM_COMPRESSED)
+			input.nodeType == NODETYPE_ZDOOM_COMPRESSED, input.sectors)
 	if len(allSegs) == 0 {
 		Log.Error("Failed to create any SEGs (BAD). Quitting (%s)\n.", time.Since(start))
 		// First respond to solid blocks control goroutine that we won't serve
@@ -491,6 +500,24 @@ func NodesGenerator(input *NodesInput) {
 		PopulateVertexCache(workData.vertexCache, allSegs)
 
 	}
+
+	// TODO refactor the preparations for node_rearrange logic
+	var pristineVertexMap *VertexMap
+	var pristineVertexCache map[SimpleVertex]int
+	if input.stkNode {
+		if workData.vertexCache != nil {
+			pristineVertexCache = make(map[SimpleVertex]int)
+			for k, v := range workData.vertexCache {
+				pristineVertexCache[k] = v
+			}
+		}
+
+		if workData.vertexMap != nil {
+			pristineVertexMap = workData.vertexMap.Clone()
+			pristineVertexMap.w = &workData
+		}
+	}
+
 	if workData.solidMap != nil {
 		// Need to initialize dgVertexMap - the new line tracing algo for
 		// advanced visplane reduction partitioner uses it, and it is distinct
@@ -593,13 +620,22 @@ func NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
-	if input.stkNode && config.Deterministic { // reference to global: config
+	if input.stkNode {
 		if workData.nodeType == NODETYPE_VANILLA {
-			workData.RearrangeBSPVanilla(rootNode)
+			// NOTE MUST NOT rearrange segs via tooManySegsCantFix(_false_) prior
+			// to this call !!! Assumes segs for subsectors were laid out
+			// sequentially (recomputes FirstSeg based on SegCount as there
+			// might have been integer overflow in FirstSeg)
+			// NOTE call to tooManySegsCantFix(_true_) is ok, because it doesn't
+			// modify stuff. Just don't mess with seg arrangement
+			workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
+				pristineVertexMap)
 		} else if workData.nodeType == NODETYPE_DEEP {
-			workData.RearrangeBSPDeep(rootNode)
+			workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
+				pristineVertexMap)
 		} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
-			workData.RearrangeBSPExtended(rootNode)
+			workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
+				pristineVertexMap)
 		}
 	}
 
@@ -1086,24 +1122,16 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 	nonConvexityMode := NONCONVEX_ONESECTOR
 	// All ssectors must come from same sector unless it's marked
 	// "special" with sector tag >= 900. Original idea, Lee Killough
+	// This is used to implement transparent doors, for example
+	// April 2023: when sector tag >= 900, seg is marked with SEG_FLAG_COALESCE
 
-	var sector uint16
-	if ts.getFlip() != 0 {
-		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, false)].Sector
-	} else {
-		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, true)].Sector
-	}
-	if w.sectors[sector].Tag < 900 {
+	sector := ts.sector
+	if ts.flags&SEG_FLAG_COALESCE == 0 {
 		line := ts.next
 		for line != nil {
-			var csector uint16
-			if line.getFlip() != 0 {
-				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, false)].Sector
-			} else {
-				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, true)].Sector
-			}
+			csector := line.sector
 			if csector != sector {
-				if w.sectors[csector].Tag < 900 {
+				if ts.flags&SEG_FLAG_COALESCE == 0 {
 					return NONCONVEX_MULTISECTOR // MUST SPLIT
 				} else {
 					// Special partitioning mode for non-convex single sector
@@ -1144,6 +1172,17 @@ func (w *NodesWork) isItConvex(ts *NodeSeg) int {
 			}
 		}
 	}
+
+	// TODO seg-count-in-subsector limit for vanilla and DeeP formats is 32767
+	// (signed) / 65535 (unsigned). This is BAD. And because we have not exited
+	// proc earlier, it likely means this is otherwise convex, and we are not
+	// getting much luck splitting it by using only segs as partition candidates
+	// So, need two things:
+	// 1. An example map with obnoxious setup - convex sector with more than
+	// 32767 linedefs (?) bordering it. Will have to use autogeneration
+	// 2. Implementation of that stuff from Zennode about splitting convex
+	// multi-sectored (or whatever) by arbitrary partitions from vertices, not
+	// segs/linedefs
 
 	// no need to split the list: these Segs can be put in a SSector
 	return CONVEX_SUBSECTOR
@@ -1268,6 +1307,9 @@ func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
 	idx, exists := w.vertexCache[rec]
 	if exists { // happens rather rarely, and not at all on some maps
 		w.vertexExists++
+		if w.vertexSink != nil {
+			w.vertexSink = append(w.vertexSink, idx)
+		}
 		//w.mlog.Printf("Vertex that existed: %d\n", idx)
 		return &(w.vertices[idx])
 	}
@@ -1286,6 +1328,9 @@ func (w *NodesWork) AddVertex(x, y Number) *NodeVertex {
 		// switch to DeeP nodes
 		w.mlog.Printf("Vertices limit reached for vanilla nodes format. Switching to DeeP nodes format.\n")
 		w.upgradeToDeep()
+	}
+	if w.vertexSink != nil {
+		w.vertexSink = append(w.vertexSink, idx)
 	}
 	return &(w.vertices[idx])
 }

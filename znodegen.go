@@ -92,6 +92,8 @@ type ZExt_NodesWork struct {
 	qallocSupers     *ZExt_Superblock
 	upgradableToDeep bool
 
+	vertexSink []int
+
 	stkExtra map[*NodeInProcess]StkNodeExtraData
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
@@ -150,7 +152,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 	allSegs, intVertices := ZExt_createSegs(input.lines, input.sidedefs,
 		input.linesToIgnore, input.nodeType == NODETYPE_ZDOOM_EXTENDED ||
-			input.nodeType == NODETYPE_ZDOOM_COMPRESSED)
+			input.nodeType == NODETYPE_ZDOOM_COMPRESSED, input.sectors)
 	if len(allSegs) == 0 {
 		Log.Error("Failed to create any SEGs (BAD). Quitting (%s)\n.", time.Since(start))
 
@@ -291,6 +293,23 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		ZExt_PopulateVertexCache(workData.vertexCache, allSegs)
 
 	}
+
+	var pristineVertexMap *ZExt_VertexMap
+	var pristineVertexCache map[SimpleVertex]int
+	if input.stkNode {
+		if workData.vertexCache != nil {
+			pristineVertexCache = make(map[SimpleVertex]int)
+			for k, v := range workData.vertexCache {
+				pristineVertexCache[k] = v
+			}
+		}
+
+		if workData.vertexMap != nil {
+			pristineVertexMap = workData.vertexMap.Clone()
+			pristineVertexMap.w = &workData
+		}
+	}
+
 	if workData.solidMap != nil {
 
 		lineBox := GetLineBounds(workData.lines)
@@ -364,13 +383,17 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
-	if input.stkNode && config.Deterministic {
+	if input.stkNode {
 		if workData.nodeType == NODETYPE_VANILLA {
-			workData.RearrangeBSPVanilla(rootNode)
+
+			workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
+				pristineVertexMap)
 		} else if workData.nodeType == NODETYPE_DEEP {
-			workData.RearrangeBSPDeep(rootNode)
+			workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
+				pristineVertexMap)
 		} else {
-			workData.RearrangeBSPExtended(rootNode)
+			workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
+				pristineVertexMap)
 		}
 	}
 
@@ -589,23 +612,13 @@ func ZExt_doLinesIntersectDetail(c *ZExt_IntersectionContext) uint8 {
 func (w *ZExt_NodesWork) isItConvex(ts *ZExt_NodeSeg) int {
 	nonConvexityMode := NONCONVEX_ONESECTOR
 
-	var sector uint16
-	if ts.getFlip() != 0 {
-		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, false)].Sector
-	} else {
-		sector = w.sides[w.lines.GetSidedefIndex(ts.Linedef, true)].Sector
-	}
-	if w.sectors[sector].Tag < 900 {
+	sector := ts.sector
+	if ts.flags&SEG_FLAG_COALESCE == 0 {
 		line := ts.next
 		for line != nil {
-			var csector uint16
-			if line.getFlip() != 0 {
-				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, false)].Sector
-			} else {
-				csector = w.sides[w.lines.GetSidedefIndex(line.Linedef, true)].Sector
-			}
+			csector := line.sector
 			if csector != sector {
-				if w.sectors[csector].Tag < 900 {
+				if ts.flags&SEG_FLAG_COALESCE == 0 {
 					return NONCONVEX_MULTISECTOR
 				} else {
 
@@ -1235,7 +1248,8 @@ func ZExt_StkSingleSectorDivisorFromOption(userOption int) ZExt_SingleSectorDivi
 }
 
 func ZExt_createSegs(lines WriteableLines, sidedefs []Sidedef,
-	linesToIgnore []bool, extNode bool) ([]*ZExt_NodeSeg, []ZExt_NodeVertex) {
+	linesToIgnore []bool, extNode bool,
+	sectors []Sector) ([]*ZExt_NodeSeg, []ZExt_NodeVertex) {
 	res := make([]*ZExt_NodeSeg, 0, 65536)
 	var rootCs, lastCs *ZExt_NodeSeg
 
@@ -1280,7 +1294,7 @@ func ZExt_createSegs(lines WriteableLines, sidedefs []Sidedef,
 			firstSdef := lines.GetSidedefIndex(i, true)
 			secondSdef := lines.GetSidedefIndex(i, false)
 			ZExt_addSegsPerLine(myVertices, i, lines, vidx1, vidx2, firstSdef, secondSdef,
-				&rootCs, &lastCs, sidedefs, &res, extNode)
+				&rootCs, &lastCs, sidedefs, &res, extNode, sectors)
 		}
 
 	}
@@ -1303,7 +1317,7 @@ func ZExt_createSegs(lines WriteableLines, sidedefs []Sidedef,
 		}
 
 		ZExt_addSegsPerLine(myVertices, line, lines, vidx1, vidx2, firstSdef, secondSdef,
-			&rootCs, &lastCs, sidedefs, &res, extNode)
+			&rootCs, &lastCs, sidedefs, &res, extNode, sectors)
 		unculled = true
 	}
 
@@ -1317,7 +1331,7 @@ func ZExt_createSegs(lines WriteableLines, sidedefs []Sidedef,
 
 func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines WriteableLines, vidx1, vidx2 int,
 	firstSdef, secondSdef uint16, rootCs **ZExt_NodeSeg, lastCs **ZExt_NodeSeg, sidedefs []Sidedef,
-	res *[]*ZExt_NodeSeg, extNode bool) {
+	res *[]*ZExt_NodeSeg, extNode bool, sectors []Sector) {
 	var lcs, rcs *ZExt_NodeSeg
 	horizon := lines.IsHorizonEffect(i)
 	action := lines.GetAction(i)
@@ -1334,7 +1348,8 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 				sdef := &(sidedefs[firstSdef])
 				lcs = ZExt_addSeg(myVertices, i, vidx1, vidx2, rootCs,
 					sdef, lastCs, horizon, bamEffect,
-					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector),
+					sectors[sdef.Sector].Tag >= 900)
 				*res = append(*res, lcs)
 			}
 		} else {
@@ -1354,7 +1369,8 @@ func ZExt_addSegsPerLine(myVertices []ZExt_NodeVertex, i uint16, lines Writeable
 				sdef := &(sidedefs[secondSdef])
 				rcs = ZExt_addSeg(myVertices, i, vidx2, vidx1, rootCs,
 					sdef, lastCs, horizon, bamEffect,
-					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector),
+					sectors[sdef.Sector].Tag >= 900)
 				rcs.flags |= SEG_FLAG_FLIP
 				*res = append(*res, rcs)
 			}
@@ -1386,7 +1402,7 @@ func ZExt_storeNodeVertex(vs []ZExt_NodeVertex, x, y int, idx uint32) {
 }
 
 func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt_NodeSeg, sdef *Sidedef, lastCs **ZExt_NodeSeg, horizon bool, bamEffect BAMEffect,
-	precious bool) *ZExt_NodeSeg {
+	precious bool, coalesce bool) *ZExt_NodeSeg {
 	s := new(ZExt_NodeSeg)
 	if *lastCs == nil {
 		*rootCs = s
@@ -1413,6 +1429,9 @@ func ZExt_addSeg(vs []ZExt_NodeVertex, i uint16, vidx1, vidx2 int, rootCs **ZExt
 	s.Offset = 0
 	if precious {
 		s.flags |= SEG_FLAG_PRECIOUS
+	}
+	if coalesce {
+		s.flags |= SEG_FLAG_COALESCE
 	}
 
 	if bamEffect.Action == BAM_REPLACE {
@@ -4387,6 +4406,9 @@ func (w *ZExt_NodesWork) AddVertex(x, y ZNumber) *ZExt_NodeVertex {
 	v := w.vertexMap.SelectVertexClose(float64(x), float64(y))
 	if v.Id != -1 {
 		w.vertexExists++
+		if w.vertexSink != nil {
+			w.vertexSink = append(w.vertexSink, v.Id)
+		}
 		return &(w.vertices[v.Id])
 	}
 
@@ -4398,6 +4420,9 @@ func (w *ZExt_NodesWork) AddVertex(x, y ZNumber) *ZExt_NodeVertex {
 		Y:   ZNumber(v.Y),
 		idx: uint32(idx),
 	})
+	if w.vertexSink != nil {
+		w.vertexSink = append(w.vertexSink, idx)
+	}
 	return &(w.vertices[idx])
 }
 
@@ -6068,6 +6093,7 @@ type ZExt_RearrangeTracker struct {
 	totals             *NodesTotals
 	vertices           []ZExt_NodeVertex
 	subsectors         []SubSector
+	firstSegs          []int
 	segs               []Seg
 	deepSubsectors     []DeepSubSector
 	deepSegs           []DeepSeg
@@ -6075,30 +6101,33 @@ type ZExt_RearrangeTracker struct {
 	zdoomSegs          []ZdoomNode_Seg
 	verticeRenumbering []int
 	cntVerts           int
+	vertexCache        map[SimpleVertex]int
+	vertexMap          *ZExt_VertexMap
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess) {
-	if w.vertexExists > 0 {
+func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
+	pristineVertexCache map[SimpleVertex]int,
+	pristineVertexMap *ZExt_VertexMap) {
 
-		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
-		return
-	}
-	if len(w.segs) > 32767 || len(w.subsectors) > 32767 {
-
-		Log.Printf("RearrangeBSP: cancelled (segs / subsectors are out of guaranteed vanilla range).\n")
-		return
-	}
 	track := &ZExt_RearrangeTracker{
-		totals:     &NodesTotals{},
-		segs:       make([]Seg, 0, cap(w.segs)),
-		subsectors: make([]SubSector, 0, cap(w.subsectors)),
-		vertices:   make([]ZExt_NodeVertex, 0, cap(w.vertices)),
+		totals:      &NodesTotals{},
+		segs:        make([]Seg, 0, cap(w.segs)),
+		subsectors:  make([]SubSector, 0, cap(w.subsectors)),
+		firstSegs:   make([]int, len(w.subsectors)),
+		vertices:    make([]ZExt_NodeVertex, 0, cap(w.vertices)),
+		vertexCache: pristineVertexCache,
+		vertexMap:   pristineVertexMap,
 	}
-
 	if !w.identifyLinedefVertices(track) {
 		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
 		return
 	}
+	firstSeg := 0
+	for i := range w.subsectors {
+		track.firstSegs[i] = firstSeg
+		firstSeg += int(w.subsectors[i].SegCount)
+	}
+	w.rearrangeVertices(node, track)
 
 	w.rearrangeVanilla(node, track)
 	if w.totals.numSegs != track.totals.numSegs ||
@@ -6117,18 +6146,19 @@ func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess) {
 }
 
 func (w *ZExt_NodesWork) rearrangeVanilla(node *NodeInProcess, track *ZExt_RearrangeTracker) {
-	w.rearrangeVertices(node, track)
 	if node.nextL != nil {
 		w.rearrangeVanilla(node.nextL, track)
 	} else {
-		ssector := &(w.subsectors[node.LChild & ^w.SsectorMask])
-		node.LChild = w.putSubsector(ssector, track) | w.SsectorMask
+		ssidx := node.LChild & ^SSECTOR_DEEP_MASK
+		ssector := &(w.subsectors[ssidx])
+		node.LChild = w.putSubsector(ssector, track, ssidx) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
 		w.rearrangeVanilla(node.nextR, track)
 	} else {
-		ssector := &(w.subsectors[node.RChild & ^w.SsectorMask])
-		node.RChild = w.putSubsector(ssector, track) | w.SsectorMask
+		ssidx := node.RChild & ^SSECTOR_DEEP_MASK
+		ssector := &(w.subsectors[ssidx])
+		node.RChild = w.putSubsector(ssector, track, ssidx) | SSECTOR_DEEP_MASK
 	}
 }
 
@@ -6137,27 +6167,47 @@ func (w *ZExt_NodesWork) rearrangeVertices(node *NodeInProcess, track *ZExt_Rear
 	if !ok {
 		Log.Panic("rearrangeVertices: failed to retrieve extra information on node-in-process structure.\n")
 	}
-
 	for i := ex.vstart; i < ex.vend; i++ {
-		if track.verticeRenumbering[i] >= 0 {
-			Log.Panic("vertex already numbered\n")
+		v := w.vertexSink[i]
+		if track.verticeRenumbering[v] >= 0 {
+			continue
 		}
-		track.verticeRenumbering[i] = track.cntVerts
-		track.cntVerts++
+		siv := SimpleVertex{
+			X: int(w.vertices[v].X),
+			Y: int(w.vertices[v].Y),
+		}
+
+		v2, ex := track.vertexCache[siv]
+		if ex {
+			track.verticeRenumbering[v] = v2
+		} else {
+			track.vertexCache[siv] = track.cntVerts
+			track.verticeRenumbering[v] = track.cntVerts
+			track.cntVerts++
+			track.vertices = append(track.vertices, w.vertices[v])
+		}
+	}
+
+	if node.nextL != nil {
+		w.rearrangeVertices(node.nextL, track)
+	}
+	if node.nextR != nil {
+		w.rearrangeVertices(node.nextR, track)
 	}
 }
 
-func (w *ZExt_NodesWork) putSubsector(ssector *SubSector, track *ZExt_RearrangeTracker) uint32 {
+func (w *ZExt_NodesWork) putSubsector(ssector *SubSector, track *ZExt_RearrangeTracker, ssIdx uint32) uint32 {
 	idx := track.totals.numSSectors
 	track.totals.numSSectors++
-	v := w.putSegs(ssector, track)
+	v := w.putSegs(ssector, track, ssIdx)
 	track.subsectors = append(track.subsectors, v)
 	return uint32(idx)
 }
 
-func (w *ZExt_NodesWork) putSegs(orig *SubSector, track *ZExt_RearrangeTracker) SubSector {
+func (w *ZExt_NodesWork) putSegs(orig *SubSector, track *ZExt_RearrangeTracker, ssIdx uint32) SubSector {
 	firstSeg := track.totals.numSegs
-	for _, seg := range w.segs[orig.FirstSeg : orig.FirstSeg+orig.SegCount] {
+	for _, seg := range w.segs[track.firstSegs[ssIdx] : track.firstSegs[ssIdx]+
+		int(orig.SegCount)] {
 		seg2 := seg
 		w.renumberSegVertices(&seg2, track)
 		track.segs = append(track.segs, seg2)
@@ -6221,25 +6271,30 @@ func (w *ZExt_NodesWork) identifyLinedefVertices(track *ZExt_RearrangeTracker) b
 	}
 	Log.Printf("debug: cntVerts (original) == %d\n", track.cntVerts)
 	track.verticeRenumbering = translate
+
+	for i := 0; i < track.cntVerts; i++ {
+		track.vertices = append(track.vertices, w.vertices[i])
+	}
 	return true
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPDeep(node *NodeInProcess) {
-	if w.vertexExists > 0 {
-		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
-		return
-	}
+func (w *ZExt_NodesWork) RearrangeBSPDeep(node *NodeInProcess,
+	pristineVertexCache map[SimpleVertex]int,
+	pristineVertexMap *ZExt_VertexMap) {
 
 	track := &ZExt_RearrangeTracker{
 		totals:         &NodesTotals{},
 		deepSegs:       make([]DeepSeg, 0, cap(w.deepSegs)),
 		deepSubsectors: make([]DeepSubSector, 0, cap(w.deepSubsectors)),
 		vertices:       make([]ZExt_NodeVertex, 0, cap(w.vertices)),
+		vertexCache:    pristineVertexCache,
+		vertexMap:      pristineVertexMap,
 	}
 	if !w.identifyLinedefVertices(track) {
 		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
 		return
 	}
+	w.rearrangeVertices(node, track)
 	w.rearrangeDeep(node, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
@@ -6257,18 +6312,17 @@ func (w *ZExt_NodesWork) RearrangeBSPDeep(node *NodeInProcess) {
 }
 
 func (w *ZExt_NodesWork) rearrangeDeep(node *NodeInProcess, track *ZExt_RearrangeTracker) {
-	w.rearrangeVertices(node, track)
 	if node.nextL != nil {
 		w.rearrangeDeep(node.nextL, track)
 	} else {
-		ssector := &(w.deepSubsectors[node.LChild & ^w.SsectorMask])
-		node.LChild = w.putDeepSubsector(ssector, track) | w.SsectorMask
+		ssector := &(w.deepSubsectors[node.LChild & ^SSECTOR_DEEP_MASK])
+		node.LChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
 		w.rearrangeDeep(node.nextR, track)
 	} else {
-		ssector := &(w.deepSubsectors[node.RChild & ^w.SsectorMask])
-		node.RChild = w.putDeepSubsector(ssector, track) | w.SsectorMask
+		ssector := &(w.deepSubsectors[node.RChild & ^SSECTOR_DEEP_MASK])
+		node.RChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 }
 
@@ -6308,48 +6362,47 @@ func (w *ZExt_NodesWork) renumberDeepSegVertices(seg *DeepSeg,
 	seg.EndVertex = uint32(track.verticeRenumbering[e])
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPExtended(node *NodeInProcess) {
-	if w.vertexExists > 0 {
-		Log.Printf("RearrangeBSP: cancelled (vertex deduplication was in effect, correct rearrangement is not supported in this case)\n")
-		return
-	}
+func (w *ZExt_NodesWork) RearrangeBSPExtended(node *NodeInProcess,
+	pristineVertexCache map[SimpleVertex]int,
+	pristineVertexMap *ZExt_VertexMap) {
 
 	track := &ZExt_RearrangeTracker{
 		totals:          &NodesTotals{},
 		zdoomSegs:       make([]ZdoomNode_Seg, 0, cap(w.zdoomSegs)),
 		zdoomSubsectors: make([]uint32, 0, cap(w.zdoomSubsectors)),
+		vertexCache:     pristineVertexCache,
+		vertexMap:       pristineVertexMap,
+		vertices:        make([]ZExt_NodeVertex, 0, cap(w.vertices)),
 	}
 	w.initTranslateVectorForExtended(track)
+	w.rearrangeExtendedVertices(node, track)
 	w.rearrangeExtended(node, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
-		uint32(track.cntVerts) != (uint32(len(w.vertices))-
-			w.zdoomVertexHeader.ReusedOriginalVertices) {
+		uint32(track.cntVerts) != uint32(len(track.vertices)) {
 		Log.Panic("RearrangeBSP: BSP structures length not identical after rearrangement segs:%d:%d ssectors:%d:%d verts:%d:%d\n",
 			w.totals.numSegs, track.totals.numSegs,
 			w.totals.numSSectors, track.totals.numSSectors,
-			track.cntVerts, uint32(len(w.vertices))-
-				w.zdoomVertexHeader.ReusedOriginalVertices)
+			track.cntVerts, uint32(len(track.vertices)))
 	}
 	w.zdoomSegs = track.zdoomSegs
 	w.zdoomSubsectors = track.zdoomSubsectors
-	w.reallyRearrangeExtendedVertices(track.verticeRenumbering)
+	w.reallyRearrangeExtendedVertices(track.verticeRenumbering, track)
 	Log.Printf("RearrangeBSP: done\n")
 }
 
 func (w *ZExt_NodesWork) rearrangeExtended(node *NodeInProcess, track *ZExt_RearrangeTracker) {
-	w.rearrangeExtendedVertices(node, track)
 	if node.nextL != nil {
 		w.rearrangeExtended(node.nextL, track)
 	} else {
-		ssector := node.LChild & ^w.SsectorMask
-		node.LChild = w.putExtendedSubsector(ssector, track) | w.SsectorMask
+		ssector := node.LChild & ^SSECTOR_DEEP_MASK
+		node.LChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
 		w.rearrangeExtended(node.nextR, track)
 	} else {
-		ssector := node.RChild & ^w.SsectorMask
-		node.RChild = w.putExtendedSubsector(ssector, track) | w.SsectorMask
+		ssector := node.RChild & ^SSECTOR_DEEP_MASK
+		node.RChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 }
 
@@ -6381,30 +6434,35 @@ func (w *ZExt_NodesWork) renumberExtendedSegVertices(seg *ZdoomNode_Seg,
 	track *ZExt_RearrangeTracker) {
 	reused := w.zdoomVertexHeader.ReusedOriginalVertices
 	if seg.StartVertex >= reused {
-		s := seg.StartVertex - reused
+		s := seg.StartVertex
 		if track.verticeRenumbering[s] < 0 {
 			Log.Panic("vertex was not renumbered at proper place\n")
 		}
-		seg.StartVertex = uint32(track.verticeRenumbering[s]) + reused
+		seg.StartVertex = uint32(track.verticeRenumbering[s])
 	}
 	if seg.EndVertex >= reused {
-		e := seg.EndVertex - reused
+		e := seg.EndVertex
 		if track.verticeRenumbering[e] < 0 {
 			Log.Panic("vertex was not renumbered at proper place\n")
 		}
-		seg.EndVertex = uint32(track.verticeRenumbering[e]) + reused
+		seg.EndVertex = uint32(track.verticeRenumbering[e])
 	}
 }
 
 func (w *ZExt_NodesWork) initTranslateVectorForExtended(track *ZExt_RearrangeTracker) {
-	numVerts := uint32(len(w.vertices) -
-		int(w.zdoomVertexHeader.ReusedOriginalVertices))
+	numVerts := uint32(len(w.vertices))
 	translate := make([]int, numVerts)
 	track.cntVerts = 0
 	for i, _ := range translate {
 		translate[i] = -1
 	}
 	track.verticeRenumbering = translate
+	for i := 0; i < int(w.zdoomVertexHeader.ReusedOriginalVertices); i++ {
+		track.vertices = append(track.vertices, w.vertices[i])
+		track.cntVerts++
+		translate[i] = i
+	}
+
 }
 
 func (w *ZExt_NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
@@ -6413,30 +6471,48 @@ func (w *ZExt_NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
 	if !ok {
 		Log.Panic("rearrangeExtendedVertices: failed to retrieve extra information on node-in-process structure.\n")
 	}
-	reused := w.zdoomVertexHeader.ReusedOriginalVertices
-	dstart := ex.vstart - int64(reused)
-	dend := ex.vend - int64(reused)
-	for i := dstart; i < dend; i++ {
-		if track.verticeRenumbering[i] >= 0 {
-			Log.Panic("vertex already numbered\n")
+
+	for i := ex.vstart; i < ex.vend; i++ {
+		v := w.vertexSink[i]
+		vv := w.vertices[v]
+
+		fv := track.vertexMap.SelectVertexExact(float64(vv.X), float64(vv.Y),
+			track.cntVerts)
+		if fv.Id != track.cntVerts {
+			track.verticeRenumbering[v] = fv.Id
+		} else {
+			nv := track.cntVerts
+			track.verticeRenumbering[v] = nv
+			track.vertices = append(track.vertices, ZExt_NodeVertex{
+				X:   ZNumber(fv.X),
+				Y:   ZNumber(fv.Y),
+				idx: uint32(nv),
+			})
+			track.cntVerts++
 		}
-		track.verticeRenumbering[i] = track.cntVerts
-		track.cntVerts++
+	}
+
+	if node.nextL != nil {
+		w.rearrangeExtendedVertices(node.nextL, track)
+	}
+	if node.nextR != nil {
+		w.rearrangeExtendedVertices(node.nextR, track)
 	}
 }
 
-func (w *ZExt_NodesWork) reallyRearrangeExtendedVertices(translate []int) {
+func (w *ZExt_NodesWork) reallyRearrangeExtendedVertices(translate []int,
+	track *ZExt_RearrangeTracker) {
 	reused := w.zdoomVertexHeader.ReusedOriginalVertices
-	if len(translate) != (len(w.vertices) - int(reused)) {
+	if len(translate) != len(w.vertices) {
 		Log.Panic("reallyRearrangeExtendedVertices: failed translation (length don't match) %d != %d",
-			len(translate), len(w.vertices)-int(reused))
+			len(translate), len(w.vertices))
 	}
-	newVertices := make([]ZExt_NodeVertex, len(w.vertices))
+	newVertices := track.vertices
 	for i, _ := range w.vertices[:reused] {
 		newVertices[i] = w.vertices[i]
 	}
 	for i, _ := range w.vertices[reused:] {
-		newVertices[uint32(translate[i])+reused] =
+		newVertices[uint32(translate[i])] =
 			w.vertices[uint32(i)+reused]
 	}
 	w.vertices = newVertices
@@ -6468,6 +6544,7 @@ type ZExt_StkQueueTask struct {
 func ZExt_StkEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
 	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
 	w.parts = make([]*ZExt_NodeSeg, 0)
+	w.vertexSink = make([]int, 0, cap(w.vertices))
 
 	queue := &ZExt_StkQueue{}
 
@@ -6505,7 +6582,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 
 		partsegs := make([]PartSeg, 0)
 
-		vstart := int64(len(w.vertices))
+		vstart := int64(len(w.vertexSink))
 		if singleSectorMode {
 			w.stkDivisorSS(w, ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)
@@ -6513,7 +6590,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 			w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)
 		}
-		vend := int64(len(w.vertices))
+		vend := int64(len(w.vertexSink))
 		super = nil
 		res.X = int16(w.nodeX)
 		res.Y = int16(w.nodeY)
@@ -6601,10 +6678,10 @@ func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox
 
 	w.totals.numNodes++
 	partsegs := make([]PartSeg, 0)
-	vstart := int64(len(w.vertices))
+	vstart := int64(len(w.vertexSink))
 	w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super, &rightsSuper,
 		&leftsSuper, &partsegs)
-	vend := int64(len(w.vertices))
+	vend := int64(len(w.vertexSink))
 	super = nil
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)

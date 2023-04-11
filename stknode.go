@@ -114,6 +114,7 @@ const ( // enumeration for StkQueueTask.action - notably, ready convex sectors a
 func StkEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess {
 	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
 	w.parts = make([]*NodeSeg, 0) // FIXME debug - it should not be created here, I think. Then again...
+	w.vertexSink = make([]int, 0, cap(w.vertices))
 
 	queue := &StkQueue{}
 	// if making parameter for depthLimit, 0 should mean auto, -1 means
@@ -157,7 +158,7 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 		partsegs := make([]PartSeg, 0)
 
-		vstart := int64(len(w.vertices))
+		vstart := int64(len(w.vertexSink))
 		if singleSectorMode {
 			w.stkDivisorSS(w, ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)
@@ -165,7 +166,7 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)
 		}
-		vend := int64(len(w.vertices))
+		vend := int64(len(w.vertexSink))
 		super = nil // NOTE after DivideSegs return, super may no longer be valid
 		res.X = int16(w.nodeX)
 		res.Y = int16(w.nodeY)
@@ -278,10 +279,10 @@ func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	// Divide node in two
 	w.totals.numNodes++
 	partsegs := make([]PartSeg, 0)
-	vstart := int64(len(w.vertices))
+	vstart := int64(len(w.vertexSink))
 	w.DivideSegsForSingleSector(ts, &rights, &lefts, bbox, super, &rightsSuper,
 		&leftsSuper, &partsegs)
-	vend := int64(len(w.vertices))
+	vend := int64(len(w.vertexSink))
 	super = nil // NOTE after DivideSegs return, super may no longer be valid
 	res.X = int16(w.nodeX)
 	res.Y = int16(w.nodeY)

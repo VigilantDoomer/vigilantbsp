@@ -218,7 +218,8 @@ func hitmapAccAllIdx(i, j int, hiI, hiJ int, hitmap []int) int {
 // either (handled by culler)
 // 5. Fast/remote scroller effect dummy lines (linesToIgnore[i] == true)
 func createSegs(lines WriteableLines, sidedefs []Sidedef,
-	linesToIgnore []bool, extNode bool) ([]*NodeSeg, []NodeVertex) {
+	linesToIgnore []bool, extNode bool,
+	sectors []Sector) ([]*NodeSeg, []NodeVertex) {
 	res := make([]*NodeSeg, 0, 65536)
 	var rootCs, lastCs *NodeSeg
 	// This is responsible for handling for which lines we don't create segs,
@@ -270,7 +271,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 			firstSdef := lines.GetSidedefIndex(i, true)
 			secondSdef := lines.GetSidedefIndex(i, false)
 			addSegsPerLine(myVertices, i, lines, vidx1, vidx2, firstSdef, secondSdef,
-				&rootCs, &lastCs, sidedefs, &res, extNode)
+				&rootCs, &lastCs, sidedefs, &res, extNode, sectors)
 		}
 
 	}
@@ -299,7 +300,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 		}
 		// We need to add segs for this line after all.
 		addSegsPerLine(myVertices, line, lines, vidx1, vidx2, firstSdef, secondSdef,
-			&rootCs, &lastCs, sidedefs, &res, extNode)
+			&rootCs, &lastCs, sidedefs, &res, extNode, sectors)
 		unculled = true
 	}
 
@@ -314,7 +315,7 @@ func createSegs(lines WriteableLines, sidedefs []Sidedef,
 
 func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vidx1, vidx2 int,
 	firstSdef, secondSdef uint16, rootCs **NodeSeg, lastCs **NodeSeg, sidedefs []Sidedef,
-	res *[]*NodeSeg, extNode bool) {
+	res *[]*NodeSeg, extNode bool, sectors []Sector) {
 	var lcs, rcs *NodeSeg
 	horizon := lines.IsHorizonEffect(i)
 	action := lines.GetAction(i)
@@ -333,7 +334,8 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 				sdef := &(sidedefs[firstSdef])
 				lcs = addSeg(myVertices, i, vidx1, vidx2, rootCs,
 					sdef, lastCs, horizon, bamEffect,
-					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector),
+					sectors[sdef.Sector].Tag >= 900)
 				*res = append(*res, lcs)
 			}
 		} else {
@@ -353,7 +355,8 @@ func addSegsPerLine(myVertices []NodeVertex, i uint16, lines WriteableLines, vid
 				sdef := &(sidedefs[secondSdef])
 				rcs = addSeg(myVertices, i, vidx2, vidx1, rootCs,
 					sdef, lastCs, horizon, bamEffect,
-					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector))
+					preciousLine && !lines.SectorIgnorePrecious(sdef.Sector),
+					sectors[sdef.Sector].Tag >= 900)
 				rcs.flags |= SEG_FLAG_FLIP
 				*res = append(*res, rcs)
 			}
@@ -394,7 +397,7 @@ func storeNodeVertex(vs []NodeVertex, x, y int, idx uint32) {
 
 func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	sdef *Sidedef, lastCs **NodeSeg, horizon bool, bamEffect BAMEffect,
-	precious bool) *NodeSeg {
+	precious bool, coalesce bool) *NodeSeg {
 	s := new(NodeSeg)
 	if *lastCs == nil {
 		*rootCs = s
@@ -421,6 +424,9 @@ func addSeg(vs []NodeVertex, i uint16, vidx1, vidx2 int, rootCs **NodeSeg,
 	s.Offset = 0
 	if precious {
 		s.flags |= SEG_FLAG_PRECIOUS
+	}
+	if coalesce {
+		s.flags |= SEG_FLAG_COALESCE
 	}
 
 	if bamEffect.Action == BAM_REPLACE { // zokumbsp actions 1081, 1083

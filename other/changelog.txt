@@ -14,6 +14,9 @@ v0.85a
 	RMB options that are assumed to break symmetry are: BLIND, SAFE, INCLUDE, EXCLUDE, LEFT, RIGHT, ONE (the last three are not yet implemented, but are read nonetheless 
 		and will block this optimization). Parameters to these options are not checked, only the presence of options.
 	Combination of GROUP with some RMB options (for example, DISTANCE or LINE) can also prevent this optimization from taking effect, even if the produced reject is symmetric.
+- RMB enhancement: less memory used to process options that specify "length in sector units" 
+- As a consequence of previous two changes, you might succeed in building reject on 32-bit system in some cases where previous versions would fail
+	It still depends on whether you will have enough memory available (process being limited to 2Gb on 32-bit systems)
 - RMB change: LINE effect can no longer be overridden by other options, including not yet implemented RIGHT and LEFT specified on the same linedef
 - RMB change: specifying both LEFT and RIGHT on the same linedef results in the same effect as applying LINE to that linedef
 	Outside of this combination, LEFT and RIGHT take no effect as they are not yet implemented

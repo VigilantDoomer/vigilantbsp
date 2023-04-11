@@ -235,6 +235,10 @@ type RejGroup struct {
 	// up to date (derived from sectors neighbors). Neighbors of groups are
 	// always legal groups, and group index is index in RejectWork.groups
 	neighbors []int
+	// minRepresentative is a sector in parent's group with a minimum index
+	// needs computeGroupNeighbors to be made correct for sectors that are not
+	// legal
+	minRepresentative int
 }
 
 // goroutine
@@ -367,7 +371,7 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 		// Blockmap will be needed a little bit later, do other tasks meanwhile
 		r.createSectorInfo()
 		if r.hasGroups {
-			r.computeGroupNeighbors()
+			computeGroupNeighbors(r.groups, r.sectors)
 		}
 		r.finishLineSetup()
 		r.eliminateTrivialCases()
@@ -1760,38 +1764,24 @@ func (r *RejectWork) forceVisibility(i, j int, visibility uint8) {
 	}
 }
 
-// Has same quirks as forceVisibility, but doesn't override visibility, but
-// instead toggles a corresponding bit set on
-func (r *RejectWork) orMaskVisibility(i, j int, visibility uint8) {
-	if !r.hasGroups {
-		*(r.rejectTableIJ(i, j)) |= visibility
-		return
-	}
-	groupI := r.groups[i].sectors
-	groupJ := r.groups[j].sectors
-	for _, i2 := range groupI {
-		for _, j2 := range groupJ {
-			*(r.rejectTableIJ(i2, j2)) |= visibility
-		}
-	}
-}
-
-func (r *RejectWork) computeGroupNeighbors() {
-	if r.groups[0].neighbors != nil {
+func computeGroupNeighbors(groups []RejGroup, sectors []RejSector) {
+	if groups[0].neighbors != nil {
 		Log.Error("computeGroupNeighbors called after group neighbors were already computed. (Programmer error)\n")
 		return
 	}
-	for i, _ := range r.groups {
-		r.groups[i].neighbors = make([]int, 0)
+	for i, _ := range groups {
+		groups[i].minRepresentative =
+			groups[groups[i].parent].minRepresentative
+		groups[i].neighbors = make([]int, 0)
 		dupChecker := make(map[int]bool)
-		for _, si := range r.groups[i].sectors {
-			for _, nei := range r.sectors[si].neighbors {
+		for _, si := range groups[i].sectors {
+			for _, nei := range sectors[si].neighbors {
 				if nei == nil {
 					break
 				}
-				gi := r.groups[nei.index].parent
+				gi := groups[nei.index].parent
 				if gi != i && !dupChecker[gi] {
-					r.groups[i].neighbors = append(r.groups[i].neighbors, gi)
+					groups[i].neighbors = append(groups[i].neighbors, gi)
 					dupChecker[gi] = true
 				}
 			}

@@ -248,8 +248,7 @@ func (o *DoomLinedefs) PruneUnusedVertices() {
 		s := int(o.linedefs[i].StartVertex)
 		e := int(o.linedefs[i].EndVertex)
 		if s >= numVerts || e >= numVerts {
-			// TODO this should go to stderr
-			Log.Printf("Linedef %d has vertex out of range\n", i)
+			Log.Error("Linedef %d has vertex out of range\n", i)
 		}
 		translate[s] = 0
 		translate[e] = 0
@@ -267,8 +266,7 @@ func (o *DoomLinedefs) PruneUnusedVertices() {
 		s := translate[o.linedefs[i].StartVertex]
 		e := translate[o.linedefs[i].EndVertex]
 		if s >= usedVerts || e >= usedVerts {
-			// TODO Internal error
-			Log.Printf("Trouble in PruneUnusedVertices: Renumbering\n")
+			Log.Error("Trouble in PruneUnusedVertices: Renumbering\n")
 		}
 		o.linedefs[i].StartVertex = uint16(s)
 		o.linedefs[i].EndVertex = uint16(e)
@@ -282,15 +280,14 @@ func (o *DoomLinedefs) PruneUnusedVertices() {
 	}
 	numVerts = usedVerts
 	if numVerts == 0 {
-		// TODO stderr
-		Log.Printf("Couldn't find any used Vertices\n")
+		Log.Error("Couldn't find any used vertices (bad)\n")
 	}
 	// Cut the array to the number of vertices used
 	o.vertices = o.vertices[:numVerts]
-	if numVerts > 65535 {
-		// TODO stderr, cause nodes builder can only add more, and this is already too much
-		Log.Printf("The number of vertices remains too big for any port despite the pruning. %d > %d", numVerts, 65535)
-	} else if numVerts > 32767 {
+	// NOTE since only vertices that are referenced from linedefs (via uint16
+	// field) remain, the limit for ports that support unsigned simply can't
+	// be exceeded, thus only check for vanilla/signed limits makes sense
+	if numVerts > 32767 {
 		Log.Printf("The number of vertices remains too big for vanilla despite the pruning. %d > %d", numVerts, 32767)
 	}
 }
@@ -498,9 +495,10 @@ func (o *HexenLinedefs) PruneUnusedVertices() {
 	}
 	// Cut the array to the number of vertices used
 	o.vertices = o.vertices[:numVerts]
-	if numVerts > 65535 {
-		Log.Error("The number of vertices remains too big for any port despite the pruning. %d > %d", numVerts, 65535)
-	} else if numVerts > 32767 {
+	// NOTE since only vertices that are referenced from linedefs (via uint16
+	// field) remain, the limit for ports that support unsigned simply can't
+	// be exceeded, thus only check for vanilla/signed limits makes sense
+	if numVerts > 32767 {
 		Log.Printf("The number of vertices remains too big for vanilla despite the pruning. %d > %d", numVerts, 32767)
 	}
 }

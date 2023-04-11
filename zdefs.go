@@ -156,6 +156,9 @@ func (w *NodesWork) ZAddVertex_Proto(x, y Number) *NodeVertex {
 	v := w.vertexMap.SelectVertexClose(float64(x), float64(y))
 	if v.Id != -1 { // already exists
 		w.vertexExists++
+		if w.vertexSink != nil {
+			w.vertexSink = append(w.vertexSink, v.Id)
+		}
 		return &(w.vertices[v.Id])
 	}
 
@@ -169,6 +172,9 @@ func (w *NodesWork) ZAddVertex_Proto(x, y Number) *NodeVertex {
 		Y:   Number(v.Y),
 		idx: uint32(idx),
 	})
+	if w.vertexSink != nil {
+		w.vertexSink = append(w.vertexSink, idx)
+	}
 	return &(w.vertices[idx])
 }
 

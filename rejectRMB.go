@@ -63,6 +63,7 @@ func (fr *RMBFrame) LoadGroups(numSectors int) (bool, []RejGroup) {
 		ret[i].sectors = make([]int, 1)
 		ret[i].sectors[0] = i
 		ret[i].parent = i
+		ret[i].minRepresentative = i
 	}
 	return fr.loadGroupsForFrame(ret), ret
 }
@@ -112,6 +113,9 @@ func (fr *RMBFrame) loadGroupsForFrame(groups []RejGroup) bool {
 				}
 				b1 = true
 				groups[grI].sectors = append(groups[grI].sectors, v)
+				if v < groups[grI].minRepresentative {
+					groups[grI].minRepresentative = v
+				}
 				groups[v].legal = false
 				groups[v].parent = grI
 				dupChecker[v] = true
@@ -577,11 +581,15 @@ func (r *RejectWork) CreateDistanceTable() {
 	// several linedefs to be defined, which are also bound by 65536 limit),
 	// memory consumption, in practice, will be several hundreds of megabytes
 	// at most. Gigabytes are unlikely.
-	// This means we are not expecting an overflow condition to be reached on
-	// 32-bit systems when computing table size
-	r.distanceTable = make([]uint16, r.numSectors*r.numSectors)
-	for i, _ := range r.distanceTable {
-		r.distanceTable[i] = 65535 // maximum possible value for uint16
+	// April 2023: since distanceTable is symmetric, decided to store it
+	// compactly nonetheless. Just allocating r.numSectors extra at the end,
+	// to simplify logic to populate it with BFS
+	tableSize := uint64(r.numSectors+1)*uint64(r.numSectors) -
+		uint64(r.numSectors-1)*uint64(r.numSectors)/2
+	dtableWorkData := make([]uint16, tableSize)
+	r.distanceTable = dtableWorkData[:tableSize-uint64(r.numSectors)]
+	for i, _ := range dtableWorkData {
+		dtableWorkData[i] = 65535 // maximum possible value for uint16
 	}
 
 	// Problem definition:
@@ -593,17 +601,22 @@ func (r *RejectWork) CreateDistanceTable() {
 	queue := CreateRingU16(uint32(numSectors))
 	if r.hasGroups {
 		// In this case, BFS needs to work on group graph not sector graph
-		r.maxLength = r.distanceTableFromGroups(r.distanceTable, queue,
+		r.maxLength = r.distanceTableFromGroups(dtableWorkData, queue,
 			numSectors)
 		return
 	}
 	length := uint16(0)
+	offset := 0
 	for i := 0; i < numSectors; i++ {
-		itLength := r.BFS(r.distanceTable[r.numSectors*i:r.numSectors*(i+1)],
+		itLength := BFS(r.sectors, dtableWorkData[offset:offset+r.numSectors],
 			uint16(i), queue)
 		if length < itLength {
 			length = itLength
 		}
+		// Only data for indices i<=j is stored
+		copy(dtableWorkData[offset:offset+numSectors-i],
+			dtableWorkData[offset+i:offset+numSectors])
+		offset += numSectors - i
 		// Resetting queue for reuse - probably not needed, since Queue should
 		// be empty always by the end of BFS
 		queue.Reset()
@@ -616,16 +629,16 @@ func (r *RejectWork) CreateDistanceTable() {
 // Fills a row of distanceTable with lengths of paths between source sector
 // (which is the number of row) and all other sectors (columns). Lengths are
 // computed using BFS, hence the name of function
-func (r *RejectWork) BFS(distanceRow []uint16, source uint16,
+func BFS(sectors []RejSector, distanceRow []uint16, source uint16,
 	queue *RingU16) uint16 {
-	visited := make([]bool, r.numSectors)
+	visited := make([]bool, len(sectors))
 	visited[source] = true
 	distanceRow[source] = 0
 	length := uint16(0)
 	queue.Enqueue(source)
 	for !queue.Empty() {
 		item := queue.Dequeue()
-		for _, neighbor := range r.sectors[item].neighbors {
+		for _, neighbor := range sectors[item].neighbors {
 			if neighbor == nil {
 				break
 			}
@@ -647,19 +660,20 @@ func (r *RejectWork) BFS(distanceRow []uint16, source uint16,
 func (r *RejectWork) distanceTableFromGroups(distanceTable []uint16,
 	queue *RingU16, numSectors int) uint16 {
 	length := uint16(0)
+	offset := 0
+
 	for i := 0; i < numSectors; i++ {
-		if !r.groups[i].legal {
-			// Skip rows for sectors grouped under other sectors
+		// Must populate longest rows, to be able to copy onto smaller ones
+		if r.groups[i].minRepresentative != i {
+			offset += numSectors - i
 			continue
 		}
-		distanceRow := r.distanceTable[r.numSectors*i : r.numSectors*(i+1)]
-		itLength := r.GroupBFS(distanceRow, uint16(i), queue)
+		parent := uint16(r.groups[i].parent) // GroupBFS supports only legal groups
+		distanceRow := distanceTable[offset : offset+numSectors]
+		itLength := GroupBFS(r.groups, distanceRow, parent, queue)
 		for grI, _ := range r.groups {
 			// After GroupBFS is done, now fill the slots of all "not legal"
-			// groups using data from legal groups they are a part of. That is,
-			// get the data for sectors that belong to groups heralded by other
-			// sector from that herald, for the computations were done on
-			// heralds only
+			// groups using data from legal groups they are a part of.
 			if !r.groups[grI].legal {
 				distanceRow[grI] = distanceRow[r.groups[grI].parent]
 			}
@@ -667,6 +681,9 @@ func (r *RejectWork) distanceTableFromGroups(distanceTable []uint16,
 		if length < itLength {
 			length = itLength
 		}
+		// Only data for indices i<=j is stored
+		copy(distanceRow[:numSectors-i], distanceRow[i:])
+		offset += numSectors - i
 		// Resetting queue for reuse - probably not needed, since Queue should
 		// be empty always by the end of BFS
 		queue.Reset()
@@ -674,10 +691,16 @@ func (r *RejectWork) distanceTableFromGroups(distanceTable []uint16,
 	// Now, similar to how cols in rows were copied from others, do some row
 	// copying
 	for i := 0; i < numSectors; i++ {
-		if !r.groups[i].legal {
-			herald := r.groups[i].parent
-			srcRow := r.distanceTable[r.numSectors*herald : r.numSectors*(herald+1)]
-			destRow := r.distanceTable[r.numSectors*i : r.numSectors*(i+1)]
+		herald := uint64(r.groups[i].minRepresentative)
+		ui := uint64(i)
+		if ui != herald {
+			// Then i > herald MUST hold
+			heraldStart := herald * (uint64(numSectors)<<1 + 1 - herald) >> 1
+			iStart := ui * (uint64(numSectors)<<1 + 1 - ui) >> 1
+
+			srcRow := distanceTable[heraldStart+
+				(ui-herald) : heraldStart+uint64(numSectors)-herald]
+			destRow := distanceTable[iStart : iStart+uint64(numSectors)-ui]
 			copy(destRow, srcRow)
 		}
 	}
@@ -690,16 +713,16 @@ func (r *RejectWork) distanceTableFromGroups(distanceTable []uint16,
 // only on legal groups as well, btw), certain items in distanceRow are not
 // reached by this method. The caller will instead set values to those items
 // from others in the row
-func (r *RejectWork) GroupBFS(distanceRow []uint16, source uint16,
+func GroupBFS(rejGroups []RejGroup, distanceRow []uint16, source uint16,
 	queue *RingU16) uint16 {
-	visited := make([]bool, r.numSectors)
+	visited := make([]bool, len(rejGroups))
 	visited[source] = true
 	distanceRow[source] = 0
 	length := uint16(0)
 	queue.Enqueue(source)
 	for !queue.Empty() {
 		item := queue.Dequeue()
-		for _, neighbor := range r.groups[item].neighbors {
+		for _, neighbor := range rejGroups[item].neighbors {
 			nIndex := uint16(neighbor)
 			if !visited[nIndex] {
 				visited[nIndex] = true
@@ -749,7 +772,11 @@ func (r *RejectWork) ApplyDistanceLimits() {
 }
 
 func (r *RejectWork) distanceTableIJ(i, j int) *uint16 {
-	return &(r.distanceTable[i*r.numSectors+j])
+	if i > j {
+		i, j = j, i
+	}
+	return &r.distanceTable[uint64(i)*(uint64(r.numSectors)<<1-1-uint64(i))>>1+
+		uint64(j)]
 }
 
 func (r *RejectWork) linesTooFarApart(srcLine, tgtLine *TransLine) bool {

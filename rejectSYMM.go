@@ -125,7 +125,7 @@ func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShare
 
 		r.createSectorInfo()
 		if r.hasGroups {
-			r.computeGroupNeighbors()
+			computeGroupNeighbors(r.groups, r.sectors)
 		}
 		r.finishLineSetup()
 		r.eliminateTrivialCases()
@@ -1064,43 +1064,6 @@ func (r *SymmetricRejectWork) forceVisibility(i, j int, visibility uint8) {
 	}
 }
 
-func (r *SymmetricRejectWork) orMaskVisibility(i, j int, visibility uint8) {
-	if !r.hasGroups {
-		*(r.rejectTableIJ(i, j)) |= visibility
-		return
-	}
-	groupI := r.groups[i].sectors
-	groupJ := r.groups[j].sectors
-	for _, i2 := range groupI {
-		for _, j2 := range groupJ {
-			*(r.rejectTableIJ(i2, j2)) |= visibility
-		}
-	}
-}
-
-func (r *SymmetricRejectWork) computeGroupNeighbors() {
-	if r.groups[0].neighbors != nil {
-		Log.Error("computeGroupNeighbors called after group neighbors were already computed. (Programmer error)\n")
-		return
-	}
-	for i, _ := range r.groups {
-		r.groups[i].neighbors = make([]int, 0)
-		dupChecker := make(map[int]bool)
-		for _, si := range r.groups[i].sectors {
-			for _, nei := range r.sectors[si].neighbors {
-				if nei == nil {
-					break
-				}
-				gi := r.groups[nei.index].parent
-				if gi != i && !dupChecker[gi] {
-					r.groups[i].neighbors = append(r.groups[i].neighbors, gi)
-					dupChecker[gi] = true
-				}
-			}
-		}
-	}
-}
-
 func (r *SymmetricRejectWork) NoProcess_TryLoad() bool {
 	if !(r.rmbFrame.IsNOPROCESSInEffect()) {
 		return false
@@ -1383,26 +1346,34 @@ func (fr *RMBFrame) SymmetricprocessEXCLUDEs(r *SymmetricRejectWork) {
 func (r *SymmetricRejectWork) CreateDistanceTable() {
 	Log.Verbose(1, "Reject: calculating sector distances for RMB effects (this may allocate a lot of memory)\n")
 
-	r.distanceTable = make([]uint16, r.numSectors*r.numSectors)
-	for i, _ := range r.distanceTable {
-		r.distanceTable[i] = 65535
+	tableSize := uint64(r.numSectors+1)*uint64(r.numSectors) -
+		uint64(r.numSectors-1)*uint64(r.numSectors)/2
+	dtableWorkData := make([]uint16, tableSize)
+	r.distanceTable = dtableWorkData[:tableSize-uint64(r.numSectors)]
+	for i, _ := range dtableWorkData {
+		dtableWorkData[i] = 65535
 	}
 
 	numSectors := r.numSectors
 	queue := CreateRingU16(uint32(numSectors))
 	if r.hasGroups {
 
-		r.maxLength = r.distanceTableFromGroups(r.distanceTable, queue,
+		r.maxLength = r.distanceTableFromGroups(dtableWorkData, queue,
 			numSectors)
 		return
 	}
 	length := uint16(0)
+	offset := 0
 	for i := 0; i < numSectors; i++ {
-		itLength := r.BFS(r.distanceTable[r.numSectors*i:r.numSectors*(i+1)],
+		itLength := BFS(r.sectors, dtableWorkData[offset:offset+r.numSectors],
 			uint16(i), queue)
 		if length < itLength {
 			length = itLength
 		}
+
+		copy(dtableWorkData[offset:offset+numSectors-i],
+			dtableWorkData[offset+i:offset+numSectors])
+		offset += numSectors - i
 
 		queue.Reset()
 	}
@@ -1410,44 +1381,20 @@ func (r *SymmetricRejectWork) CreateDistanceTable() {
 	r.maxLength = length
 }
 
-func (r *SymmetricRejectWork) BFS(distanceRow []uint16, source uint16,
-	queue *RingU16) uint16 {
-	visited := make([]bool, r.numSectors)
-	visited[source] = true
-	distanceRow[source] = 0
-	length := uint16(0)
-	queue.Enqueue(source)
-	for !queue.Empty() {
-		item := queue.Dequeue()
-		for _, neighbor := range r.sectors[item].neighbors {
-			if neighbor == nil {
-				break
-			}
-			nIndex := uint16(neighbor.index)
-			if !visited[nIndex] {
-				visited[nIndex] = true
-				queue.Enqueue(nIndex)
-				newDist := distanceRow[item] + 1
-				distanceRow[nIndex] = newDist
-				if length < newDist {
-					length = newDist
-				}
-			}
-		}
-	}
-	return length
-}
-
 func (r *SymmetricRejectWork) distanceTableFromGroups(distanceTable []uint16,
 	queue *RingU16, numSectors int) uint16 {
 	length := uint16(0)
-	for i := 0; i < numSectors; i++ {
-		if !r.groups[i].legal {
+	offset := 0
 
+	for i := 0; i < numSectors; i++ {
+
+		if r.groups[i].minRepresentative != i {
+			offset += numSectors - i
 			continue
 		}
-		distanceRow := r.distanceTable[r.numSectors*i : r.numSectors*(i+1)]
-		itLength := r.GroupBFS(distanceRow, uint16(i), queue)
+		parent := uint16(r.groups[i].parent)
+		distanceRow := distanceTable[offset : offset+numSectors]
+		itLength := GroupBFS(r.groups, distanceRow, parent, queue)
 		for grI, _ := range r.groups {
 
 			if !r.groups[grI].legal {
@@ -1458,40 +1405,24 @@ func (r *SymmetricRejectWork) distanceTableFromGroups(distanceTable []uint16,
 			length = itLength
 		}
 
+		copy(distanceRow[:numSectors-i], distanceRow[i:])
+		offset += numSectors - i
+
 		queue.Reset()
 	}
 
 	for i := 0; i < numSectors; i++ {
-		if !r.groups[i].legal {
-			herald := r.groups[i].parent
-			srcRow := r.distanceTable[r.numSectors*herald : r.numSectors*(herald+1)]
-			destRow := r.distanceTable[r.numSectors*i : r.numSectors*(i+1)]
-			copy(destRow, srcRow)
-		}
-	}
-	return length
-}
+		herald := uint64(r.groups[i].minRepresentative)
+		ui := uint64(i)
+		if ui != herald {
 
-func (r *SymmetricRejectWork) GroupBFS(distanceRow []uint16, source uint16,
-	queue *RingU16) uint16 {
-	visited := make([]bool, r.numSectors)
-	visited[source] = true
-	distanceRow[source] = 0
-	length := uint16(0)
-	queue.Enqueue(source)
-	for !queue.Empty() {
-		item := queue.Dequeue()
-		for _, neighbor := range r.groups[item].neighbors {
-			nIndex := uint16(neighbor)
-			if !visited[nIndex] {
-				visited[nIndex] = true
-				queue.Enqueue(nIndex)
-				newDist := distanceRow[item] + 1
-				distanceRow[nIndex] = newDist
-				if length < newDist {
-					length = newDist
-				}
-			}
+			heraldStart := herald * (uint64(numSectors)<<1 + 1 - herald) >> 1
+			iStart := ui * (uint64(numSectors)<<1 + 1 - ui) >> 1
+
+			srcRow := distanceTable[heraldStart+
+				(ui-herald) : heraldStart+uint64(numSectors)-herald]
+			destRow := distanceTable[iStart : iStart+uint64(numSectors)-ui]
+			copy(destRow, srcRow)
 		}
 	}
 	return length
@@ -1526,7 +1457,11 @@ func (r *SymmetricRejectWork) ApplyDistanceLimits() {
 }
 
 func (r *SymmetricRejectWork) distanceTableIJ(i, j int) *uint16 {
-	return &(r.distanceTable[i*r.numSectors+j])
+	if i > j {
+		i, j = j, i
+	}
+	return &r.distanceTable[uint64(i)*(uint64(r.numSectors)<<1-1-uint64(i))>>1+
+		uint64(j)]
 }
 
 func (r *SymmetricRejectWork) linesTooFarApart(srcLine, tgtLine *TransLine) bool {
@@ -1601,21 +1536,6 @@ func (r *SymmetricRejectWork) generateReportForFrame(rmbFrame *RMBFrame) bool {
 		ret = r.generateReportForFrame(rmbFrame.Parent)
 	}
 	return ret
-}
-
-func (r *SymmetricRejectWork) reportDoForDistance(w io.Writer, distance uint16) {
-	r.printfln(w, "# %s All sectors with LOS distance>%d are reported",
-		r.mapName, distance)
-	for i := 0; i < r.numSectors; i++ {
-		for j := i + 1; j < r.numSectors; j++ {
-
-			if *(r.distanceTableIJ(i, j)) > distance &&
-				!isHidden(*(r.rejectTableIJ(i, j))) &&
-				!isHidden(*(r.rejectTableIJ(j, i))) {
-				r.printfln(w, "%d,%d", i, j)
-			}
-		}
-	}
 }
 
 func (r *SymmetricRejectWork) printfln(w io.Writer, format string, a ...interface{}) {
@@ -2406,7 +2326,8 @@ func (r *SymmetricRejectWork) rejectTableIJ(i, j int) *uint8 {
 	if i > j {
 		i, j = j, i
 	}
-	return &(r.rejectTable[i*r.numSectors+j-((i*(i+1))>>1)])
+	return &r.rejectTable[uint64(i)*(uint64(r.numSectors)<<1-1-uint64(i))>>1+
+		uint64(j)]
 }
 
 func (r *SymmetricRejectWork) getResult() []byte {
@@ -2464,7 +2385,8 @@ func (r *SymmetricRejectWork) symmMoveIJ(i, j *int) {
 
 func (r *SymmetricRejectWork) prepareReject() {
 
-	tableSize := r.numSectors*r.numSectors - (r.numSectors-1)*r.numSectors/2 + 7
+	tableSize := uint64(r.numSectors)*uint64(r.numSectors) -
+		uint64(r.numSectors-1)*uint64(r.numSectors)/2 + 7
 	r.rejectTable = make([]uint8, tableSize, tableSize)
 	for i, _ := range r.rejectTable {
 		r.rejectTable[i] = 0
@@ -2473,6 +2395,20 @@ func (r *SymmetricRejectWork) prepareReject() {
 
 func (r *SymmetricRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {
 	return s.neighbors
+}
+
+func (r *SymmetricRejectWork) reportDoForDistance(w io.Writer, distance uint16) {
+	r.printfln(w, "# %s All sectors with LOS distance>%d are reported",
+		r.mapName, distance)
+	for i := 0; i < r.numSectors; i++ {
+		for j := i + 1; j < r.numSectors; j++ {
+
+			if *(r.distanceTableIJ(i, j)) > distance &&
+				!isHidden(*(r.rejectTableIJ(i, j))) {
+				r.printfln(w, "%d,%d", i, j)
+			}
+		}
+	}
 }
 func init() {
 	getSymmRejectWorkIntf = SymmetricgetRejectWorkIntf
