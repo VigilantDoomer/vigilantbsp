@@ -7,7 +7,7 @@ v0.85a
 - When multi-tree mode is used for node partitioning, output average time per tree at the end
 	This average is merely "full node build time" / "number of trees", so it is usually faster than a single tree build time 
 	by a factor equal to number of threads used (provided number of threads <= number of cores)
-- Multi-tree for visplane-awares modes are now sped up by using more memory by default, user can opt-out (see "Debug and other hidden parameters", "--speedtree")	
+- Multi-tree for visplane-aware modes are now sped up by using more memory by default, user can opt-out (see "Debug and other hidden parameters", "--speedtree")	
 - Improved reject builder performance, with especially major gains for maps with lots of sectors (>10000) in absence of RMB effects that break reject table symmetry
 - If reject table is known to be symmetric in advance, building reject will consume less memory than before 
 	When RMB options file is not present, reject table is guaranteed to be symmetric.

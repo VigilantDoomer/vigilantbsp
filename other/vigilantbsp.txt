@@ -13,7 +13,7 @@ distributed with the release of VigilantBSP.
 Document version
 ================
 
-The current document is up-to-date with 0.82a version of
+The current document is up-to-date with 0.85a version of
 VigilantBSP.
 
 Description
