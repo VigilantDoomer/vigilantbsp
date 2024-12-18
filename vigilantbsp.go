@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -85,7 +85,7 @@ func (fc *FileControl) OpenOutputFile(outputFileName string) (*os.File, string, 
 	var err error
 	if fc.tmp {
 		// Need a temporary file
-		fc.fout, err = CreateTemp(filepath.Dir(fc.inputFileName), "tmp")
+		fc.fout, err = os.CreateTemp(filepath.Dir(fc.inputFileName), "tmp")
 		if err == nil {
 			outputFileName = fc.fout.Name()
 		}

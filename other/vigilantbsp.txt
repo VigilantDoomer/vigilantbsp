@@ -1,7 +1,7 @@
 Author
 ======
 
-(c) 2022-2023 VigilantDoomer
+(c) 2022-2024 VigilantDoomer
 
 Document note
 =============
@@ -14,7 +14,9 @@ Document version
 ================
 
 The current document is up-to-date with 0.85a version of
-VigilantBSP.
+VigilantBSP. In some places, though, it actually refers to
+in-development, unreleased version that is projected to
+become v0.87a (subject to change).
 
 Description
 ===========
@@ -2222,7 +2224,18 @@ operating systems on both x86 (32-bit) and x86-64 (64-bit) platforms.
 The Go programming language infastructure allows building VigilantBSP
 on each one of those systems/platforms for each target.
 
-Other targets are not tested, and DOS support isn't even considered.
+For amd64 platform, there is also an alternate version of VigilantBSP,
+which only runs if certain instruction sets are available. Such altered
+versions are distributed with _avx2 suffix, that is "vigilantbsp_avx2"
+for GNU/Linux and "vigilantbsp_avx2.exe". To be specific, these
+alternate executables target so-called x86-64-v3 microarchitecture
+level. It is not yet established if these versions are better, this
+requires testing, so users wanting stable performance and guarantee
+that their computer is supported should use standard VigilantBSP
+executables instead.
+
+Other targets are not tested or compiled for, and DOS support isn't
+even considered.
 
 Section 13: Other node builders
 ===============================
