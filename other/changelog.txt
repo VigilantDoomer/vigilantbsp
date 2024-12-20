@@ -2,6 +2,11 @@ Changelog for VigilantBSP
 
 v0.87a (git in-development version, not released -- merely accumulating changes here)
 - Note: list of changes and version number are subject to change. This entry is more of a development log.
+- If output file is explicitly specified (via -o parameter) and is the same as input file, VigilantBSP will refuse to run and will print an error message.
+	Previously, at least on Linux systems it was possible to corrupt input file by specifying it as output as well.
+	Note: VigilantBSP relies on OS's capacity to identify if file is the same. It may not work on some operating systems, so it is best to
+		not expect that	VigilantBSP will always catch this.
+- Added --eject parameter. See "Debug and other hidden parameters"
 - Programmers: minimum Go version to compile VigilantBSP is bumped up to v1.19 (from v1.15).
 	As always, later versions can be used to compile (per Go compatibility promise for major v1.*).
 	v1.19 is the last version of Go to support Windows 7, so I'll try not to bump it any further for a long time.

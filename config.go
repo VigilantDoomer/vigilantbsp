@@ -271,6 +271,7 @@ type ProgramConfig struct {
 	TreeWidth          int  // width of hard tree
 	SpeedTree          bool // accelerate multitree at the cost of memory usage
 	SpeedTreeExplicit  bool // whether the user explicitly passed --speedtree on/off
+	Eject              bool // whether to only put rebuilt maps into output file and no other lumps
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -334,6 +335,7 @@ func init() {
 		FilterProhibitsLevels:  false,
 		SpeedTree:              false, // overridden dependent on other parameters if SpeedTreeExplicit == false
 		SpeedTreeExplicit:      false,
+		Eject:                  false,
 	})
 }
 

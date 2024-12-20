@@ -261,6 +261,10 @@ func (c *ProgramConfig) FromCommandLine() bool {
 							return false
 						}
 					}
+				} else if bytes.Equal([]byte(arg), []byte("--eject")) {
+					// user requested to transfer only rebuilt maps into new file
+					// and omit all other lumps
+					c.Eject = true
 				} else if bytes.HasPrefix([]byte(arg), []byte("--speedtree")) {
 					// Parameter to control whether use
 					ns, _ := readNumeric("--speedtree=", []byte(arg)[len("--speedtree=")-1:])
@@ -334,6 +338,10 @@ func (c *ProgramConfig) FromCommandLine() bool {
 	}
 	if outputModifier && !hasOutputFile {
 		Log.Error("Modifier '-o' was present without a file name following it - aborting.\n")
+		return false
+	}
+	if !hasOutputFile && c.Eject {
+		Log.Error("You must specify output file (with -o) when you pass --eject parameter")
 		return false
 	}
 	if c.Reject == REJECT_ZEROFILLED && c.UseRMB {

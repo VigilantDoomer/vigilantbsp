@@ -77,6 +77,7 @@ func (fc *FileControl) OpenInputFile(inputFileName string) (*os.File, error) {
 	fc.inputFileName = inputFileName
 	var err error
 	fc.fin, err = os.Open(inputFileName)
+	//fc.fin, err = os.OpenFile(inputFileName, os.O_RDONLY, 0) // wouldn't protect from opening same file as output with read-write access!
 	return fc.fin, err
 }
 
@@ -274,6 +275,7 @@ type ScheduledLump struct {
 	LevelFormat int
 	Level       []*ScheduledLump
 	RMBOptions  *RMBFrame
+	Drop        bool
 }
 
 type LevelValidity struct {
@@ -407,6 +409,16 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 	scheduleEntry := scheduleRoot
 	deltaCur := 0 // so as to update schedule to lump entry referencies for lumps not inside a level
 	for scheduleEntry != nil {
+		if scheduleEntry.Drop {
+			// TODO refactor level infrastructure and/or add test coverage
+			// Had enough trouble adding support for --eject, which required changes
+			// not only here but elsewhere. Very non-intuitive and hard to read
+			// Might consider this issue as blocking release?
+			nSize--
+			deltaCur--
+			scheduleEntry = scheduleEntry.Next
+			continue
+		}
 		oldMainEntryIdx := scheduleEntry.DirIndex // index valid in le
 		scheduleEntry.DirIndex += deltaCur        // index valid in leOut
 		nextScheduleEntry := scheduleEntry.Next
@@ -623,6 +635,22 @@ func main() {
 	config.InputFileName, _ = filepath.Abs(config.InputFileName)
 	if config.OutputFileName != "" {
 		config.OutputFileName, _ = filepath.Abs(config.OutputFileName)
+		// Now that we can perform --eject , this check is much warranted as
+		// user might have incentive to try to overcome the limitation (--eject
+		// makes output file required).
+		// Note that output file colliding with input file would produce bugs anyway.
+		// And apparently Linux the kernel indeed allowed to produce corrupt file
+		// in this case, and opening input file with read-only access and
+		// output file with exclusive read-write access doesn't prevent this.
+		// So this check is really not optional
+		f1, err1 := os.Stat(config.InputFileName)
+		f2, err2 := os.Stat(config.OutputFileName)
+		if err1 == nil && err2 == nil {
+			if os.SameFile(f1, f2) {
+				Log.Error("You cannot specify output file that maps to the same input file (whether via same path and name, or hardlinks, or symlinks)\n")
+				os.Exit(1)
+			}
+		}
 	}
 
 	mainFileControl := FileControl{}
@@ -703,7 +731,8 @@ func main() {
 		bname := ByteSliceBeforeTerm(entry.Name[:])
 		newAction := new(ScheduledLump)
 
-		moveToNew := true // becomes false if processing lump that belongs to a level
+		moveToNew := true             // becomes false if processing lump that belongs to a level
+		newAction.Drop = config.Eject // default to removal if Eject == true
 		if IsALevel(bname) {
 			// Check to see if I should rebuild this level, or just copy it
 			if CanRebuildThisLevel(bname) {
@@ -730,6 +759,7 @@ func main() {
 				validities = append(validities, *validity)
 				validity = &validities[len(validities)-1]
 				newAction.RMBOptions = RMB.LookupRMBFrameForMapMarker(bname)
+				newAction.Drop = false
 			} else {
 				// Just copy
 				Log.Verbose(1, "will not rebuild level %s\n", string(bname))
@@ -776,7 +806,7 @@ func main() {
 						&(validity.requisites), 1, true)
 					SetValiditySocket(sname, LUMP_CREATE,
 						&(validity.creatable), 1, true)
-
+					newAction.Drop = false
 				}
 			}
 		}
@@ -900,6 +930,10 @@ func main() {
 	wriBus := StartWriteBus(fout, le, curPos)
 	lvl := new(Level) // reusable
 	for action != nil {
+		if action.Drop {
+			action = action.Next
+			continue
+		}
 		// This part copies non-level lump (contents and directory entry) as well
 		// as a marker lump
 		// ! lumps that are part of a level are stored with the marker lump,
