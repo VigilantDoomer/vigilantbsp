@@ -2460,20 +2460,24 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 			case 1:
 				{
 					diff++
+					flat++
 				}
 			case 2:
 				{
 					diff--
+					flat++
 				}
-			}
-			if w.sectorHits[tot] >= 3 {
-				minors.SectorsSplit++
-			}
-			if w.sectorHits[tot] >= 4 {
-				unmerged++
-			}
-			if w.sectorHits[tot] != 0 {
-				flat++
+			case 3:
+				{
+					minors.SectorsSplit++
+					flat++
+				}
+			case 4, 5, 6, 7:
+				{
+					minors.SectorsSplit++
+					unmerged++
+					flat++
+				}
 			}
 		}
 

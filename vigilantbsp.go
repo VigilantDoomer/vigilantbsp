@@ -410,10 +410,6 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 	deltaCur := 0 // so as to update schedule to lump entry referencies for lumps not inside a level
 	for scheduleEntry != nil {
 		if scheduleEntry.Drop {
-			// TODO refactor level infrastructure and/or add test coverage
-			// Had enough trouble adding support for --eject, which required changes
-			// not only here but elsewhere. Very non-intuitive and hard to read
-			// Might consider this issue as blocking release?
 			nSize--
 			deltaCur--
 			scheduleEntry = scheduleEntry.Next

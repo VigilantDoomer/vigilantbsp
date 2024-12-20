@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -895,20 +895,24 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			case 1:
 				{
 					diff++
+					flat++
 				}
 			case 2:
 				{
 					diff--
+					flat++
 				}
-			}
-			if w.sectorHits[tot] >= 3 {
-				minors.SectorsSplit++
-			}
-			if w.sectorHits[tot] >= 4 {
-				unmerged++
-			}
-			if w.sectorHits[tot] != 0 {
-				flat++
+			case 3:
+				{
+					minors.SectorsSplit++
+					flat++
+				}
+			case 4, 5, 6, 7:
+				{
+					minors.SectorsSplit++
+					unmerged++
+					flat++
+				}
 			}
 		}
 
