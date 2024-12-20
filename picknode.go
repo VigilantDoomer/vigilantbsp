@@ -527,9 +527,8 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		/* Compute difference in number of sector
 		   references on each side of node line */
 		diff = 0
-		tot = 0
 		flat := 0
-		for ; tot < len(w.sectorHits); tot++ {
+		for tot := range w.sectorHits {
 			switch w.sectorHits[tot] {
 			case 1:
 				{
@@ -883,14 +882,13 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// Compute difference in number of _sector equivalencies_
 		// references on each side of node line
 		diff = 0
-		tot = 0
 		// And let's see how many sectors are actually hit, could it be we
 		// have only one at all? --VigilantDoomer
 		flat := 0
 		// Sectors that will generate multiple visplanes as the result of
 		// being split by partition line
 		unmerged := 0
-		for ; tot < len(w.sectorHits); tot++ {
+		for tot := range w.sectorHits {
 			switch w.sectorHits[tot] {
 			case 1:
 				{
@@ -1882,8 +1880,7 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 		previousPart = part // used for check above
 		cost := 0           // cost is most likely never used,
-		tot := 0
-		slen := Number(0) // length of partition that is incidental with segs
+		slen := Number(0)   // length of partition that is incidental with segs
 
 		w.zenScores = append(w.zenScores, DepthScoreBundle{})
 		bundle := &(w.zenScores[len(w.zenScores)-1])
@@ -1924,7 +1921,7 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 		// Count sectors on each side of partition line, and the split sectors
 		flat := 0
-		for tot = 0; tot < len(w.sectorHits); tot++ {
+		for tot := range w.sectorHits {
 			switch w.sectorHits[tot] {
 			case 0x0F:
 				{

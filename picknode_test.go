@@ -36,7 +36,7 @@ func BenchmarkHitsCrunchNew(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		for tot := 0; tot < len(hc.sectorHits); tot++ {
+		for tot := range hc.sectorHits {
 			switch hc.sectorHits[tot] {
 			case 1:
 				{

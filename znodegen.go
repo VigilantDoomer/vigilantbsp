@@ -2177,9 +2177,8 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		}
 
 		diff = 0
-		tot = 0
 		flat := 0
-		for ; tot < len(w.sectorHits); tot++ {
+		for tot := range w.sectorHits {
 			switch w.sectorHits[tot] {
 			case 1:
 				{
@@ -2450,12 +2449,11 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		}
 
 		diff = 0
-		tot = 0
 
 		flat := 0
 
 		unmerged := 0
-		for ; tot < len(w.sectorHits); tot++ {
+		for tot := range w.sectorHits {
 			switch w.sectorHits[tot] {
 			case 1:
 				{
@@ -3241,7 +3239,6 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 		}
 		previousPart = part
 		cost := 0
-		tot := 0
 		slen := ZNumber(0)
 
 		w.zenScores = append(w.zenScores, ZExt_DepthScoreBundle{})
@@ -3279,7 +3276,7 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 		}
 
 		flat := 0
-		for tot = 0; tot < len(w.sectorHits); tot++ {
+		for tot := range w.sectorHits {
 			switch w.sectorHits[tot] {
 			case 0x0F:
 				{
