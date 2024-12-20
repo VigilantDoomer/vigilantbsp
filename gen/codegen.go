@@ -1,7 +1,7 @@
 // Based on go fix utility copyright (C) 2014 The Go Authors. All rights reserved
 // Based on bundle utility authored by Russ Cox
 // Based on gocat utility authored by Joseph Naegele, 2015
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of build toolchain for VigilantBSP program.
 //
@@ -19,10 +19,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // The below directive doesn't seem to work (gen executable still being created)
-//// +build ignore
+// // +build ignore
 // The below one does, but now both cause LiteIDE to print out error trying
 // to build, which I need still to verify correctness...
-////go:build ignore
+// //go:build ignore
 package main
 
 // This file is not compiled into VigilantBSP executable ("+build ignore" directive
@@ -86,7 +86,7 @@ import (
 // in go documentation, see also https://github.com/golang/go/issues/13560
 const CODEGEN_SIGN = "// Code generated from other source files. DO NOT EDIT.\n"
 
-const COPYRIGHT_STR = `// Copyright (C) 2022-2023, VigilantDoomer
+const COPYRIGHT_STR = `// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //

@@ -1,5 +1,5 @@
 // Code generated from other source files. DO NOT EDIT.
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
