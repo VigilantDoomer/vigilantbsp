@@ -13,10 +13,8 @@ distributed with the release of VigilantBSP.
 Document version
 ================
 
-The current document is up-to-date with 0.85a version of
-VigilantBSP. In some places, though, it actually refers to
-in-development, unreleased version that is projected to
-become v0.87a (subject to change).
+The current document is up-to-date with 0.86a version of
+VigilantBSP.
 
 Description
 ===========
@@ -2183,26 +2181,14 @@ took 2h 22 m 35 seconds (with acceleration implicitly on as its the
 new default, peak memory usage around 1Gb)
 
 --eject
-Produce output file containing only rebuilt levels and no other lumps.
+Produce output file containing only rebuilt levels and NO other lumps.
 Requires to specify output file via -o parameter. Won't include levels
 that were omitted from being rebuilt via -!m: parameter in output file.
 
-The primary purpose is debugging VigilantBSP on wads published by community
-that include heavy resources. Via this options, levels can be detached
-into a separate wad file, against which different (development) versions
-of VigilantBSP can be run to determine if particular optimization idea
-is workable, doesn't introduces unexpected changes to output; or one
-can run a profiler against VigilantBSP rebuilding this level section.
-That is, time is saved when VigilantBSP works on a trimmed file with
-no bulk data to copy, and file I/O doesn't climb onto the top of
-profiler logs.
+It is possible to copy select levels without actually rebuilding them
+(and omit all other levels and lumps from resulting file):
 
-Other purposes are conceivable also.
-
-To copy select levels without rebuilding them and not copy any other
-lumps, use the following:
-
-	vigilantbsp -d -b- -n- -r- source.wad -m:map05+map07+map08+map25+map29 -o output-with-selected-levels-only.wad --eject
+	vigilantbsp -d -b- -n- -r- source.wad -m:map05+map07+map08+map25+map29 -o selected-levels-only.wad --eject
 
 
 Closing comments in regards to --memprofile and --cpuprofile options:
@@ -2246,7 +2232,7 @@ operating systems on both x86 (32-bit) and x86-64 (64-bit) platforms.
 The Go programming language infastructure allows building VigilantBSP
 on each one of those systems/platforms for each target.
 
-Since v0.87a version of VigilantBSP, for amd64 platform, there is also
+Since v0.86a version of VigilantBSP, for amd64 platform, there is also
 an alternate executable of VigilantBSP, which only runs if certain
 instruction sets are available. Such altered executables are distributed
 with _avx2 suffix, that is "vigilantbsp_avx2" for GNU/Linux

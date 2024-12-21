@@ -2084,6 +2084,10 @@ forblock:
 	}
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil {
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_Traditional(block.subs[0], part, tot, diff,
 			cost, bestcost, minors) {
 			return true
@@ -2126,6 +2130,10 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 	w.segAliasObj.UnvisitAll()
 
+	super.OptimizeSectorAddresses()
+	minSector, maxSectorPlusOne := int(super.sectors[0]),
+		int(super.sectors[len(super.sectors)-1])+1
+
 	for part := ts; part != nil; part = part.next {
 		if part.partner != nil && part.partner == previousPart {
 
@@ -2150,10 +2158,11 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 			PreciousSplit: 0,
 		}
 
-		w.sectorHits[0] = 0
-		sectorCount := len(w.sectorHits)
-		for j := 1; j < sectorCount; j = j << 1 {
-			copy(w.sectorHits[j:], w.sectorHits[:j])
+		window := w.sectorHits[minSector:maxSectorPlusOne]
+		window[0] = 0
+		hitArrayLen := len(window)
+		for j := 1; j < hitArrayLen; j = j << 1 {
+			copy(window[j:], window[:j])
 		}
 
 		w.blocksHit = w.blocksHit[:0]
@@ -2178,8 +2187,8 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 		diff = 0
 		flat := 0
-		for tot := range w.sectorHits {
-			switch w.sectorHits[tot] {
+		for tot := range window {
+			switch window[tot] {
 			case 1:
 				{
 					diff++
@@ -2190,7 +2199,7 @@ func ZExt_PickNode_visplaneKillough(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 				}
 			}
-			if w.sectorHits[tot] != 0 {
+			if window[tot] != 0 {
 				flat++
 			}
 		}
@@ -2344,6 +2353,10 @@ forblock:
 	}
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil {
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_VisplaneKillough(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, minors) {
 			return true
@@ -2388,6 +2401,10 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 
 	w.segAliasObj.UnvisitAll()
 
+	super.OptimizeSectorAddresses()
+	minSecEquiv, maxSecEquivPlusOne := int(super.secEquivs[0]),
+		int(super.secEquivs[len(super.secEquivs)-1])+1
+
 	for part := ts; part != nil; part = part.next {
 		if part.partner != nil && part.partner == previousPart {
 
@@ -2415,10 +2432,11 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		slen := ZNumber(0)
 		diff := cnt
 
-		w.sectorHits[0] = 0
-		hitArrayLen := len(w.sectorHits)
+		window := w.sectorHits[minSecEquiv:maxSecEquivPlusOne]
+		window[0] = 0
+		hitArrayLen := len(window)
 		for j := 1; j < hitArrayLen; j = j << 1 {
-			copy(w.sectorHits[j:], w.sectorHits[:j])
+			copy(window[j:], window[:j])
 		}
 
 		w.incidental = w.incidental[:0]
@@ -2453,8 +2471,8 @@ func ZExt_PickNode_visplaneVigilant(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *N
 		flat := 0
 
 		unmerged := 0
-		for tot := range w.sectorHits {
-			switch w.sectorHits[tot] {
+		for tot := range window {
+			switch window[tot] {
 			case 1:
 				{
 					diff++
@@ -2741,6 +2759,10 @@ forblock:
 	}
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil {
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_VisplaneVigilant(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, hasLeft, minors) {
 			return true
@@ -3168,6 +3190,10 @@ forblock:
 	}
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil {
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_Maelstrom(block.subs[0], part, tot, diff,
 			cost, bestcost) {
 			return true
@@ -3222,6 +3248,10 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 	w.zenScores = w.zenScores[:0]
 	var c ZExt_IntersectionContext
 
+	super.OptimizeSectorAddresses()
+	minSector, maxSectorPlusOne := int(super.sectors[0]),
+		int(super.sectors[len(super.sectors)-1])+1
+
 	for part := ts; part != nil; part = part.next {
 		if part.partner != nil && part.partner == previousPart {
 
@@ -3246,10 +3276,11 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 		minorsDummy := MinorCosts{}
 		bundle.seg = part
 
-		w.sectorHits[0] = 0
-		sectorCount := len(w.sectorHits)
-		for j := 1; j < sectorCount; j = j << 1 {
-			copy(w.sectorHits[j:], w.sectorHits[:j])
+		window := w.sectorHits[minSector:maxSectorPlusOne]
+		window[0] = 0
+		hitArrayLen := len(window)
+		for j := 1; j < hitArrayLen; j = j << 1 {
+			copy(window[j:], window[:j])
 		}
 
 		c.psx = part.psx
@@ -3276,8 +3307,8 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 		}
 
 		flat := 0
-		for tot := range w.sectorHits {
-			switch w.sectorHits[tot] {
+		for tot := range window {
+			switch window[tot] {
 			case 0x0F:
 				{
 					inter.sectorL++
@@ -3430,6 +3461,10 @@ forblock:
 	}
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil {
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_ZennodeDepth(block.subs[0], part, c,
 			cost, slen, bundle, inter, minors) {
 			return true
@@ -5093,6 +5128,70 @@ func (w *ZExt_NodesWork) newSuperblockNoProto() *ZExt_Superblock {
 	}
 	return ret
 }
+
+func (s *ZExt_Superblock) OptimizeSectorAddresses() {
+
+	if s.sectors != nil {
+		sort.Sort(Uint16Slice(s.sectors))
+	}
+	if s.secEquivs != nil {
+		sort.Sort(Uint16Slice(s.secEquivs))
+	}
+
+}
+
+func (s *ZExt_Superblock) sortSuperSegs(fbigarr []*ZExt_NodeSeg, start *int) {
+	if s == nil {
+		return
+	}
+
+	if s.segs != nil {
+
+		*start += s.sortSegsInCurrent(fbigarr[*start:])
+	}
+
+	s.subs[0].sortSuperSegs(fbigarr, start)
+	s.subs[1].sortSuperSegs(fbigarr, start)
+}
+
+func (s *ZExt_Superblock) sortSegsInCurrent(window []*ZExt_NodeSeg) int {
+
+	embedCount := 1
+	seg := s.segs
+	for ; seg.nextInSuper != nil; seg = seg.nextInSuper {
+		window[embedCount-1] = seg
+		embedCount++
+	}
+	window[embedCount-1] = seg
+
+	window = window[:embedCount]
+
+	if s.sectors != nil {
+
+		sort.Sort(ZExt_SegInSuperBySector(window))
+	} else if s.secEquivs != nil {
+		sort.Sort(ZExt_SegInSuperBySecEquiv(window))
+	}
+
+	for i := range window[:len(window)-1] {
+		window[i].nextInSuper = window[i+1]
+	}
+	window[len(window)-1].nextInSuper = nil
+	s.segs = window[0]
+	return embedCount
+}
+
+type ZExt_SegInSuperBySector []*ZExt_NodeSeg
+
+func (x ZExt_SegInSuperBySector) Len() int           { return len(x) }
+func (x ZExt_SegInSuperBySector) Less(i, j int) bool { return x[i].sector < x[j].sector }
+func (x ZExt_SegInSuperBySector) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+type ZExt_SegInSuperBySecEquiv []*ZExt_NodeSeg
+
+func (x ZExt_SegInSuperBySecEquiv) Len() int           { return len(x) }
+func (x ZExt_SegInSuperBySecEquiv) Less(i, j int) bool { return x[i].secEquiv < x[j].secEquiv }
+func (x ZExt_SegInSuperBySecEquiv) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
 
 type ZExt_DepthScoreBundle struct {
 	seg            *ZExt_NodeSeg

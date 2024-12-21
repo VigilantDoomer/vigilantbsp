@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -15,6 +15,10 @@
 // You should have received a copy of the GNU General Public License
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
+
+import (
+	"sort"
+)
 
 // The grand nodebuilding speed-up technique from AJ-BSP by Andrew Apted:
 // superblocks.
@@ -452,3 +456,98 @@ func (w *NodesWork) newSuperblockNoProto() *Superblock {
 	}
 	return ret
 }
+
+// OptimizeSectorAddresses is intended to be called on root superblock for node
+// It helps visplane-reducing partitioners linearize their accesses to sectorsHit
+// as well as determine minimum and maximum sector within the node, and thus
+// clean/iterate over only its subset, saving time.
+// It might or might not also sort segs by sector (or secEquiv) references.
+// After call to OptimizeSectorAddresses(), sectors or secEquiv slice of the ROOT
+// superblock (the one on which function is called) is guaranteed to be sorted in
+// ascending order.
+// Note that this does nothing relevant (from optimization perspective) for
+// non-visplane partitioners such as traditional (seg-only) and maelstrom.
+// (Zennode-like does count a visplane-reducing partitioner)
+func (s *Superblock) OptimizeSectorAddresses() {
+	// sectors and secEquiv arrays should contain unique elements
+	if s.sectors != nil {
+		sort.Sort(Uint16Slice(s.sectors))
+	}
+	if s.secEquivs != nil {
+		sort.Sort(Uint16Slice(s.secEquivs))
+	}
+	// Ok, the above already yielded some improvements. But I want to squeeze further.
+
+	// Will be sorting seg.nextInSuper links to align with sectors -- should linearize
+	// accesses to sectorsHit in evalPartitionWorker.
+	// UPDATE: And this other idea didn't work at all. The sort itself was fast,
+	// but it did not improve access times in evalPartitionWorker on that cursed line:
+	// w.sectorHits[check.secEquiv] |= mask
+	// The reason being is that it restarted for each nested superblock. So hardly
+	// linearizing anything. Not to say that it involves reading and writing to the
+	// same address...
+	/*
+		fbigarr := make([]*NodeSeg, s.realNum)
+		start := new(int)
+		*start = 0
+		s.sortSuperSegs(fbigarr, start)
+		fbigarr = nil*/
+}
+
+func (s *Superblock) sortSuperSegs(fbigarr []*NodeSeg, start *int) {
+	if s == nil {
+		return
+	}
+
+	if s.segs != nil {
+		// yeah, superblock can have s.segs == nil, in which case all segs fit into
+		// child superblocks
+		*start += s.sortSegsInCurrent(fbigarr[*start:])
+	}
+
+	s.subs[0].sortSuperSegs(fbigarr, start)
+	s.subs[1].sortSuperSegs(fbigarr, start)
+}
+
+func (s *Superblock) sortSegsInCurrent(window []*NodeSeg) int {
+	// s.realNum is total count including subblocks, where seg.nextInSuper links
+	// track only directly embedded ones, without subblocks. So need to count them
+	embedCount := 1
+	seg := s.segs
+	for ; seg.nextInSuper != nil; seg = seg.nextInSuper {
+		window[embedCount-1] = seg
+		embedCount++
+	}
+	window[embedCount-1] = seg
+
+	window = window[:embedCount]
+
+	if s.sectors != nil {
+		// sort must be stable -- actually, review. Partner segs may reference
+		// different sectors. But, partners should not be required to be together
+		// through "nextInSuper" pointer, only through "next" pointer
+		sort.Sort(SegInSuperBySector(window))
+	} else if s.secEquivs != nil {
+		sort.Sort(SegInSuperBySecEquiv(window))
+	}
+
+	// Now change those nextInSuper to reflect order in array
+	for i := range window[:len(window)-1] {
+		window[i].nextInSuper = window[i+1]
+	}
+	window[len(window)-1].nextInSuper = nil
+	s.segs = window[0]
+	return embedCount
+}
+
+type SegInSuperBySector []*NodeSeg
+
+func (x SegInSuperBySector) Len() int           { return len(x) }
+func (x SegInSuperBySector) Less(i, j int) bool { return x[i].sector < x[j].sector }
+func (x SegInSuperBySector) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+type SegInSuperBySecEquiv []*NodeSeg
+
+func (x SegInSuperBySecEquiv) Len() int           { return len(x) }
+func (x SegInSuperBySecEquiv) Less(i, j int) bool { return x[i].secEquiv < x[j].secEquiv }
+func (x SegInSuperBySecEquiv) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }

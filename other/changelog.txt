@@ -1,28 +1,17 @@
 Changelog for VigilantBSP
 
-v0.87a (git in-development version, not released -- merely accumulating changes here)
-- Note: list of changes and version number are subject to change. This entry is more of a development log.
-- If output file is explicitly specified (via -o parameter) and is the same as input file, VigilantBSP will refuse to run and will print an error message.
+v0.86a
+- Speed improvements to visplane partitioners (only noticeable on large, multi-level wads).
+- Added --eject parameter, useful for copying only levels to output wad and omitting all other lumps. See "Debug and other hidden parameters"
+- Minimum Go version to compile VigilantBSP from source is bumped up to v1.19 (from v1.15), which is the last version to support Windows 7.
+	I consider VigilantBSP's ability to run on Windows 7 a desirable feature, so the minimum Go version won't change for quite a while.
+- Additional (experimental) executables are produced (with _AVX2 suffix) for amd64 platform, 3rd microarchitecture level.
+	Their performance/stability was not tested yet and many sufficiently modern computers will not run them.
+	Windows 7 won't run AVX2 version either.
+- Bug fix: refuse to overwrite the output file if it is explicitly specified (via -o) to be the same as input file.
 	Previously, at least on Linux systems it was possible to corrupt input file by specifying it as output as well.
-	Note: VigilantBSP relies on OS's capacity to identify if file is the same. It may not work on some operating systems, so it is best to
-		not expect that	VigilantBSP will always catch this.
-- Added --eject parameter. See "Debug and other hidden parameters"
-- Programmers: minimum Go version to compile VigilantBSP is bumped up to v1.19 (from v1.15).
-	As always, later versions can be used to compile (per Go compatibility promise for major v1.*).
-	v1.19 is the last version of Go to support Windows 7, so I'll try not to bump it any further for a long time.
-	This is also the version used by Debian bookworm (stable), although this stable is soon to be succeeded by trixie (in year 2025?).
-- Programmers: additional executables are produced by Makefile (with _AVX2 suffix) for amd64 platform, that will require all of the following instructions to run:
-	CMPXCHG16B, LAHF, SAHF, POPCNT, SSE3, SSE4.1, SSE4.2, SSSE3, AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE, OSXSAVE.
-	These are optional executables for people with more capable computers, that might or might not benefit performance of VigilantBSP (not personally tested yet).
-	These are currently for alpha-testers. Support for amd64 platform without these instructions will continue. The method for enabling more performance may
-	change, such as offloading optimized versions of functions within VigilantBSP to shared library that will be loaded on condition that respective
-	instruction set is supported by user's platform. But it might be VigilantBSP does not benefit from these at all, in which case they just won't make
-	into released version.
-- Programmers: explicit instruction was added to Makefile to guarantee VigilantBSP is statically linked, and not dependent on glibc.
-	To this end, Cgo support is disabled --	VigilantBSP should not require it anyway.
-	This is mostly to catch unintentional introduction of Cgo via third-party dependencies. Prior versions of VigilantBSP didn't use any third-party packages,
-	and relied heavily on Doom limits to conserve memory and use ad-hoc bit arrays and regular Go maps; now this may change if I start to implement UDMF
-	support for DSDA target and will need efficient data structures to provide fast lookups with bigger numbers and indices.
+	The capacity to rewrite file (by creating a temporary file, this is done when -o is not passed) still remains.
+- (Relevant to programmers) Cgo is disabled in Makefile to guarantee VigilantBSP is statically linked, and not dependent on glibc.
 
 v0.85a
 - New feature: new selectable option for "nodes format compatibility" -> "Prefer vanilla, switch to Deep nodes on overflow"

@@ -388,6 +388,10 @@ forblock:
 	// handle sub-blocks recursively
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil { // tail call eliminated for first block, if second is empty
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_Traditional(block.subs[0], part, tot, diff,
 			cost, bestcost, minors) {
 			return true
@@ -461,6 +465,10 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 	w.segAliasObj.UnvisitAll() // remove marks from previous PickNode calls
 
+	super.OptimizeSectorAddresses()
+	minSector, maxSectorPlusOne := int(super.sectors[0]),
+		int(super.sectors[len(super.sectors)-1])+1 // cast to int so that maxSector+1 won't overflow
+
 	for part := ts; part != nil; part = part.next { // Use each Seg as partition
 		if part.partner != nil && part.partner == previousPart {
 			// Partner segs are kept next to each other, they would result in
@@ -492,10 +500,11 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		}
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
-		w.sectorHits[0] = 0
-		sectorCount := len(w.sectorHits)
-		for j := 1; j < sectorCount; j = j << 1 {
-			copy(w.sectorHits[j:], w.sectorHits[:j])
+		window := w.sectorHits[minSector:maxSectorPlusOne]
+		window[0] = 0
+		hitArrayLen := len(window)
+		for j := 1; j < hitArrayLen; j = j << 1 {
+			copy(window[j:], window[:j])
 		}
 
 		//progress();           	        // Something for the user to look at.
@@ -528,8 +537,8 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		   references on each side of node line */
 		diff = 0
 		flat := 0
-		for tot := range w.sectorHits {
-			switch w.sectorHits[tot] {
+		for tot := range window {
+			switch window[tot] {
 			case 1:
 				{
 					diff++
@@ -540,7 +549,7 @@ func PickNode_visplaneKillough(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 				}
 			}
-			if w.sectorHits[tot] != 0 {
+			if window[tot] != 0 {
 				flat++
 			}
 		}
@@ -740,6 +749,10 @@ forblock:
 	// handle sub-blocks recursively
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil { // tail call eliminated for first block, if second is empty
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_VisplaneKillough(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, minors) {
 			return true
@@ -806,6 +819,10 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 	w.segAliasObj.UnvisitAll() // remove marks from previous PickNode calls
 
+	super.OptimizeSectorAddresses()
+	minSecEquiv, maxSecEquivPlusOne := int(super.secEquivs[0]),
+		int(super.secEquivs[len(super.secEquivs)-1])+1 // cast to int to avoid overflow on +1
+
 	for part := ts; part != nil; part = part.next { // Use each Seg as partition
 		if part.partner != nil && part.partner == previousPart {
 			// Partner segs are kept next to each other, they would result in
@@ -840,10 +857,11 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		diff := cnt
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
-		w.sectorHits[0] = 0
-		hitArrayLen := len(w.sectorHits)
+		window := w.sectorHits[minSecEquiv:maxSecEquivPlusOne]
+		window[0] = 0
+		hitArrayLen := len(window)
 		for j := 1; j < hitArrayLen; j = j << 1 {
-			copy(w.sectorHits[j:], w.sectorHits[:j])
+			copy(window[j:], window[:j])
 		}
 		// Empty incidental seg list ( array )
 		w.incidental = w.incidental[:0]
@@ -888,8 +906,8 @@ func PickNode_visplaneVigilant(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		// Sectors that will generate multiple visplanes as the result of
 		// being split by partition line
 		unmerged := 0
-		for tot := range w.sectorHits {
-			switch w.sectorHits[tot] {
+		for tot := range window {
+			switch window[tot] {
 			case 1:
 				{
 					diff++
@@ -1274,6 +1292,10 @@ forblock:
 	// handle sub-blocks recursively
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil { // tail call eliminated for first block, if second is empty
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_VisplaneVigilant(block.subs[0], part, tot, diff,
 			cost, bestcost, slen, hasLeft, minors) {
 			return true
@@ -1789,6 +1811,10 @@ forblock:
 	// handle sub-blocks recursively
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil { // tail call eliminated for first block, if second is empty
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_Maelstrom(block.subs[0], part, tot, diff,
 			cost, bestcost) {
 			return true
@@ -1857,6 +1883,10 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	w.zenScores = w.zenScores[:0]
 	var c IntersectionContext
 
+	super.OptimizeSectorAddresses()
+	minSector, maxSectorPlusOne := int(super.sectors[0]),
+		int(super.sectors[len(super.sectors)-1])+1
+
 	for part := ts; part != nil; part = part.next { // Use each Seg as partition
 		if part.partner != nil && part.partner == previousPart {
 			// Partner segs are kept next to each other, they would result in
@@ -1888,10 +1918,11 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		bundle.seg = part
 		// Fill sectorHits array with zeros FAST (fewer bound checks)
 		// Credit: gist github.com taylorza GO-Fillslice.md
-		w.sectorHits[0] = 0
-		sectorCount := len(w.sectorHits)
-		for j := 1; j < sectorCount; j = j << 1 {
-			copy(w.sectorHits[j:], w.sectorHits[:j])
+		window := w.sectorHits[minSector:maxSectorPlusOne]
+		window[0] = 0
+		hitArrayLen := len(window)
+		for j := 1; j < hitArrayLen; j = j << 1 {
+			copy(window[j:], window[:j])
 		}
 
 		c.psx = part.psx
@@ -1921,8 +1952,8 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 		// Count sectors on each side of partition line, and the split sectors
 		flat := 0
-		for tot := range w.sectorHits {
-			switch w.sectorHits[tot] {
+		for tot := range window {
+			switch window[tot] {
 			case 0x0F:
 				{
 					inter.sectorL++
@@ -2091,6 +2122,10 @@ forblock:
 	// handle sub-blocks recursively
 
 	if block.subs[0] != nil {
+		if block.subs[1] == nil { // tail call eliminated for first block, if second is empty
+			block = block.subs[0]
+			goto forblock
+		}
 		if w.evalPartitionWorker_ZennodeDepth(block.subs[0], part, c,
 			cost, slen, bundle, inter, minors) {
 			return true
