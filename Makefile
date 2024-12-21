@@ -16,6 +16,8 @@ clean:
 	rm -f vigilantbsp32.exe
 	rm -f gen/gen
 	rm -f gen/gen.exe
+	rm -f vigilantbsp_avx2
+	rm -f vigilantbsp_avx2.exe
 	
 generate:
 	go generate
