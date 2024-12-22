@@ -138,11 +138,52 @@ type ZExt_IntersectionContext struct {
 func ZExt_NodesGenerator(input *NodesInput) {
 	start := time.Now()
 
-	input.lines.UnshareData()
+	oldNodeType := input.nodeType
+	cloneEarly := false
+	alreadyCloned := false
+	var linesForZdoom WriteableLines
+	if input.stkNode && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 
-	input.lines.PruneUnusedVertices()
+		input.stkNode = false
+		if !ZExt_isZDoomNodes() {
+			Log.Error("Building in --stknode mode is not supported for \"vanilla with Zdoom nodes fallback\", disabling stknode.\n")
+		}
+	}
+	if input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 
-	input.lines.DetectPolyobjects()
+		input.nodeType = promoteNodeType(input.nodeType)
+		oldNodeType = input.nodeType
+		if !ZExt_isZDoomNodes() {
+			Log.Error("Building \"vanilla with Zdoom nodes fallback\" is not supported yet for multi-tree, switching to Zdoom nodes without trying vanilla.\n")
+			ZNodesGenerator(input)
+			return
+		}
+	}
+
+	if input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED {
+		if ZExt_isZDoomNodes() {
+			alreadyCloned = true
+			input.nodeType = promoteNodeType(input.nodeType)
+		} else {
+			input.nodeType = NODETYPE_VANILLA
+			cloneEarly = true
+		}
+	}
+
+	if !alreadyCloned {
+
+		input.lines.UnshareData()
+
+		input.lines.PruneUnusedVertices()
+
+		input.lines.DetectPolyobjects()
+		if cloneEarly {
+			linesForZdoom = input.lines.Clone()
+		}
+	}
 
 	upgradableToDeep := false
 	if input.nodeType == NODETYPE_VANILLA_OR_DEEP {
@@ -156,9 +197,11 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	if len(allSegs) == 0 {
 		Log.Error("Failed to create any SEGs (BAD). Quitting (%s)\n.", time.Since(start))
 
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_NODES,
-			Message: BCON_NONEED_SOLID_BLOCKMAP,
+		if !alreadyCloned {
+			input.bcontrol <- BconRequest{
+				Sender:  SOLIDBLOCKS_NODES,
+				Message: BCON_NONEED_SOLID_BLOCKMAP,
+			}
 		}
 
 		input.nodesChan <- NodesResult{}
@@ -171,18 +214,21 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		ssectorMask = SSECTOR_DEEP_MASK
 	}
 
-	requestedSolid := input.pickNodeUser == PICKNODE_VISPLANE_ADV
-	if requestedSolid {
+	requestedSolid := input.pickNodeUser == PICKNODE_VISPLANE_ADV &&
+		input.solidMap == nil
+	if !alreadyCloned {
+		if requestedSolid {
 
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_NODES,
-			Message: BCON_NEED_SOLID_BLOCKMAP,
-		}
-	} else {
+			input.bcontrol <- BconRequest{
+				Sender:  SOLIDBLOCKS_NODES,
+				Message: BCON_NEED_SOLID_BLOCKMAP,
+			}
+		} else {
 
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_NODES,
-			Message: BCON_NONEED_SOLID_BLOCKMAP,
+			input.bcontrol <- BconRequest{
+				Sender:  SOLIDBLOCKS_NODES,
+				Message: BCON_NONEED_SOLID_BLOCKMAP,
+			}
 		}
 	}
 
@@ -222,7 +268,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 	}
 
-	var solidMap *Blockmap
+	solidMap := input.solidMap
 	if requestedSolid {
 		blockmapGetter := make(chan *Blockmap)
 		input.bgenerator <- BgenRequest{
@@ -335,8 +381,18 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 			rootNode = ZExt_StkEntryPoint(&workData, rootSeg, rootBox, initialSuper)
 		} else {
+			if cloneEarly {
 
-			rootNode = ZExt_CreateNode(&workData, rootSeg, rootBox, initialSuper)
+				input.solidMap = solidMap
+				rootNode = ZExt_VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
+					initialSuper, input, oldNodeType, linesForZdoom, start)
+				if rootNode == nil {
+					return
+				}
+			} else {
+
+				rootNode = ZExt_CreateNode(&workData, rootSeg, rootBox, initialSuper)
+			}
 		}
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
 
@@ -418,12 +474,16 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 
 	if uint32(workData.totals.numSSectors)&workData.SsectorMask == workData.SsectorMask {
-		Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
-			workData.totals.numSSectors)
+		if !cloneEarly {
+			Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
+				workData.totals.numSSectors)
+		}
 		workData.emptyNodesLumps()
 	} else if workData.tooManySegsCantFix(false) {
-		Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
-			len(workData.segs))
+		if !cloneEarly {
+			Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
+				len(workData.segs))
+		}
 		workData.emptyNodesLumps()
 	}
 
@@ -460,7 +520,9 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 
 	if treeCount == 0 {
-		Log.Printf("Nodes took %s\n", time.Since(start))
+		if !alreadyCloned {
+			Log.Printf("Nodes took %s\n", time.Since(start))
+		}
 	} else {
 		dur := time.Since(start)
 		avg := time.Duration(int64(dur) / int64(treeCount))
@@ -4800,6 +4862,18 @@ func (w *ZExt_NodesWork) reverseNodes(node *NodeInProcess) uint32 {
 func (w *ZExt_NodesWork) convertNodesStraight(node *NodeInProcess, idx uint32) uint32 {
 
 	return uint32(0)
+}
+
+func ZExt_isZDoomNodes() bool {
+	return true
+}
+
+func ZExt_VanillaOrZdoomFormat_Create(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
+	super *ZExt_Superblock, input *NodesInput, oldNodeType int,
+	linesForZdoom WriteableLines, start time.Time) *NodeInProcess {
+
+	Log.Panic("Unreachable code called: VanillaOrZdoomFormat_Create in Zdoom nodes generator (programmer error)\n")
+	return nil
 }
 
 type ZExt_Superblock struct {

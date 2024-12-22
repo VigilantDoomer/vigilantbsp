@@ -750,6 +750,11 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					goto read_compress_level
 				} else if bytes.Equal(p[1:3], []byte("=D")) {
 					c.NodeType = NODETYPE_VANILLA_OR_DEEP
+				} else if bytes.Equal(p[1:3], []byte("=X")) {
+					c.NodeType = NODETYPE_VANILLA_OR_ZEXTENDED
+				} else if bytes.Equal(p[1:3], []byte("=Z")) {
+					c.NodeType = NODETYPE_VANILLA_OR_ZCOMPRESSED
+					goto read_compress_level
 				} else {
 					Log.Error("Unknown value for NODES format.\n")
 				}
@@ -1020,6 +1025,7 @@ func readSignedNumberOrNothing(arg []byte) (bool, int, []byte) {
 		return false, 0, arg
 	}
 	sl := arg
+	sign := 1
 	if sl[0] == '+' {
 		if len(sl) > 1 {
 			sl = sl[1:]
@@ -1030,12 +1036,18 @@ func readSignedNumberOrNothing(arg []byte) (bool, int, []byte) {
 	} else if sl[0] == '-' {
 		if len(sl) > 1 {
 			sl = sl[1:]
+
 		} else {
 			Log.Error("supposedly numeric value ended in - sign\n")
 			return false, 0, arg
 		}
+		sign = -1
 	}
-	return readNumericOnly(sl)
+	b, v, sl2 := readNumericOnly(sl)
+	if b {
+		v = v * sign
+	}
+	return b, v, sl2
 }
 
 // ReadZenVariables does the reading AND setting zenscore.go globals

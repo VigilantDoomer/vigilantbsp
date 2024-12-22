@@ -16,7 +16,7 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
-//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;node_intro.go;node_vmap.go;node_outro.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go;zensideness.go;node_rearrange.go;stknode.go"
+//go:generate go run gen/codegen.go -- --target=znodegen.go --include="nodegen.go;node_intro.go;node_vmap.go;node_outro.go;picknode.go;diffgeometry.go;convexity.go;multitree_plain.go;multiformat_tree.go;zdefs.go;superblocks.go;zenscore.go;mylogger.go;intgeometry.go;zensideness.go;node_rearrange.go;stknode.go"
 //go:generate go run gen/codegen.go -- --target=rejectFAST.go --include="reject.go;rejectRMB.go;rejectDFS.go;rejectLOS.go;rejectdefs.go"
 //go:generate go run gen/codegen.go -- --target=rejectSYMM.go --include="reject.go;rejectRMB.go;rejectDFS.go;rejectLOS.go;rejectSymmDefs.go"
 
@@ -332,7 +332,6 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			}
 			nodesInput := &NodesInput{
 				lines:      l.newLines,
-				solidLines: solidLines,
 				sectors:    sectors,
 				sidedefs:   sidedefs,
 				bcontrol:   bcontrol,
@@ -359,8 +358,12 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				width: treeWidth,
 			}
 			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA ||
-				nodeType == NODETYPE_VANILLA_OR_DEEP {
+				nodeType == NODETYPE_VANILLA_OR_DEEP ||
+				nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED ||
+				nodeType == NODETYPE_VANILLA_OR_ZEXTENDED {
 
+				// note on vanilla_or_zdoom modes:
+				// NodesGenerator will call ZNodesGenerator from within
 				go NodesGenerator(nodesInput)
 
 			} else if nodeType == NODETYPE_ZDOOM_COMPRESSED ||

@@ -70,7 +70,7 @@ const DETAILED_LEVEL_THRESHOLD = 500
 // Passed to the nodes builder goroutine
 type NodesInput struct {
 	lines              WriteableLines
-	solidLines         AbstractLines // when a solid-only blockmap is needed to detect void space for more accurate node pick quality weighting
+	solidMap           *Blockmap // rarely filled field
 	sectors            []Sector
 	sidedefs           []Sidedef
 	bcontrol           chan BconRequest
@@ -337,14 +337,66 @@ const (
 // goroutine, replies on input.nodesChan
 func NodesGenerator(input *NodesInput) {
 	start := time.Now()
-	// let other goroutines working on something else work on the shared read-only
-	// copy of vertices (and linedefs), we will be having our own copy to write to
-	input.lines.UnshareData()
-	// remove the remnants of any previous nodebuilder work
-	input.lines.PruneUnusedVertices()
-	// perform detection of polyobjects (sectors containing polyobjects must not
-	// be split if possible)
-	input.lines.DetectPolyobjects()
+
+	// Logic for concurrent running of Zdoom generator and non-Zdoom generator,
+	// kinda contrieved. Non-zdoom generator is calling Zdoom generator later and
+	// is thus responsible for setting things up, while Zdoom generator should realize
+	// things were set up for him in this case. But Zdoom generator can also run
+	// directly from level, when this trickery is not in effect
+	oldNodeType := input.nodeType
+	cloneEarly := false
+	alreadyCloned := false
+	var linesForZdoom WriteableLines
+	if input.stkNode && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+		// stknode doesn't support vanilla_or_zdoom format mode -- yet.
+		// TODO implement support for stknode  to build vanilla but fallback on zdoom format
+		input.stkNode = false
+		if !isZDoomNodes() { // so that message is printed only once
+			Log.Error("Building in --stknode mode is not supported for \"vanilla with Zdoom nodes fallback\", disabling stknode.\n")
+		}
+	}
+	if input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+		// multi-trees don't support vanilla_or_zdoom format mode -- yet.
+		// TODO implement support for multi-trees to build vanilla but fallback on zdoom format
+		// TODO also time tallied incorrectly now, as timer will restart
+		input.nodeType = promoteNodeType(input.nodeType)
+		oldNodeType = input.nodeType // intentional override
+		if !isZDoomNodes() {
+			Log.Error("Building \"vanilla with Zdoom nodes fallback\" is not supported yet for multi-tree, switching to Zdoom nodes without trying vanilla.\n")
+			ZNodesGenerator(input)
+			return
+		}
+	}
+
+	if input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED {
+		if isZDoomNodes() {
+			alreadyCloned = true // we must have been launched from non-Zdoom generator instead of level
+			input.nodeType = promoteNodeType(input.nodeType)
+		} else {
+			input.nodeType = NODETYPE_VANILLA
+			cloneEarly = true // we are responsible for launching Zdoom generator
+		}
+	}
+
+	if !alreadyCloned {
+		// alreadyCloned == true if this is Zdoom generator that is called from
+		// non-Zdoom generator, rather than directly from level
+
+		// let other goroutines working on something else work on the shared read-only
+		// copy of vertices (and linedefs), we will be having our own copy to write to
+		input.lines.UnshareData()
+		// remove the remnants of any previous nodebuilder work
+		input.lines.PruneUnusedVertices()
+		// perform detection of polyobjects (sectors containing polyobjects must not
+		// be split if possible)
+		input.lines.DetectPolyobjects()
+		if cloneEarly {
+			linesForZdoom = input.lines.Clone()
+		}
+	}
 
 	upgradableToDeep := false
 	if input.nodeType == NODETYPE_VANILLA_OR_DEEP {
@@ -359,9 +411,11 @@ func NodesGenerator(input *NodesInput) {
 		Log.Error("Failed to create any SEGs (BAD). Quitting (%s)\n.", time.Since(start))
 		// First respond to solid blocks control goroutine that we won't serve
 		// any requests to them
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_NODES,
-			Message: BCON_NONEED_SOLID_BLOCKMAP,
+		if !alreadyCloned {
+			input.bcontrol <- BconRequest{
+				Sender:  SOLIDBLOCKS_NODES,
+				Message: BCON_NONEED_SOLID_BLOCKMAP,
+			}
 		}
 		// And to this channel we reply that all is fucked
 		input.nodesChan <- NodesResult{} // all fields are nil, no lump data generated
@@ -375,19 +429,22 @@ func NodesGenerator(input *NodesInput) {
 	}
 
 	// See if we need a blockmap of solid-only lines
-	requestedSolid := input.pickNodeUser == PICKNODE_VISPLANE_ADV
-	if requestedSolid {
-		// Vigilant way of evaluating a node line length without void parts
-		// depends on it available
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_NODES,
-			Message: BCON_NEED_SOLID_BLOCKMAP,
-		}
-	} else {
-		// Other methods don't need this computation
-		input.bcontrol <- BconRequest{
-			Sender:  SOLIDBLOCKS_NODES,
-			Message: BCON_NONEED_SOLID_BLOCKMAP,
+	requestedSolid := input.pickNodeUser == PICKNODE_VISPLANE_ADV &&
+		input.solidMap == nil
+	if !alreadyCloned {
+		if requestedSolid {
+			// Vigilant way of evaluating a node line length without void parts
+			// depends on it available
+			input.bcontrol <- BconRequest{
+				Sender:  SOLIDBLOCKS_NODES,
+				Message: BCON_NEED_SOLID_BLOCKMAP,
+			}
+		} else {
+			// Other methods don't need this computation
+			input.bcontrol <- BconRequest{
+				Sender:  SOLIDBLOCKS_NODES,
+				Message: BCON_NONEED_SOLID_BLOCKMAP,
+			}
 		}
 	}
 
@@ -429,7 +486,9 @@ func NodesGenerator(input *NodesInput) {
 
 	}
 
-	var solidMap *Blockmap
+	// ZNodesGenerator gets non-nil soludMap only if called from NodesGenerator.
+	// Nil under all other conditions
+	solidMap := input.solidMap
 	if requestedSolid {
 		blockmapGetter := make(chan *Blockmap)
 		input.bgenerator <- BgenRequest{
@@ -552,8 +611,20 @@ func NodesGenerator(input *NodesInput) {
 			// identical)
 			rootNode = StkEntryPoint(&workData, rootSeg, rootBox, initialSuper)
 		} else {
-			// classic recursive node creation (the default)
-			rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper)
+			if cloneEarly {
+				// vanilla_or_zdoom* nodes format -- contrived operation here
+				// keep in mind that Zdoom generator branch won't reach here, this
+				// is dispatch that runs in non-Zdoom generator
+				input.solidMap = solidMap
+				rootNode = VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
+					initialSuper, input, oldNodeType, linesForZdoom, start)
+				if rootNode == nil {
+					return // message was sent from Zdoom generator spawned from dispatch
+				}
+			} else {
+				// classic recursive node creation (the default)
+				rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper)
+			}
 		}
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
 		// Create multiple trees - bruteforce ROOT node among all (one-sided,
@@ -680,12 +751,16 @@ func NodesGenerator(input *NodesInput) {
 
 	// Now we can actually UNDO all our hard work if limits were exceeded
 	if uint32(workData.totals.numSSectors)&workData.SsectorMask == workData.SsectorMask {
-		Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
-			workData.totals.numSSectors)
+		if !cloneEarly {
+			Log.Error("Number of subsectors is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
+				workData.totals.numSSectors)
+		}
 		workData.emptyNodesLumps()
 	} else if workData.tooManySegsCantFix(false) {
-		Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
-			len(workData.segs))
+		if !cloneEarly {
+			Log.Error("Number of segs is too large (%d) for this format. Lumps NODES, SEGS, SSECTORS will be emptied.\n",
+				len(workData.segs))
+		}
 		workData.emptyNodesLumps()
 	}
 
@@ -724,7 +799,9 @@ func NodesGenerator(input *NodesInput) {
 	}
 
 	if treeCount == 0 {
-		Log.Printf("Nodes took %s\n", time.Since(start))
+		if !alreadyCloned {
+			Log.Printf("Nodes took %s\n", time.Since(start))
+		}
 	} else {
 		dur := time.Since(start)
 		avg := time.Duration(int64(dur) / int64(treeCount))
@@ -973,8 +1050,10 @@ func (c *IntersectionContext) computeIntersection() (Number, Number) {
 // to the end. These allow a decent evaluation of the lines state.
 // bit 0,1,2 = checking lines starting point and bits 4,5,6 = end point
 // these bits mean 	0,4 = point is on the same line
-// 						1,5 = point is to the left of the line
-//						2,6 = point is to the right of the line
+//
+//	1,5 = point is to the left of the line
+//	2,6 = point is to the right of the line
+//
 // There are some failsafes in here, these mainly check for small errors in the
 // side checker.
 // VigilantDoomer: "small errors in side checker" - you see, PickNode_* doesn't
@@ -2063,6 +2142,10 @@ func (w *NodesWork) upgradeToDeep() {
 	w.subsectors = nil
 	w.SsectorMask = SSECTOR_DEEP_MASK
 	w.nodeType = NODETYPE_DEEP
+}
+
+func isZDoomNodes() bool {
+	return false
 }
 
 /*---------------------------------------------------------------------------*

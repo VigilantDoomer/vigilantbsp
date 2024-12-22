@@ -170,6 +170,9 @@ is either a suboption of option above it, or a possible value:
 		z Zdoom compressed nodes format
 			or zN where N is a digit between 1 and 9
 		D Prefer vanilla, switch to Deep nodes on overflow
+		X Prefer vanilla, switch to Zdoom extended nodes on overflow
+		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow
+		  or ZN where N is a single digit between 1 and 9
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -1267,11 +1270,15 @@ before.
 Note: this option was introduced in VigilantBSP v0.74a. 
 
 This option controls how many threads to use when multi-tree mode
-is active for building all trees. It is only in effect when multi-tree
-mode is active (not 0 or unset). 
+is active for building all trees. It is normally only in effect when
+multi-tree mode is active (not 0 or unset), however, certain other
+options (such as building in vanilla-or-Zdoom-extended and
+vanilla-or-Zdoom-compressed modes) it may also have an effect.
 
 The default value is '0', which has a special meaning of "the number of 
-threads to create = the number of threads reported by the system". 
+threads to create = the number of threads reported by the system" (for
+multi-tree) or is capped to this number otherwise (when applicable to
+option that is not explicitly about multi-tree).
 
 Specifying a non-zero value directly is useful if:
 1) you discovered that a lower value than the number of cores is more
@@ -1283,12 +1290,22 @@ threads
 that many by default, unless higher number is explicitly specified
 
 Specifying a different value will cause that exact number of threads to
-be used instead. 
+be used instead for multi-tree.
 
 It should be noted that when this is not set, or set to 0, and so the number
 of threads is picked automatically, the cap of 16 threads is applied. This
 is because each thread allocates a lot of memory, and the higher the thread
 count, the higher memory usage in multi-tree mode.
+
+Since VigilantBSP v0.86a, there is at least one option on which this can
+have effect: see "07:06 'c' - NODES format compatibility". When nodes format
+is set to "default to vanilla, but build Zdoom extended or Zdoom compressed
+modes if vanilla overflows", then vanilla and Zdoom nodes are built by
+default concurrently. But if t=1 is specified, vanilla nodes are built first,
+whereas Zdoom nodes are built only if vanilla are overflowed. Running in
+single-threaded mode then results in longer running time when vanilla nodes
+are overflowed indeed, so the default of running them concurrently should be
+preferred, unless it causes you problems.
 
 07:05 'i' - Cull (don't create segs from) invisible linedefs
 ------------------------------------------------------------
@@ -1483,21 +1500,69 @@ fit under signed limits (and thus be able to be loaded in
  vanilla, and not limit-removing source port) if some other 
  trees require deep format to build.
 
+c=X - Prefer vanilla, switch to Zdoom extended nodes on overflow
+	Introduced in VigilantBSP v0.86a.
 
-Note about VERY long lines (where DX or DY <= -32768 or > 32767) -
-all currently supported node formats struggle to represent them, 
-because even extended nodes use 16-bit signed integers to represent
-DX and DY of partition line. VigilantBSP seems to be the first to
-offer any mitigation for it and represent them using shorter
-segments that have same angle (since v0.78a), currently this 
-sometimes can not be done (when angle can't be preserved). Vanilla
-will have trouble rendering levels that contain any long lines,
-not just those that were used a partition, and even in advanced
-ports such as PrBoom-Plus, problems might occur because some 
-computations with large distances from partition line can also
-overflow (but VigilantBSP attempts to place "representative"
-segment to decrease such errors and eliminates them in at 
-least some levels).
+Similar to previous option, but if results cannot be represented
+in vanilla format, the output will be Zdoom extended nodes without
+compression.
+
+If multi-tree mode is selected, this will perform like c=x, and
+not bother building vanilla nodes. This limitation may be lifted
+in future versions of VigilantBSP.
+
+Note that there is no conversion between vanilla and Zdoom nodes
+format due to very different precision and not merely raised limits
+of Zdoom nodes. Zdoom nodes also don't support certain effects, like
+horizon/infinite ocean -- this was already noted in c=x section.
+So VigilantBSP handles it much differently from c=D option, where
+vanilla nodes can be converted to Deep nodes on the fly. Instead,
+it builds vanilla and Zdoom nodes in parallel, unless threads used
+for nodes are explicitly limited to one (-nt=1).
+
+Example:
+
+	vigilantbsp -na=2c=X -b- -r- -d vrack2BIGGESTever.wad -o vrack2big_extended.wad
+
+will rebuild only nodes, building vanilla and Zdoom nodes in parallel.
+vrack2BIGGESTever is a custom edition of vrack2 concatenated with itself
+multiple times, so vanilla nodes will report overflow, and Zdoom nodes
+result written instead. The results produced will be thus byte-for-byte
+equivalent to:
+
+	vigilantbsp -na=2c=x -b- -r- -d vrack2BIGGESTever.wad -o vrack2big_extended.wad
+
+while running time on a decent computer won't be much longer. Similarly,
+on a small wad under vanilla/unsigned limits:
+	vigilantbsp -na=2c=X -b- -r- -d a-small-map.wad -o small-map-rebuild.wad
+will be byte for byte equivalent to
+	vigilantbsp -na=2 -b- -r- -d a-small-map.wad -o small-map-rebuild.wad
+as in, vanilla format.
+
+Now, if you don't want to build them concurrently, but build vanilla first:
+	vigilantbsp -na=2c=Xt=1 -b- -r- -d a-small-map.wad -o small-map-rebuild.wad
+then this will build vanilla nodes, see it is sufficient, and write them.
+But:
+	vigilantbsp -na=2c=Xt=1 -b- -r- -d vrack2BIGGESTever.wad -o vrack2big_extended.wad
+will build vanilla nodes, see they are INSUFFICIENT, and only then start
+building Zdoom nodes, resulting in double the running time. The output
+will be identical to previously provided non-single thread commands for
+both cases.
+
+c=Z - Prefer vanilla, switch to Zdoom compressed nodes on overflow
+	Introduced in VigilantBSP v0.86a. Like with c=z, compression
+	level can be specified, i.e. c=Z9, but compression will be
+	applied only if result has to be written in Zdoom compressed
+	nodes.
+
+Similar to previous option, but if results cannot be represented
+in vanilla format, the output will be Zdoom compressed nodes.
+
+If multi-tree mode is selected, this will perform like c=z, and
+not bother building vanilla nodes. This limitation may be lifted
+in future versions of VigilantBSP.
+
+All notes from previous option apply.
 
 07:07 'f' - Tuning factor (seg split cost, etc.)
 ------------------------------------------------

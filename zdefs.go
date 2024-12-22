@@ -21,6 +21,7 @@ package main
 import (
 	"encoding/binary"
 	"math"
+	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -67,6 +68,8 @@ import (
 // And some functions need to be generated, but from a different function than
 // the one it replaces
 //
+// #pragma replace_prototype isZDoomNodes with ZisZDoomNodes_Proto
+// #pragma replace_prototype VanillaOrZdoomFormat_Create with ZVanillaOrZdoomFormat_Create_Proto
 // #pragma replace_prototype *NodesWork.AddVertex with *NodesWork.ZAddVertex_Proto
 // #pragma replace_prototype *NodesWork.CreateSSector with *NodesWork.ZCreateSSector_Proto
 // #pragma replace_prototype PointOnLineSide with ZPointOnLineSide_Proto
@@ -624,4 +627,16 @@ func (w *NodesWork) ZreverseNodes_Proto(node *NodeInProcess) uint32 {
 func (w *NodesWork) ZconvertNodesStraight_Proto(node *NodeInProcess, idx uint32) uint32 {
 	// unreachable function dummied out to reduce executable size
 	return uint32(0)
+}
+
+func ZisZDoomNodes_Proto() bool {
+	return true
+}
+
+func ZVanillaOrZdoomFormat_Create_Proto(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
+	super *Superblock, input *NodesInput, oldNodeType int,
+	linesForZdoom WriteableLines, start time.Time) *NodeInProcess {
+	//
+	Log.Panic("Unreachable code called: VanillaOrZdoomFormat_Create in Zdoom nodes generator (programmer error)\n")
+	return nil
 }

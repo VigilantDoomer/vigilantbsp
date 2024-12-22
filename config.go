@@ -79,6 +79,9 @@ const VERSION = "0.86a"
 		z Zdoom compressed nodes format
 			or zN where N is a single digit between 1 and 9
 		D Prefer vanilla, switch to Deep nodes on overflow
+		X Prefer vanilla, switch to Zdoom extended nodes on overflow\n")
+		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow\n")
+		  or ZN where N is a single digit between 1 and 9\n")
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -162,6 +165,8 @@ const (
 	NODETYPE_ZDOOM_EXTENDED
 	NODETYPE_ZDOOM_COMPRESSED
 	NODETYPE_VANILLA_OR_DEEP
+	NODETYPE_VANILLA_OR_ZEXTENDED
+	NODETYPE_VANILLA_OR_ZCOMPRESSED
 )
 
 const (
@@ -428,6 +433,9 @@ func PrintHelp() {
 	Log.Printf("		z Zdoom compressed nodes format \n")
 	Log.Printf("		  or zN where N is a single digit between 1 and 9\n")
 	Log.Printf("		D Prefer vanilla, switch to Deep nodes on overflow\n")
+	Log.Printf("		X Prefer vanilla, switch to Zdoom extended nodes on overflow\n")
+	Log.Printf("		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow\n")
+	Log.Printf("		  or ZN where N is a single digit between 1 and 9\n")
 	Log.Printf("	f= Tuning factor (seg split cost, etc.)\n")
 	Log.Printf("		17 - default seg split cost\n")
 	Log.Printf("	d= Penalty factor for _diagonal_ lines\n")
@@ -467,4 +475,17 @@ func PrintHelp() {
 	Log.Printf("	It reads from 'file.wad' and writes results to 'file_out.wad'.\n")
 	Log.Printf("	The input wad file is not modified.\n")
 	Log.Printf("\n")
+}
+
+func promoteNodeType(NodeType int) int {
+	switch NodeType {
+	case NODETYPE_VANILLA_OR_ZCOMPRESSED:
+		return NODETYPE_ZDOOM_COMPRESSED
+	case NODETYPE_VANILLA_OR_ZEXTENDED:
+		return NODETYPE_ZDOOM_EXTENDED
+	case NODETYPE_VANILLA_OR_DEEP:
+		return NODETYPE_DEEP
+	default:
+		return NodeType
+	}
 }
