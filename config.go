@@ -77,6 +77,7 @@ const VERSION = "0.86a"
 		d Deep nodes format
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
+			or zN where N is a single digit between 1 and 9
 		D Prefer vanilla, switch to Deep nodes on overflow
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
@@ -272,6 +273,7 @@ type ProgramConfig struct {
 	SpeedTree          bool // accelerate multitree at the cost of memory usage
 	SpeedTreeExplicit  bool // whether the user explicitly passed --speedtree on/off
 	Eject              bool // whether to only put rebuilt maps into output file and no other lumps
+	ZdoomCompression   int  // zlib compression level for compressed Zdoom nodes
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -336,6 +338,7 @@ func init() {
 		SpeedTree:              false, // overridden dependent on other parameters if SpeedTreeExplicit == false
 		SpeedTreeExplicit:      false,
 		Eject:                  false,
+		ZdoomCompression:       6,
 	})
 }
 
@@ -423,6 +426,7 @@ func PrintHelp() {
 	Log.Printf("		d Deep nodes format\n")
 	Log.Printf("		x Zdoom extended nodes format\n")
 	Log.Printf("		z Zdoom compressed nodes format \n")
+	Log.Printf("		  or zN where N is a single digit between 1 and 9\n")
 	Log.Printf("		D Prefer vanilla, switch to Deep nodes on overflow\n")
 	Log.Printf("	f= Tuning factor (seg split cost, etc.)\n")
 	Log.Printf("		17 - default seg split cost\n")

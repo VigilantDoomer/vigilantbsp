@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2024, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -738,6 +738,7 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 			}
 		case 'c':
 			{
+				displace := 0
 				if bytes.Equal(p[1:3], []byte("=v")) {
 					c.NodeType = NODETYPE_VANILLA
 				} else if bytes.Equal(p[1:3], []byte("=d")) {
@@ -746,12 +747,30 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 					c.NodeType = NODETYPE_ZDOOM_EXTENDED
 				} else if bytes.Equal(p[1:3], []byte("=z")) {
 					c.NodeType = NODETYPE_ZDOOM_COMPRESSED
+					goto read_compress_level
 				} else if bytes.Equal(p[1:3], []byte("=D")) {
 					c.NodeType = NODETYPE_VANILLA_OR_DEEP
 				} else {
 					Log.Error("Unknown value for NODES format.\n")
 				}
-				p = p[3:]
+				// skip over read_compress_level
+				goto endformat
+			read_compress_level:
+				if len(p) >= 3 {
+					yes, tmp, sl := readSignedNumberOrNothing(p[3:])
+					if yes {
+						if tmp >= -2 && tmp <= 9 {
+							c.ZdoomCompression = tmp
+						} else {
+							// I intentionally do not advertise support for -2,-1, 0
+							// zlib compression levels
+							Log.Error("Ignoring unsupported zdoom compression level %d (out of range [1..9]).\n")
+						}
+						displace = len(p[3:]) - len(sl)
+					}
+				}
+			endformat:
+				p = p[3+displace:]
 			}
 		case 'f':
 			{
@@ -992,6 +1011,31 @@ func readNumericOnly(arg []byte) (bool, int, []byte) {
 		return true, v, arg[l:]
 	}
 	return false, 0, arg
+}
+
+// when there is an optional number argument, such as for Zdoom compression level.
+// It may be present or not, or be of negative sign.
+func readSignedNumberOrNothing(arg []byte) (bool, int, []byte) {
+	if len(arg) == 0 {
+		return false, 0, arg
+	}
+	sl := arg
+	if sl[0] == '+' {
+		if len(sl) > 1 {
+			sl = sl[1:]
+		} else {
+			Log.Error("supposedly numeric value ended in + sign\n")
+			return false, 0, arg
+		}
+	} else if sl[0] == '-' {
+		if len(sl) > 1 {
+			sl = sl[1:]
+		} else {
+			Log.Error("supposedly numeric value ended in - sign\n")
+			return false, 0, arg
+		}
+	}
+	return readNumericOnly(sl)
 }
 
 // ReadZenVariables does the reading AND setting zenscore.go globals

@@ -168,6 +168,7 @@ is either a suboption of option above it, or a possible value:
 		d Deep nodes format
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
+			or zN where N is a digit between 1 and 9
 		D Prefer vanilla, switch to Deep nodes on overflow
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
@@ -1422,6 +1423,10 @@ that support DeeP nodes and Zdoom extended nodes overlap, although
 it is not identical if I recall correctly.
 
 c=z - Zdoom compressed nodes format (most limited recognition)
+	since VigilantBSP 0.86a, compression level can also be
+	specified, by appending a single digit between 1 and 9
+	(higher is better compression), like this:
+	c=z1
 
 This format is identical to the previous in terms of features and
 downsides, except a certain compression algorithm is used, which
@@ -1430,6 +1435,26 @@ PrBoom-Plus v2.6.2um DOES support it, but Prboom-Plus v2.5.1.5 doesn't.
 
 Compression may occassionally result in smaller file size than even
 vanilla format.
+
+Compression is applied at the end of generation, it won't help prevent
+VigilantBSP from crashing if it rans out of memory. It really is only
+useful for getting smaller file size.
+
+Specifying c=z or c=z6 gives identical results. Use 1 for worst
+compression but fastest compression speed, 9 for best results but
+lowest compression speed. Be sure to check that your source port
+supports it (just in case).
+
+Unofficially, there may be non-positive numbers that can be specified:
+-2, -1, 0. Support for them can be dropped any time and thus is
+not advertised. What they map to, is decided by Go's
+compress/zlib library, or other library that VigilantBSP might
+switch to (github.com/klauspost/compress has been ruled out as
+a replacement because it gave less efficient compression in
+my tests). At the time of this writing, 0 meant no compression
+(but zlib header should be written), -1 maps to default
+compression which is 6, -2 is "Huffman encoding only (disable
+Lempel-Ziv match searching)".
 
 c=D - Prefer vanilla, switch to Deep nodes on overflow
 

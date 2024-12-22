@@ -78,7 +78,7 @@ func CreateZStream(header []byte, compressed bool) *ZStream {
 		z.raw.Write(header)
 	}
 	if compressed {
-		z.compressor = zlib.NewWriter(z.raw)
+		z.compressor, _ = zlib.NewWriterLevel(z.raw, config.ZdoomCompression) // reference to global: config
 	}
 	return z
 }

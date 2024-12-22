@@ -1,6 +1,8 @@
 Changelog for VigilantBSP
 
 v0.86a
+- New feature: allow user to set zlib compression level for compressed Zdoom nodes compatibility format, e.g. via -nc=z9 instead of -nc=z.
+	VigilantBSP defaults to vanilla nodes compatibility format, Zdoom compressed target is a non-default setting that this feature enhances.
 - Speed improvements to visplane partitioners (only noticeable on large, multi-level wads).
 - Added --eject parameter, useful for copying only levels to output wad and omitting all other lumps. See "Debug and other hidden parameters"
 - Minimum Go version to compile VigilantBSP from source is bumped up to v1.19 (from v1.15), which is the last version to support Windows 7.
