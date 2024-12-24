@@ -2322,18 +2322,6 @@ operating systems on both x86 (32-bit) and x86-64 (64-bit) platforms.
 The Go programming language infastructure allows building VigilantBSP
 on each one of those systems/platforms for each target.
 
-Since v0.86a version of VigilantBSP, for amd64 platform, there is also
-an alternate executable of VigilantBSP, which only runs if certain
-instruction sets are available. Such altered executables are distributed
-with _avx2 suffix, that is "vigilantbsp_avx2" for GNU/Linux
-and "vigilantbsp_avx2.exe" for Windows. To be specific, these
-alternate executables require x86-64-v3 microarchitecture level,
-rather than only AVX2 capacity. It is not yet established if these
-alternate executables perform better (or even that they don't
-perform worse), so users wanting stable performance and guarantee
-that their computer is supported should use standard VigilantBSP
-executables instead.
-
 Other targets are not tested or compiled for, and DOS support isn't
 even considered.
 

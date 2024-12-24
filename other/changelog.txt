@@ -4,24 +4,17 @@ v0.86a
 - New feature: allow user to set zlib compression level for compressed Zdoom nodes compatibility format, e.g. via -nc=z9 instead of -nc=z.
 	VigilantBSP defaults to vanilla nodes compatibility format, Zdoom compressed target is a non-default setting that this feature enhances.
 - New feature: two selectable options for "nodes format compatibility" -> "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
-	Currently user will see messages displayed in console from both vanilla and Zdoom node builders, because they are run in parallel by default.
-	This messages' interleaving doesn't affect output file stability.
-	The formats are not result of conversion between one another (which is why there is concurrent running of both) so you don't get worse nodes
-	than with explicitly picking vanilla or Zdoom format.
-	Disabled for multi-tree (this limitation will be lifted in some future version), and disables --stknode debug parameter.
-	To run vanilla thread only first, and only run Zdoom nodes thread when vanilla is not enough, use -nt=1 (single thread for building nodes specifically,
-	as if limiting multi-tree to one thread).
+	User will see messages displayed in console from both vanilla and Zdoom node builders, because they are run in parallel by default.
+	This messages' interleaving doesn't affect output file stability. See vigilantbsp.txt for details.
 - Speed improvements to visplane partitioners (only noticeable on large maps).
 - Added --eject parameter, useful for copying only levels to output wad and omitting all other lumps. See "Debug and other hidden parameters"
-- Minimum Go version to compile VigilantBSP from source is bumped up to v1.19 (from v1.15), which is the last version to support Windows 7.
-	I consider VigilantBSP's ability to run on Windows 7 a desirable feature, so the minimum Go version won't change for quite a while.
-- Additional (experimental) executables are produced (with _AVX2 suffix) for amd64 platform, 3rd microarchitecture level.
-	Their performance/stability was not tested yet and many sufficiently modern computers will not run them.
-	Windows 7 won't run AVX2 version either.
 - Bug fix: refuse to overwrite the output file if it is explicitly specified (via -o) to be the same as input file.
 	Previously, at least on Linux systems it was possible to corrupt input file by specifying it as output as well.
 	The capacity to rewrite file (by creating a temporary file, this is done when -o is not passed) still remains.
+- Minimum Go version to compile VigilantBSP from source is bumped up to v1.19 (from v1.15), which is the last version to support Windows 7.
+	I consider VigilantBSP's ability to run on Windows 7 a desirable feature, so the minimum Go version won't be bumped for quite a while.
 - (Relevant to programmers) Cgo is disabled in Makefile to guarantee VigilantBSP is statically linked, and not dependent on glibc.
+- (Relevant to programmers) Makefile now produces executables for 3rd architecture level, with a misleading "_avx2" suffix. They are untested and will not be packaged with this release.
 
 v0.85a
 - New feature: new selectable option for "nodes format compatibility" -> "Prefer vanilla, switch to Deep nodes on overflow"
