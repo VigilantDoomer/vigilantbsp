@@ -1,7 +1,7 @@
 // Based on go fix utility copyright (C) 2014 The Go Authors. All rights reserved
 // Based on bundle utility authored by Russ Cox
 // Based on gocat utility authored by Joseph Naegele, 2015
-// Copyright (C) 2022-2024, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of build toolchain for VigilantBSP program.
 //
@@ -86,7 +86,7 @@ import (
 // in go documentation, see also https://github.com/golang/go/issues/13560
 const CODEGEN_SIGN = "// Code generated from other source files. DO NOT EDIT.\n"
 
-const COPYRIGHT_STR = `// Copyright (C) 2022-2024, VigilantDoomer
+const COPYRIGHT_STR = `// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //

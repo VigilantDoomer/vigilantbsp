@@ -1,7 +1,7 @@
 Author
 ======
 
-(c) 2022-2024 VigilantDoomer
+(c) 2022-2025 VigilantDoomer
 
 Document note
 =============
@@ -14,7 +14,9 @@ Document version
 ================
 
 The current document is up-to-date with 0.86a version of
-VigilantBSP.
+VigilantBSP. Next version, 0.91 is currently under way and
+parts of documents may (or may not) have been updated to
+reflect pending changes in development version.
 
 Description
 ===========
@@ -169,6 +171,7 @@ is either a suboption of option above it, or a possible value:
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
 			or zN where N is a digit between 1 and 9
+		V Vanilla, but multi-tree is comfortable with unsigned trees
 		D Prefer vanilla, switch to Deep nodes on overflow
 		X Prefer vanilla, switch to Zdoom extended nodes on overflow
 		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow
@@ -217,9 +220,10 @@ offsets, and write the smallest one to wad file. This process can be
 -------------------------------------
 
 VigilantBSP takes care not to destroy self-referencing sector effects
-or cause issues (such as monsters not seeing or attacking the player) 
-when mapper is using self-referencing sectors with either default or
-non-default options. 
+or cause issues (such as monsters not seeing or attacking the player,
+which bugs happen with less accurate nodebuilders) when mapper is
+using self-referencing sectors with either default or non-default
+options.
 
 For example, in a wad built by Zennode, monsters would not be able 
 to attack the player from self-referencing sector unless the wad
@@ -1159,6 +1163,11 @@ Eventually, version analogous to ZokumBSP one is going to be
 implemented too, but the timeline for its implementation is
 currently unknown.
 
+Certain options interact and alter behavior of multi-tree, like
+all options with capital letter as value in nodes format (c=V,
+c=D, c=X, c=Z), and debug/hidden options such as --ableist,
+--speedtree, etc.
+
 m=0 - Don't use, build single tree (default)
 
 You can disable multi-tree mode explicitly if you want, although
@@ -1230,31 +1239,51 @@ to be considered (ensures the process is deterministic, note to still
 use -d explicitly if entire output file needs to be build 
 deterministically and not just nodes)
 
-This approach might miss condition when some VPO spot in the map could 
-be eliminated by raising visplane count (but not reaching visplane 
-limit) elsewhere, so this is why we should call this "best" and not 
-best. Improving on it is the task for the future, I can tell you that 
-computing visplanes for all spots in entire map at once is hard task.
-Visplane Explorer doesn't provide 100% accuracy (it tests only a 
-limited amount of angles), and can't possibly know which actual height
-changes can happen in the actual playthrough of the map, and that is
-not even starting on how to actually compare the two "heat" maps and
-determine the best one in general case (where both contain VPOs, or
-both don't report any, but visplane counts are bigger in some area
-on one partition result but in some other area on the other).
-ZokumBSP doesn't compute visplanes either, and there are other areas 
-to fix or improve in VigilantBSP beside multi-tree that will have 
-an effect on this.
+Minimizing subsector count is not the same as minimizing visplanes,
+it just so happens that vastly greater subsector count correlates
+with excessive amount of visplanes.
 
-Also, minimizing subsector count is not the same as minimizing 
-visplanes, it just so happens that vastly greater subsector count
-correlates with excessive amount of visplanes.
+v0.91 introduced mechanic to prefer trees that can be represented
+in vanilla format, over those that cannot, even if the latter are
+better according to the list above. This applies if nodes format
+output is selected to be vanilla or "prefer vanilla, switch to ...
+on overflow". With the default, regular vanilla nodes output format
+setting, it also prefers trees that fit into signed limits of
+original game, over any trees that require limit-removing ports
+that interpret integer indices as unsigned. This mechanic does not
+affect results in almost all cases, but is a safeguard that may save
+the day in some border cases, when one is squeezing an overdone map under
+limits.
 
-By the way, you CAN actually use this mode even with partition 
-selection other than visplane reduction types, and also can use it to
-generate DeeP nodes or on non-vanilla maps, but doing this has little 
-practical value. This mode was designed for vanilla maps and advanced
-visplane reduction (or at least Killough's).
+The approach behind multi-tree might miss condition when some
+VPO spot in the map could be eliminated by raising visplane count
+(but not reaching visplane limit) elsewhere. Improving on it is the
+task for the future, as computing visplanes for all spots in entire
+map at once is a hard task. Visplane Explorer doesn't provide
+100% accuracy (it tests only a limited amount of angles), and
+can't possibly know which actual height changes can happen in the
+actual playthrough of the map, and that is not even starting on how
+to actually compare the two "heat" maps and determine the best one
+in general case (where both contain VPOs, or both don't report any,
+but visplane counts are bigger in some area on one partition result
+but in some other area on the other). ZokumBSP doesn't compute
+visplanes either, and there are other areas to fix or improve in
+VigilantBSP beside multi-tree that will have an effect on this.
+
+User can actually use this mode even with partition selection other
+than visplane reduction types, and also can use it to generate DeeP
+nodes or on non-vanilla maps. Whether this has practical value, is
+up to the user. This mode was originally designed for vanilla maps
+and advanced visplane reduction (or at least Killough's), but
+VigilantBSP's architecture abstracts away partitioner from
+multi-tree picker much like it does formats, allowing many
+combinations to work without errors. The idea is that user might
+know better than nodebuilder's author, as to what is useful and
+for what purpose. In my own practice, I found it useful to use
+fastest partitioner (maelstrom) to test my nodebuilder against
+regressions, as when I optimize stuff, to see that output of
+optimized code is the same as prior to optimization, and that it
+didn't slow down unexpectedly.
 
 Since version 0.82a, this can now be sanely used with verbose output,
 as all the details about node creations will be printed only after
@@ -1473,6 +1502,51 @@ my tests). At the time of this writing, 0 meant no compression
 compression which is 6, -2 is "Huffman encoding only (disable
 Lempel-Ziv match searching)".
 
+c=V - Vanilla, but multi-tree is comfortable with unsigned trees
+	Introduced in VigilantBSP v0.91
+
+This option only alters behavior of multi-tree and is otherwise
+identical to c=v, which is the default.
+
+Version 0.91 introduced a fail-safe mechanic into multi-tree when
+building for node formats that are either vanilla or "prefer
+vanilla". In previous versions, it could have happened (in a very
+rare edge cases), that the best tree doesn't fit into vanilla
+limits, but some slightly worse tree does. For that to happen,
+segs in generated trees should be very close on average to
+number 65536 (and, to actually work with original engine, to
+32768, the signed limit). This happens almost never, but 0.91
+implements a safeguard: if trees that fit vanilla format exist,
+it will chose best among them (and ignore better trees that
+don't fit), and if trees that fit vanilla SIGNED limits of
+original engine exist, it will choose best among them (and
+ignore better trees that would require a limit-removing port
+handling unsigned limits).
+
+This option then merely removes the second part. The trees thus
+will be in vanilla format (if any such tree exists at all), but
+if you were near the border of 32768 segs, and a better tree has
+more segs than that but fewest subsectors of all trees, it will
+be chosen, and original DOS engine won't work with such map
+correctly. This is how versions of VigilantBSP prior to v0.91
+worked anyway, and running into this corner case is very
+unusual (I have only achieved it in synthetic tests rather
+than real maps).
+
+Technically, the second safeguard that this removes, actually
+is in effect only when building multitrees with the default output
+format c=v. Below you will find "vanilla with fallback" output
+formats (all have capital letter for their code), they too remove
+this second safeguard as well. This logic is due to common sense:
+if falling back onto advanced formats is acceptable, the user
+is not targeting original engine limits, and is content with having
+map work only in ports, although if he can spare having to use
+advanced format for greater compatibility across source ports
+(and especially rare or unusual forks that don't care for demo
+compatibility but that "casual" players may indulge),
+he would prefer not to use advanced format unless absolutely
+necessary.
+
 c=D - Prefer vanilla, switch to Deep nodes on overflow
 
 Note the capital "D", not lower case "d". This will try to
@@ -1507,9 +1581,17 @@ Similar to previous option, but if results cannot be represented
 in vanilla format, the output will be Zdoom extended nodes without
 compression.
 
-If multi-tree mode is selected, this will perform like c=x, and
-not bother building vanilla nodes. This limitation may be lifted
-in future versions of VigilantBSP.
+Since 0.91 version of VigilantBSP, if multi-tree mode is selected,
+it will build vanilla trees first, and if none of them can actually
+be represented correctly, then it will build a single tree in
+ZDoom extended format, choosing the root partition corresponding to
+the best tree seen when trying to build vanilla. This is not necessarily
+the same tree as a multi-tree with c=x option would result in, but
+it can by chance be.
+
+A hidden parameter --ableist will restore the behavior of 0.86a
+version for multi-tree (forego trying vanilla, do the same as
+if c=x was specified).
 
 Note that there is no conversion between vanilla and Zdoom nodes
 format due to very different precision and not merely raised limits
@@ -1558,9 +1640,17 @@ c=Z - Prefer vanilla, switch to Zdoom compressed nodes on overflow
 Similar to previous option, but if results cannot be represented
 in vanilla format, the output will be Zdoom compressed nodes.
 
-If multi-tree mode is selected, this will perform like c=z, and
-not bother building vanilla nodes. This limitation may be lifted
-in future versions of VigilantBSP.
+Since 0.91 version of VigilantBSP, if multi-tree mode is selected,
+it will build vanilla trees first, and if none of them can actually
+be represented correctly, then it will build a single tree in
+ZDoom compressed format, choosing the root partition corresponding to
+the best tree seen when trying to build vanilla. This is not necessarily
+the same tree as a multi-tree with c=z option would result in, but
+it can by chance be.
+
+A hidden parameter --ableist will restore the behavior of 0.86a
+version for multi-tree (forego trying vanilla, do the same as
+if c=z was specified).
 
 All notes from previous option apply.
 
@@ -2030,6 +2120,31 @@ It is recommended to give this file an extension of ".prof"
 Also, see comments closing this section.
 
 
+--ableist
+Supported since VigilantBSP 0.91, is used to alter multi-tree modes
+behavior to resemble that of previous versions, that is to pick the
+absolute best tree, regardless of whether it fits in vanilla nodes
+format, and then either output in target format or fail. Only affects
+anything if nodes output format is either "vanilla", or "prefer vanilla",
+because otherwise multi-tree just selects best tree anyways.
+
+The default behavior from VigilantBSP 0.91 onwards is to select best
+tree among specifically trees that can be represented in vanilla
+nodes format, if any such trees exist, and only if none such exist,
+use overall best tree. This new behavior does have a little overhead,
+although it fits the typical usecase for multi-tree, to squeeze map
+to work in visplane-limited original engine. On the maps that can
+actually work in vanilla, this overhead won't be significant -- with
+likelihood, it is the maps that are beyond vanilla format itself that
+will be slowed down by the new mechanic (which --ableist can revert).
+
+Note that it is indeed possible for best vanilla tree to be not the
+best overall tree, especially when there are linedefs marked precious,
+or if building Hexen map with polyobjects, or just because actual
+best tree required too many additional vertices, even though it had
+fewer subsectors.
+
+
 --unreversenodes
 A niche use option.
 Linguica discovered (see https://www.doomworld.com/forum/topic/74354-stupid-bsp-tricks/?do=findComment&comment=1524479)
@@ -2270,6 +2385,7 @@ around 700Mb)
 took 2h 22 m 35 seconds (with acceleration implicitly on as its the
 new default, peak memory usage around 1Gb)
 
+
 --eject
 Produce output file containing only rebuilt levels and NO other lumps.
 Requires to specify output file via -o parameter. Won't include levels
@@ -2279,6 +2395,7 @@ It is possible to copy select levels without actually rebuilding them
 (and omit all other levels and lumps from resulting file):
 
 	vigilantbsp -d -b- -n- -r- source.wad -m:map05+map07+map08+map25+map29 -o selected-levels-only.wad --eject
+
 
 
 Closing comments in regards to --memprofile and --cpuprofile options:
@@ -2322,8 +2439,15 @@ operating systems on both x86 (32-bit) and x86-64 (64-bit) platforms.
 The Go programming language infastructure allows building VigilantBSP
 on each one of those systems/platforms for each target.
 
-Other targets are not tested or compiled for, and DOS support isn't
-even considered.
+VigilantBSP tries to keep itself supporting Windows 7 and later,
+although this support is not always directly tested by the author.
+
+Please report issue on github
+https://github.com/vigilantdoomer/vigilantbsp/
+if windows builds of VigilantBSP stopped running on Windows 7.
+
+Targets not mentioned above are not tested nor compiled for, and
+DOS support isn't even considered.
 
 Section 13: Other node builders
 ===============================

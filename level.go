@@ -358,6 +358,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				width: treeWidth,
 			}
 			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA ||
+				nodeType == NODETYPE_VANILLA_RELAXED ||
 				nodeType == NODETYPE_VANILLA_OR_DEEP ||
 				nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED ||
 				nodeType == NODETYPE_VANILLA_OR_ZEXTENDED {
@@ -423,17 +424,13 @@ func (l *Level) WaitForAndWriteData() {
 
 		// Wait for reject builder to complete its work, then write results
 		if l.RejectChan != nil {
-			// don't forget to write reject too
-			// Log.Printf("Waiting for REJECT...\n")
 			rejectData := <-l.RejectChan
 			l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT", "")
 		}
 
 		// Wait for blockmap builder to complete its work, then write results
 		if l.BlockmapLumpChannel != nil {
-			// Log.Printf("Waiting for BLOCKMAP...\n")
 			bmdata := <-l.BlockmapLumpChannel
-			//close(l.BlockmapLumpChannel)
 			l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
 		}
 	} else {

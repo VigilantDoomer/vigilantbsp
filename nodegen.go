@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -70,7 +70,6 @@ const DETAILED_LEVEL_THRESHOLD = 500
 // Passed to the nodes builder goroutine
 type NodesInput struct {
 	lines              WriteableLines
-	solidMap           *Blockmap // rarely filled field
 	sectors            []Sector
 	sidedefs           []Sidedef
 	bcontrol           chan BconRequest
@@ -89,6 +88,8 @@ type NodesInput struct {
 	cacheSideness      bool
 	stkNode            bool
 	width              int
+	solidMap           *Blockmap // rarely filled field (passthrough from another nodes generator, typically nonZ -> Z)
+	linedefForMTP      *uint16   // another rare passthrough
 }
 
 type Number int
@@ -347,24 +348,29 @@ func NodesGenerator(input *NodesInput) {
 	cloneEarly := false
 	alreadyCloned := false
 	var linesForZdoom WriteableLines
+	if input.nodeType == NODETYPE_VANILLA_RELAXED {
+		input.nodeType = NODETYPE_VANILLA
+		if input.multiTreeMode != MULTITREE_NOTUSED {
+			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
+		}
+	}
 	if input.stkNode && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
 		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 		// stknode doesn't support vanilla_or_zdoom format mode -- yet.
-		// TODO implement support for stknode  to build vanilla but fallback on zdoom format
+		// TODO implement support for stknode to build vanilla but fallback on zdoom format
 		input.stkNode = false
 		if !isZDoomNodes() { // so that message is printed only once
 			Log.Error("Building in --stknode mode is not supported for \"vanilla with Zdoom nodes fallback\", disabling stknode.\n")
 		}
 	}
-	if input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+	if config.Ableist && // reference to global: config
+		input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
 		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
-		// multi-trees don't support vanilla_or_zdoom format mode -- yet.
-		// TODO implement support for multi-trees to build vanilla but fallback on zdoom format
-		// TODO also time tallied incorrectly now, as timer will restart
+		// TODO time tallied incorrectly now, as timer will restart
 		input.nodeType = promoteNodeType(input.nodeType)
 		oldNodeType = input.nodeType // intentional override
 		if !isZDoomNodes() {
-			Log.Error("Building \"vanilla with Zdoom nodes fallback\" is not supported yet for multi-tree, switching to Zdoom nodes without trying vanilla.\n")
+			Log.Printf("Ableist mode and multi-tree with fallback to Zdoom nodes: switching to Zdoom nodes without trying vanilla.\n")
 			ZNodesGenerator(input)
 			return
 		}
@@ -615,9 +621,14 @@ func NodesGenerator(input *NodesInput) {
 				// vanilla_or_zdoom* nodes format -- contrived operation here
 				// keep in mind that Zdoom generator branch won't reach here, this
 				// is dispatch that runs in non-Zdoom generator
-				input.solidMap = solidMap
+				passthrough := &MultiformatPassthrough{
+					input:         input,
+					solidMap:      solidMap,
+					linesForZdoom: linesForZdoom,
+					start:         start,
+				}
 				rootNode = VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
-					initialSuper, input, oldNodeType, linesForZdoom, start)
+					initialSuper, oldNodeType, passthrough)
 				if rootNode == nil {
 					return // message was sent from Zdoom generator spawned from dispatch
 				}
@@ -643,8 +654,41 @@ func NodesGenerator(input *NodesInput) {
 			workData.sidenessCache.readOnly = true
 		}
 
+		var foreign *MTPForeignInput
+		if input.linedefForMTP != nil {
+			// plain multi-tree will try only this one specified linedef as root
+			// Intended use is building Zdoom nodes after plain multi-tree proper
+			// failed to find tree that fits vanilla nodes format, even unsigned,
+			// and the mode was "prefer vanilla, build Zdoom on overflow"
+			if foreign != nil {
+				Log.Panic("Invalid MTPForeign combination (programmer error)\n")
+			}
+			foreign = &MTPForeignInput{
+				Action:  MTP_FOREIGN_THIS_ONE_LINEDEF,
+				LineIdx: *input.linedefForMTP,
+			}
+		}
+		if workData.nodeType == NODETYPE_VANILLA &&
+			(oldNodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+				oldNodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+			// extra parameters to handle the fallback to Zdoom nodes format
+			if foreign != nil {
+				Log.Panic("Invalid MTPForeign combination (programmer error)\n")
+			}
+			foreign = &MTPForeignInput{
+				Action:        MTP_FOREIGN_EXTRADATA,
+				linesForZdoom: linesForZdoom,
+				start:         start,
+				input:         input,
+				solidMap:      solidMap,
+			}
+		}
+
 		rootNode, treeCount = MTPSentinel_MakeBestBSPTree(&workData, rootBox,
-			initialSuper, input.specialRootMode)
+			initialSuper, input.specialRootMode, oldNodeType, foreign)
+		if rootNode == nil {
+			return // message was sent from Zdoom generator spawned from dispatch
+		}
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
 	}
@@ -722,7 +766,7 @@ func NodesGenerator(input *NodesInput) {
 		// TODO Hexen contains some awkwardly designed polyobjects, placed in
 		// non-convex sectors, sectors joined with others (map10) although
 		// not remotely etc. Until polyobject containing part is determined more
-		// precisely, this report (and the total itself is not much use).
+		// precisely, this report (and the total itself) is not much use.
 		// NOTE I intend to use this field (totals.preciousSplit) for multi-tree
 		// so that it would select trees where polyobjs were not damaged. But
 		// currently the number paints worse picture than there actually is: in
@@ -797,15 +841,14 @@ func NodesGenerator(input *NodesInput) {
 			}
 		}
 	}
-
-	if treeCount == 0 {
-		if !alreadyCloned {
+	if !alreadyCloned {
+		if treeCount == 0 {
 			Log.Printf("Nodes took %s\n", time.Since(start))
+		} else {
+			dur := time.Since(start)
+			avg := time.Duration(int64(dur) / int64(treeCount))
+			Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
 		}
-	} else {
-		dur := time.Since(start)
-		avg := time.Duration(int64(dur) / int64(treeCount))
-		Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2024, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -265,6 +265,10 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					// user requested to transfer only rebuilt maps into new file
 					// and omit all other lumps
 					c.Eject = true
+				} else if bytes.Equal([]byte(arg), []byte("--ableist")) {
+					// user requested to select best tree in multi-tree regardless of
+					// compatibility
+					c.Ableist = true
 				} else if bytes.HasPrefix([]byte(arg), []byte("--speedtree")) {
 					// Parameter to control whether use
 					ns, _ := readNumeric("--speedtree=", []byte(arg)[len("--speedtree=")-1:])
@@ -755,6 +759,8 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 				} else if bytes.Equal(p[1:3], []byte("=Z")) {
 					c.NodeType = NODETYPE_VANILLA_OR_ZCOMPRESSED
 					goto read_compress_level
+				} else if bytes.Equal(p[1:3], []byte("=V")) {
+					c.NodeType = NODETYPE_VANILLA_RELAXED
 				} else {
 					Log.Error("Unknown value for NODES format.\n")
 				}

@@ -1,5 +1,5 @@
 // Code generated from other source files. DO NOT EDIT.
-// Copyright (C) 2022-2024, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -142,6 +142,12 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	cloneEarly := false
 	alreadyCloned := false
 	var linesForZdoom WriteableLines
+	if input.nodeType == NODETYPE_VANILLA_RELAXED {
+		input.nodeType = NODETYPE_VANILLA
+		if input.multiTreeMode != MULTITREE_NOTUSED {
+			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
+		}
+	}
 	if input.stkNode && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
 		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 
@@ -150,13 +156,14 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			Log.Error("Building in --stknode mode is not supported for \"vanilla with Zdoom nodes fallback\", disabling stknode.\n")
 		}
 	}
-	if input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+	if config.Ableist &&
+		input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
 		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 
 		input.nodeType = promoteNodeType(input.nodeType)
 		oldNodeType = input.nodeType
 		if !ZExt_isZDoomNodes() {
-			Log.Error("Building \"vanilla with Zdoom nodes fallback\" is not supported yet for multi-tree, switching to Zdoom nodes without trying vanilla.\n")
+			Log.Printf("Ableist mode and multi-tree with fallback to Zdoom nodes: switching to Zdoom nodes without trying vanilla.\n")
 			ZNodesGenerator(input)
 			return
 		}
@@ -383,9 +390,14 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		} else {
 			if cloneEarly {
 
-				input.solidMap = solidMap
+				passthrough := &MultiformatPassthrough{
+					input:         input,
+					solidMap:      solidMap,
+					linesForZdoom: linesForZdoom,
+					start:         start,
+				}
 				rootNode = ZExt_VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
-					initialSuper, input, oldNodeType, linesForZdoom, start)
+					initialSuper, oldNodeType, passthrough)
 				if rootNode == nil {
 					return
 				}
@@ -401,8 +413,38 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			workData.sidenessCache.readOnly = true
 		}
 
+		var foreign *ZExt_MTPForeignInput
+		if input.linedefForMTP != nil {
+
+			if foreign != nil {
+				Log.Panic("Invalid MTPForeign combination (programmer error)\n")
+			}
+			foreign = &ZExt_MTPForeignInput{
+				Action:  MTP_FOREIGN_THIS_ONE_LINEDEF,
+				LineIdx: *input.linedefForMTP,
+			}
+		}
+		if workData.nodeType == NODETYPE_VANILLA &&
+			(oldNodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+				oldNodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+
+			if foreign != nil {
+				Log.Panic("Invalid MTPForeign combination (programmer error)\n")
+			}
+			foreign = &ZExt_MTPForeignInput{
+				Action:        MTP_FOREIGN_EXTRADATA,
+				linesForZdoom: linesForZdoom,
+				start:         start,
+				input:         input,
+				solidMap:      solidMap,
+			}
+		}
+
 		rootNode, treeCount = ZExt_MTPSentinel_MakeBestBSPTree(&workData, rootBox,
-			initialSuper, input.specialRootMode)
+			initialSuper, input.specialRootMode, oldNodeType, foreign)
+		if rootNode == nil {
+			return
+		}
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
 	}
@@ -518,15 +560,14 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			}
 		}
 	}
-
-	if treeCount == 0 {
-		if !alreadyCloned {
+	if !alreadyCloned {
+		if treeCount == 0 {
 			Log.Printf("Nodes took %s\n", time.Since(start))
+		} else {
+			dur := time.Since(start)
+			avg := time.Duration(int64(dur) / int64(treeCount))
+			Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
 		}
-	} else {
-		dur := time.Since(start)
-		avg := time.Duration(int64(dur) / int64(treeCount))
-		Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
 	}
 }
 
@@ -4111,13 +4152,68 @@ type ZExt_MTPWorker_Result struct {
 	id       int
 }
 
+type ZExt_MTPForeignInput struct {
+	Action        int
+	LineIdx       uint16
+	linesForZdoom WriteableLines
+	start         time.Time
+	input         *NodesInput
+	solidMap      *Blockmap
+	rootFunc      ZExt_CreateRootNodeForPick
+	reportStr     string
+}
+
+type ZExt_CreateRootNodeForPick func(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
+	pseudoSuper *ZExt_Superblock, pickSegIdx int) *NodeInProcess
+
 func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
-	super *ZExt_Superblock, rootChoiceMethod int) (*NodeInProcess, int) {
-	Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
-	Log.Printf("Multi-tree modes take significant time to compute, and also have rather high memory consumption.\n")
+	super *ZExt_Superblock, rootChoiceMethod int, oldNodeType int,
+	foreign *ZExt_MTPForeignInput) (*NodeInProcess, int) {
+
+	rootFunc := ZExt_MTP_CreateRootNode
+	reportStr := "Multi-tree: processed %d/%d trees\n"
+
+	if foreign == nil || foreign.Action == MTP_FOREIGN_EXTRADATA {
+		Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
+		Log.Printf("Multi-tree modes take significant time to compute, and also have rather high memory consumption.\n")
+	} else {
+		switch foreign.Action {
+		case MTP_FOREIGN_EXTRADATA:
+			Log.Panic("MTP_FOREIGN_EXTRADATA was supposed to be handled in another branch (programmer error)\n")
+		case MTP_FOREIGN_THIS_ONE_LINEDEF:
+			rootNode := ZExt_MTP_OneTree(w, w.allSegs[0], bbox, super, foreign.LineIdx)
+			return rootNode, 1
+		case MTP_FOREIGN_CUSTOM_ROOT_FUNC:
+			rootFunc = foreign.rootFunc
+			reportStr = foreign.reportStr
+		default:
+			Log.Panic("Unknown foreign action for MTPSentinel: %d (programmer error)\n", foreign.Action)
+		}
+	}
 
 	rootSegCandidates := ZExt_MTPSentinel_GetRootSegCandidates(w.allSegs,
 		rootChoiceMethod)
+
+	vanillaBias := w.nodeType == NODETYPE_VANILLA && !config.Ableist
+
+	strictVanillaBias := vanillaBias && oldNodeType == NODETYPE_VANILLA
+
+	var input2 *NodesInput
+	var nodesChan chan NodesResult
+	if w.nodeType == NODETYPE_VANILLA &&
+		(oldNodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+			oldNodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+		Log.Verbose(1, "Setting up a fallback to Zdoom nodes generator, in case no trees fit in vanilla\n")
+		input2 = &NodesInput{}
+		*input2 = *foreign.input
+		input2.lines = foreign.linesForZdoom
+		input2.nodeType = oldNodeType
+		input2.bcontrol = nil
+		input2.bgenerator = nil
+		nodesChan = make(chan NodesResult)
+		input2.nodesChan = nodesChan
+		input2.solidMap = foreign.solidMap
+	}
 
 	workerCount := int(config.NodeThreads)
 
@@ -4130,7 +4226,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 
 	if workerCount > len(rootSegCandidates) {
 		workerCount = len(rootSegCandidates)
-		Log.Printf("Limiting number of threads for multi-tree to %d, because only %d linedefs to try.\n",
+		Log.Printf("Limiting number of threads for multi-tree to %d, because only %d linedefs to try for root.\n",
 			workerCount, workerCount)
 	}
 
@@ -4145,7 +4241,8 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 			workerChans[i] = make(chan ZExt_MTPWorker_Input)
 			workerReplyChans[i] = make(chan ZExt_MTPWorker_Result)
 
-			go ZExt_MTPWorker_SpeedGenerateBSPTrees(workerChans[i], workerReplyChans[i])
+			go ZExt_MTPWorker_SpeedGenerateBSPTrees(workerChans[i], workerReplyChans[i],
+				rootFunc)
 		}
 	} else {
 
@@ -4153,7 +4250,8 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 			workerChans[i] = make(chan ZExt_MTPWorker_Input)
 			workerReplyChans[i] = make(chan ZExt_MTPWorker_Result)
 
-			go ZExt_MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
+			go ZExt_MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i],
+				rootFunc)
 		}
 	}
 
@@ -4186,7 +4284,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	treesDone := 0
 	maxTrees := len(rootSegCandidates)
 
-	var bestResult *ZExt_MTPWorker_Result
+	var bestResult, bestVanillaResult, bestStrictVanillaResult *ZExt_MTPWorker_Result
 	for len(branches) > 0 {
 		chi, recv, recvOk := reflect.Select(branches)
 		if !recvOk {
@@ -4214,13 +4312,76 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 			close(workerChans[branchIdx[chi]])
 		}
 
-		if bestResult == nil || ZExt_MTP_IsBSPTreeBetter(bestResult, resp) {
-			bestResult = resp
+		if vanillaBias {
+
+			if bestResult == nil || ZExt_MTP_IsBSPTreeBetter(bestResult, resp) {
+				bestResult = resp
+				if !resp.workData.isUnsignedOverflow() {
+					bestVanillaResult = resp
+				}
+			} else if !resp.workData.isUnsignedOverflow() &&
+				(bestVanillaResult == nil ||
+					ZExt_MTP_IsBSPTreeBetter(bestVanillaResult, resp)) {
+
+				bestVanillaResult = resp
+			}
+			if strictVanillaBias {
+				if !resp.workData.isVanillaSignedOverflow() {
+					if bestStrictVanillaResult == nil ||
+						ZExt_MTP_IsBSPTreeBetter(bestStrictVanillaResult, resp) {
+						bestStrictVanillaResult = resp
+					}
+				}
+			}
+		} else {
+
+			if bestResult == nil || ZExt_MTP_IsBSPTreeBetter(bestResult, resp) {
+				bestResult = resp
+			}
 		}
-		Log.Printf("Multi-tree: processed %d/%d trees\n", treesDone, maxTrees)
+
+		Log.Printf(reportStr, treesDone, maxTrees)
 	}
+
+	oldBestResult := bestResult
+	if bestStrictVanillaResult != nil {
+		bestResult = bestStrictVanillaResult
+	} else if bestVanillaResult != nil {
+		bestResult = bestVanillaResult
+	}
+
 	Log.Printf("Multi-tree finished processing trees (%d out of %d - should be equal)", treesDone,
 		lastFedIdx+1)
+
+	if vanillaBias && bestVanillaResult == nil {
+		Log.Printf("No trees could fit under vanilla format.\n")
+	} else if bestVanillaResult != nil && bestVanillaResult.id != oldBestResult.id {
+		Log.Printf("I've chosen a tree representable in vanilla nodes format, though a better tree existed outside vanilla format limits.\n")
+	}
+	if bestStrictVanillaResult != nil && bestStrictVanillaResult.id != bestVanillaResult.id {
+		Log.Printf("I've chosen a tree that satisfies signed integer cap of vanilla engine, though a better tree existed for limit-removing ports that allow unsigned integers.\n")
+	}
+
+	if (oldNodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		oldNodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) && !ZExt_isZDoomNodes() {
+
+		if bestResult.workData.isUnsignedOverflow() {
+
+			Log.Printf("(multi-tree) vanilla nodes format overflowed for ALL trees, will run Zdoom nodes format generator for a root seg that corresponded to best tree\n")
+
+			Log.Printf("   time spent on trees prior: %s\n", time.Since(foreign.start))
+			foreign.input.lines.AssignFrom(input2.lines)
+			li := new(uint16)
+			*li = w.allSegs[rootSegCandidates[bestResult.id]].Linedef
+			input2.linedefForMTP = li
+			go ZNodesGenerator(input2)
+
+			nodeResult := <-nodesChan
+			foreign.input.nodesChan <- nodeResult
+
+			return MTP_nilAndPrintTimer(foreign.start, treesDone+1, oldNodeType), 0
+		}
+	}
 
 	oldLines := w.lines
 	*w = *(bestResult.workData)
@@ -4362,11 +4523,10 @@ func ZExt_MTPSentinel_GetRootSegCandidates(allSegs []*ZExt_NodeSeg, rootChoiceMe
 	return res2
 }
 
-func ZExt_MTPWorker_GenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo chan<- ZExt_MTPWorker_Result) {
+func ZExt_MTPWorker_GenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo chan<- ZExt_MTPWorker_Result, rootFunc ZExt_CreateRootNodeForPick) {
 	for permutation := range input {
-		tree := ZExt_MTP_CreateRootNode(permutation.workData,
-			permutation.ts, permutation.bbox, permutation.pseudoSuper,
-			permutation.pickSegIdx)
+		tree := rootFunc(permutation.workData, permutation.ts, permutation.bbox,
+			permutation.pseudoSuper, permutation.pickSegIdx)
 
 		replyTo <- ZExt_MTPWorker_Result{
 			workData: permutation.workData,
@@ -4377,7 +4537,7 @@ func ZExt_MTPWorker_GenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo 
 	close(replyTo)
 }
 
-func ZExt_MTPWorker_SpeedGenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo chan<- ZExt_MTPWorker_Result) {
+func ZExt_MTPWorker_SpeedGenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, replyTo chan<- ZExt_MTPWorker_Result, rootFunc ZExt_CreateRootNodeForPick) {
 
 	var qallocSupers *ZExt_Superblock
 	bhPool := sync.Pool{
@@ -4393,9 +4553,8 @@ func ZExt_MTPWorker_SpeedGenerateBSPTrees(input <-chan ZExt_MTPWorker_Input, rep
 			permutation.workData.blocksHit = bhPool.Get().([]ZExt_BlocksHit)
 		}
 
-		tree := ZExt_MTP_CreateRootNode(permutation.workData,
-			permutation.ts, permutation.bbox, permutation.pseudoSuper,
-			permutation.pickSegIdx)
+		tree := rootFunc(permutation.workData, permutation.ts, permutation.bbox,
+			permutation.pseudoSuper, permutation.pickSegIdx)
 
 		qallocSupers = permutation.workData.qallocSupers
 		permutation.workData.qallocSupers = nil
@@ -4498,6 +4657,44 @@ func ZExt_zoneAllocSupers(sz int, pseudoSuper *ZExt_Superblock) *ZExt_Superblock
 		dummy.returnSuperblockToPool(&(zone[i]))
 	}
 	return dummy.qallocSupers
+}
+
+func ZExt_MTP_OneTree(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
+	super *ZExt_Superblock, lineIdx uint16) *NodeInProcess {
+	cur := w.allSegs[0].Linedef
+	idx := 0
+	for ; idx < len(w.allSegs); idx++ {
+		cur = w.allSegs[idx].Linedef
+		if cur == lineIdx {
+			break
+		}
+	}
+	if cur != lineIdx {
+		Log.Panic("Seg from linedef %d is not found\n", lineIdx)
+	}
+	return ZExt_MTP_CreateRootNode(w, ts, bbox, super, idx)
+}
+
+func (w *ZExt_NodesWork) isUnsignedOverflow() bool {
+	return w.nodeType != NODETYPE_VANILLA ||
+		uint32(w.totals.numSSectors)&w.SsectorMask == w.SsectorMask ||
+		len(w.vertices) > 65536 ||
+		w.tooManySegsCantFix(true)
+}
+
+func (w *ZExt_NodesWork) isVanillaSignedOverflow() bool {
+	b := w.nodeType != NODETYPE_VANILLA ||
+		uint32(w.totals.numSSectors)&w.SsectorMask == w.SsectorMask ||
+		len(w.vertices) > 32768
+	if b {
+		return true
+	}
+
+	if w.lastSubsectorOverflows(VANILLA_MAXSEGINDEX) {
+		couldFix, _ := w.fitSegsToTarget(VANILLA_MAXSEGINDEX, true)
+		return !couldFix
+	}
+	return false
 }
 
 func (w *ZExt_NodesWork) AddVertex(x, y ZNumber) *ZExt_NodeVertex {
@@ -4869,8 +5066,8 @@ func ZExt_isZDoomNodes() bool {
 }
 
 func ZExt_VanillaOrZdoomFormat_Create(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
-	super *ZExt_Superblock, input *NodesInput, oldNodeType int,
-	linesForZdoom WriteableLines, start time.Time) *NodeInProcess {
+	super *ZExt_Superblock, oldNodeType int,
+	passthrough *MultiformatPassthrough) *NodeInProcess {
 
 	Log.Panic("Unreachable code called: VanillaOrZdoomFormat_Create in Zdoom nodes generator (programmer error)\n")
 	return nil

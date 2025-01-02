@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2024, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -21,7 +21,7 @@ import (
 )
 
 const PROG_CAPIT_NAME = "VigilantBSP"
-const VERSION = "0.86a"
+const VERSION = "0.91"
 
 /*
 -b Rebuild BLOCKMAP.
@@ -78,10 +78,11 @@ const VERSION = "0.86a"
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
 			or zN where N is a single digit between 1 and 9
+		V Vanilla, but multi-tree is comfortable with unsigned trees
 		D Prefer vanilla, switch to Deep nodes on overflow
-		X Prefer vanilla, switch to Zdoom extended nodes on overflow\n")
-		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow\n")
-		  or ZN where N is a single digit between 1 and 9\n")
+		X Prefer vanilla, switch to Zdoom extended nodes on overflow
+		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow
+		  or ZN where N is a single digit between 1 and 9
 	f= Tuning factor (seg split cost, etc.)
 		17 - default seg split cost
 	d= Penalty factor for _diagonal_ lines
@@ -167,6 +168,7 @@ const (
 	NODETYPE_VANILLA_OR_DEEP
 	NODETYPE_VANILLA_OR_ZEXTENDED
 	NODETYPE_VANILLA_OR_ZCOMPRESSED
+	NODETYPE_VANILLA_RELAXED
 )
 
 const (
@@ -179,6 +181,7 @@ const (
 // MROOT_ONESIDED & MROOT_TWOSIDED = 0
 // MROOT_ONESIDED | MROOT_TWOSIDED = MROOT_EVERY
 const (
+	MROOT_NONE     = 0x00
 	MROOT_ONESIDED = 0x01
 	MROOT_TWOSIDED = 0x02
 	MROOT_EVERY    = 0x03
@@ -279,6 +282,7 @@ type ProgramConfig struct {
 	SpeedTreeExplicit  bool // whether the user explicitly passed --speedtree on/off
 	Eject              bool // whether to only put rebuilt maps into output file and no other lumps
 	ZdoomCompression   int  // zlib compression level for compressed Zdoom nodes
+	Ableist            bool // whether to pick absolute best tree in multi-tree even if it is not compatible with vanilla but vanilla is required/preferred
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -344,13 +348,14 @@ func init() {
 		SpeedTreeExplicit:      false,
 		Eject:                  false,
 		ZdoomCompression:       6,
+		Ableist:                false,
 	})
 }
 
 // Moved away from init, used to confuse the "go test"!
 func Configure() {
 	Log.Printf("VigilantBSP ver %s\n", VERSION)
-	Log.Printf("Copyright (c)   2022-2024 VigilantDoomer\n")
+	Log.Printf("Copyright (c)   2022-2025 VigilantDoomer\n")
 	Log.Printf("This program is built upon ideas first implemented in DEU by Raphael Quinet, \n")
 	Log.Printf("BSP v5.2 by Colin Reed, Lee Killough and other contributors to BSP (program),\n")
 	Log.Printf("ZDBSP by Marisa Heit, Zennode by Marc Rousseau,\n")
@@ -432,6 +437,7 @@ func PrintHelp() {
 	Log.Printf("		x Zdoom extended nodes format\n")
 	Log.Printf("		z Zdoom compressed nodes format \n")
 	Log.Printf("		  or zN where N is a single digit between 1 and 9\n")
+	Log.Printf("		V Vanilla, but multi-tree is comfortable with unsigned trees\n")
 	Log.Printf("		D Prefer vanilla, switch to Deep nodes on overflow\n")
 	Log.Printf("		X Prefer vanilla, switch to Zdoom extended nodes on overflow\n")
 	Log.Printf("		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow\n")

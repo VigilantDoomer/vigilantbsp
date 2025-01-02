@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -19,6 +19,9 @@ package main
 // node_outro.go contains functions called after BSP tree is built (and in
 // case of multi-tree modes, the best one is chosen), but needs to be written
 // in the way lump format specifies, and perhaps fit under limits
+
+const UNSIGNED_MAXSEGINDEX = uint16(65535)
+const VANILLA_MAXSEGINDEX = uint16(32767)
 
 func (w *NodesWork) emptyNodesLumps() {
 	w.deepNodes = nil
@@ -45,9 +48,6 @@ func (w *NodesWork) tooManySegsCantFix(dryRun bool) bool {
 	if l == 0 { // wtf number of subsectors should never be zero
 		return true
 	}
-
-	UNSIGNED_MAXSEGINDEX := uint16(65535)
-	VANILLA_MAXSEGINDEX := uint16(32767)
 
 	if dryRun {
 		if w.lastSubsectorOverflows(UNSIGNED_MAXSEGINDEX) {

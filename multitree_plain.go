@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // multitree_plain.go - bruteforce solution for root node only
@@ -57,6 +58,27 @@ type MTPWorker_Result struct {
 	id       int
 }
 
+// MTPForeignInput is a special action that MTPSentinel is requested to do by other
+// parts of VigilantBSP
+type MTPForeignInput struct {
+	Action        int
+	LineIdx       uint16
+	linesForZdoom WriteableLines
+	start         time.Time
+	input         *NodesInput
+	solidMap      *Blockmap
+	rootFunc      CreateRootNodeForPick
+	reportStr     string
+}
+
+// preparation for... something. Used to be hardcoded to MTP_CreateRootNode
+type CreateRootNodeForPick func(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
+	pseudoSuper *Superblock, pickSegIdx int) *NodeInProcess
+
+const MTP_FOREIGN_EXTRADATA = 0
+const MTP_FOREIGN_THIS_ONE_LINEDEF = 1
+const MTP_FOREIGN_CUSTOM_ROOT_FUNC = 2
+
 // To avoid running out of memory, there is a limit on the number of workers
 // that can be designated in auto-mode (but this limit will be ignored if user
 // tells us an explicit number of workers to use)
@@ -68,12 +90,58 @@ const MAX_MTP_WORKERS = 16
 // undefined
 // Second return value is tree count
 func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
-	super *Superblock, rootChoiceMethod int) (*NodeInProcess, int) {
-	Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
-	Log.Printf("Multi-tree modes take significant time to compute, and also have rather high memory consumption.\n")
+	super *Superblock, rootChoiceMethod int, oldNodeType int,
+	foreign *MTPForeignInput) (*NodeInProcess, int) {
+
+	rootFunc := MTP_CreateRootNode
+	reportStr := "Multi-tree: processed %d/%d trees\n"
+
+	if foreign == nil || foreign.Action == MTP_FOREIGN_EXTRADATA {
+		Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
+		Log.Printf("Multi-tree modes take significant time to compute, and also have rather high memory consumption.\n")
+	} else {
+		switch foreign.Action {
+		case MTP_FOREIGN_EXTRADATA:
+			Log.Panic("MTP_FOREIGN_EXTRADATA was supposed to be handled in another branch (programmer error)\n")
+		case MTP_FOREIGN_THIS_ONE_LINEDEF:
+			rootNode := MTP_OneTree(w, w.allSegs[0], bbox, super, foreign.LineIdx)
+			return rootNode, 1
+		case MTP_FOREIGN_CUSTOM_ROOT_FUNC:
+			rootFunc = foreign.rootFunc
+			reportStr = foreign.reportStr
+		default:
+			Log.Panic("Unknown foreign action for MTPSentinel: %d (programmer error)\n", foreign.Action)
+		}
+	}
+
 	// Which segs will be used as starting point?
 	rootSegCandidates := MTPSentinel_GetRootSegCandidates(w.allSegs,
 		rootChoiceMethod)
+	// whether vanilla nodes format is required or preferred, AND we should be
+	// choosing best tree among specifically vanilla whenever any vanilla-compatible
+	// tree exists
+	vanillaBias := w.nodeType == NODETYPE_VANILLA && !config.Ableist // reference to global: config
+	// only bias in favor of best tree to run in vanilla engine with specifically
+	// SIGNED indices limits when target is strictly vanilla no compromises allowed
+	// (the default nodes format is the only such target)
+	strictVanillaBias := vanillaBias && oldNodeType == NODETYPE_VANILLA
+
+	var input2 *NodesInput
+	var nodesChan chan NodesResult
+	if w.nodeType == NODETYPE_VANILLA &&
+		(oldNodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+			oldNodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+		Log.Verbose(1, "Setting up a fallback to Zdoom nodes generator, in case no trees fit in vanilla\n")
+		input2 = &NodesInput{}
+		*input2 = *foreign.input
+		input2.lines = foreign.linesForZdoom
+		input2.nodeType = oldNodeType
+		input2.bcontrol = nil   // catch unexpected calls to it
+		input2.bgenerator = nil // catch unexpected calls to it
+		nodesChan = make(chan NodesResult)
+		input2.nodesChan = nodesChan
+		input2.solidMap = foreign.solidMap
+	}
 
 	// How many threads to create
 	workerCount := int(config.NodeThreads) // global config
@@ -89,7 +157,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	// If not, must reduce even if value was user-supplied
 	if workerCount > len(rootSegCandidates) { // more cores than segs to use as root
 		workerCount = len(rootSegCandidates)
-		Log.Printf("Limiting number of threads for multi-tree to %d, because only %d linedefs to try.\n",
+		Log.Printf("Limiting number of threads for multi-tree to %d, because only %d linedefs to try for root.\n",
 			workerCount, workerCount)
 	}
 
@@ -105,7 +173,8 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 			workerChans[i] = make(chan MTPWorker_Input)
 			workerReplyChans[i] = make(chan MTPWorker_Result)
 			// Spawn FAST but MEMORY HUNGRY workers
-			go MTPWorker_SpeedGenerateBSPTrees(workerChans[i], workerReplyChans[i])
+			go MTPWorker_SpeedGenerateBSPTrees(workerChans[i], workerReplyChans[i],
+				rootFunc)
 		}
 	} else {
 		// Non-accelerated path
@@ -113,7 +182,8 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 			workerChans[i] = make(chan MTPWorker_Input)
 			workerReplyChans[i] = make(chan MTPWorker_Result)
 			// Spawn workers (they will be fed data later)
-			go MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i])
+			go MTPWorker_GenerateBSPTrees(workerChans[i], workerReplyChans[i],
+				rootFunc)
 		}
 	}
 
@@ -163,7 +233,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 
 	// Now peek results of workers as they come, feeding next input to every
 	// worker that delivers result until no more inputs to try
-	var bestResult *MTPWorker_Result
+	var bestResult, bestVanillaResult, bestStrictVanillaResult *MTPWorker_Result
 	for len(branches) > 0 {
 		chi, recv, recvOk := reflect.Select(branches)
 		if !recvOk { // channel closed
@@ -190,19 +260,102 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 			// No more segs to try
 			close(workerChans[branchIdx[chi]])
 		}
+
 		// Compare against previous best
-		if bestResult == nil || MTP_IsBSPTreeBetter(bestResult, resp) {
-			bestResult = resp
+		if vanillaBias {
+			// If only some trees can be represented in vanilla nodes format, must
+			// track those alongside absolute best, because user specified target is
+			// either vanilla or "prefer vanilla, fallback to advanced format"
+			if bestResult == nil || MTP_IsBSPTreeBetter(bestResult, resp) {
+				bestResult = resp
+				if !resp.workData.isUnsignedOverflow() {
+					bestVanillaResult = resp
+				}
+			} else if !resp.workData.isUnsignedOverflow() &&
+				(bestVanillaResult == nil ||
+					MTP_IsBSPTreeBetter(bestVanillaResult, resp)) {
+				// compare against previous vanilla best
+				bestVanillaResult = resp
+			}
+			if strictVanillaBias {
+				if !resp.workData.isVanillaSignedOverflow() {
+					if bestStrictVanillaResult == nil ||
+						MTP_IsBSPTreeBetter(bestStrictVanillaResult, resp) {
+						bestStrictVanillaResult = resp
+					}
+				}
+			}
+		} else {
+			// straightforward, for non-vanilla node format targets or ableist mode
+			if bestResult == nil || MTP_IsBSPTreeBetter(bestResult, resp) {
+				bestResult = resp
+			}
 		}
-		Log.Printf("Multi-tree: processed %d/%d trees\n", treesDone, maxTrees)
+
+		Log.Printf(reportStr, treesDone, maxTrees)
 	}
+
+	oldBestResult := bestResult
+	if bestStrictVanillaResult != nil {
+		bestResult = bestStrictVanillaResult
+	} else if bestVanillaResult != nil {
+		bestResult = bestVanillaResult
+	}
+
 	Log.Printf("Multi-tree finished processing trees (%d out of %d - should be equal)", treesDone,
 		lastFedIdx+1)
+
+	// Assess compromises made
+	if vanillaBias && bestVanillaResult == nil {
+		Log.Printf("No trees could fit under vanilla format.\n")
+	} else if bestVanillaResult != nil && bestVanillaResult.id != oldBestResult.id {
+		Log.Printf("I've chosen a tree representable in vanilla nodes format, though a better tree existed outside vanilla format limits.\n")
+	}
+	if bestStrictVanillaResult != nil && bestStrictVanillaResult.id != bestVanillaResult.id {
+		Log.Printf("I've chosen a tree that satisfies signed integer cap of vanilla engine, though a better tree existed for limit-removing ports that allow unsigned integers.\n")
+	}
+
+	if (oldNodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+		oldNodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) && !isZDoomNodes() {
+		// can't rely on bestVanillaResult, as vanillaBias may have been disabled by
+		// user
+		if bestResult.workData.isUnsignedOverflow() {
+			// Limits exceeded, must upgrade
+			Log.Printf("(multi-tree) vanilla nodes format overflowed for ALL trees, will run Zdoom nodes format generator for a root seg that corresponded to best tree\n")
+			// print intermediary timer, it might hang around the screen for a while
+			// since we are obviously building a large level
+			Log.Printf("   time spent on trees prior: %s\n", time.Since(foreign.start))
+			foreign.input.lines.AssignFrom(input2.lines)
+			li := new(uint16)
+			*li = w.allSegs[rootSegCandidates[bestResult.id]].Linedef
+			input2.linedefForMTP = li
+			go ZNodesGenerator(input2)
+			// this interception is because timer is only output from here
+			nodeResult := <-nodesChan
+			foreign.input.nodesChan <- nodeResult
+			// we already sent result through channel, will return
+			return MTP_nilAndPrintTimer(foreign.start, treesDone+1, oldNodeType), 0
+		}
+	}
+
 	// Splice workData struct with one that is associated with bestResult
 	oldLines := w.lines // !!! level.go retains reference to old w.lines
 	*w = *(bestResult.workData)
 	oldLines.AssignFrom(w.lines) // so must clobber the data in old w.lines with the new one
 	return bestResult.bspTree, treesDone
+}
+
+func MTP_nilAndPrintTimer(start time.Time, treeCount, oldNodeType int) *NodeInProcess {
+	switch promoteNodeType(oldNodeType) {
+	case NODETYPE_ZDOOM_EXTENDED:
+		Log.Printf("I have switched to ZDoom extended nodes format to avoid overflow.\n")
+	case NODETYPE_ZDOOM_COMPRESSED:
+		Log.Printf("I have switched to ZDoom compressed nodes format to avoid overflow.\n")
+	}
+	dur := time.Since(start)
+	avg := time.Duration(int64(dur) / int64(treeCount))
+	Log.Printf("Nodes took %s (avg %s per tree)\n", dur, avg)
+	return nil
 }
 
 // Really banal bsp tree comparison. Tries to minimize subsector count first,
@@ -389,11 +542,11 @@ func MTPSentinel_GetRootSegCandidates(allSegs []*NodeSeg, rootChoiceMethod int) 
 }
 
 // The non-accelerated version of multitree_plain worker goroutine
-func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTPWorker_Result) {
+func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input,
+	replyTo chan<- MTPWorker_Result, rootFunc CreateRootNodeForPick) {
 	for permutation := range input {
-		tree := MTP_CreateRootNode(permutation.workData,
-			permutation.ts, permutation.bbox, permutation.pseudoSuper,
-			permutation.pickSegIdx)
+		tree := rootFunc(permutation.workData, permutation.ts, permutation.bbox,
+			permutation.pseudoSuper, permutation.pickSegIdx)
 
 		replyTo <- MTPWorker_Result{
 			workData: permutation.workData,
@@ -412,7 +565,8 @@ func MTPWorker_GenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTP
 // get lesser speed improvements than without Pool.
 // It seems too big memory use alone can defeat optimization, sync.Pool prevents
 // that
-func MTPWorker_SpeedGenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<- MTPWorker_Result) {
+func MTPWorker_SpeedGenerateBSPTrees(input <-chan MTPWorker_Input,
+	replyTo chan<- MTPWorker_Result, rootFunc CreateRootNodeForPick) {
 
 	var qallocSupers *Superblock
 	bhPool := sync.Pool{
@@ -431,9 +585,8 @@ func MTPWorker_SpeedGenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<
 		}
 
 		// Build BSP tree for this task
-		tree := MTP_CreateRootNode(permutation.workData,
-			permutation.ts, permutation.bbox, permutation.pseudoSuper,
-			permutation.pickSegIdx)
+		tree := rootFunc(permutation.workData, permutation.ts, permutation.bbox,
+			permutation.pseudoSuper, permutation.pickSegIdx)
 
 		// Make special structures reusable for future tasks. Was not exactly
 		// easy to make gc cooperative, so any changes to this code must be
@@ -453,6 +606,8 @@ func MTPWorker_SpeedGenerateBSPTrees(input <-chan MTPWorker_Input, replyTo chan<
 	close(replyTo)
 }
 
+// pseudoSuper parameter may be a pseudo, but may be also a normal root superblock
+// must satisfy CreateRootNodeForPick calling conventions
 func MTP_CreateRootNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	pseudoSuper *Superblock, pickSegIdx int) *NodeInProcess {
 	res := new(NodeInProcess)
@@ -552,4 +707,20 @@ func zoneAllocSupers(sz int, pseudoSuper *Superblock) *Superblock {
 		dummy.returnSuperblockToPool(&(zone[i]))
 	}
 	return dummy.qallocSupers
+}
+
+func MTP_OneTree(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
+	super *Superblock, lineIdx uint16) *NodeInProcess {
+	cur := w.allSegs[0].Linedef
+	idx := 0
+	for ; idx < len(w.allSegs); idx++ {
+		cur = w.allSegs[idx].Linedef
+		if cur == lineIdx {
+			break
+		}
+	}
+	if cur != lineIdx {
+		Log.Panic("Seg from linedef %d is not found\n", lineIdx)
+	}
+	return MTP_CreateRootNode(w, ts, bbox, super, idx)
 }

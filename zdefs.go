@@ -21,7 +21,6 @@ package main
 import (
 	"encoding/binary"
 	"math"
-	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -634,8 +633,8 @@ func ZisZDoomNodes_Proto() bool {
 }
 
 func ZVanillaOrZdoomFormat_Create_Proto(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
-	super *Superblock, input *NodesInput, oldNodeType int,
-	linesForZdoom WriteableLines, start time.Time) *NodeInProcess {
+	super *Superblock, oldNodeType int,
+	passthrough *MultiformatPassthrough) *NodeInProcess {
 	//
 	Log.Panic("Unreachable code called: VanillaOrZdoomFormat_Create in Zdoom nodes generator (programmer error)\n")
 	return nil
