@@ -80,6 +80,7 @@ type ZExt_NodesWork struct {
 	pickNodeUser     int
 	minorIsBetter    MinorIsBetterFunc
 	doLinesIntersect ZExt_DoLinesIntersectFunc
+
 	multipart        bool
 	parts            []*ZExt_NodeSeg
 	width            int
@@ -307,23 +308,24 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			segSplits:              0,
 			preciousSplit:          0,
 		},
-		vertices:         intVertices,
-		segAliasObj:      new(SegAliasHolder),
-		pickNode:         ZExt_PickNodeFuncFromOption(input.pickNodeUser),
-		createNodeSS:     ZExt_CreateNodeSSFromOption(input.pickNodeUser),
-		stkCreateNodeSS:  ZExt_StkCreateNodeSSFromOption(input.pickNodeUser),
-		stkDivisorSS:     ZExt_StkSingleSectorDivisorFromOption(input.pickNodeUser),
-		sectorHits:       make([]byte, whichLen),
-		incidental:       make([]ZExt_IntVertexPairC, 0),
-		solidMap:         solidMap,
-		nonVoidCache:     make(map[int]ZExt_NonVoidPerAlias),
-		SsectorMask:      ssectorMask,
-		blocksHit:        make([]ZExt_BlocksHit, 0),
-		diagonalPenalty:  input.diagonalPenalty,
-		pickNodeFactor:   input.pickNodeFactor,
-		pickNodeUser:     input.pickNodeUser,
-		minorIsBetter:    MinorCmpFuncFromOption(input.minorIsBetterUser),
-		multipart:        input.minorIsBetterUser == MINOR_CMP_DEPTH,
+		vertices:        intVertices,
+		segAliasObj:     new(SegAliasHolder),
+		pickNode:        ZExt_PickNodeFuncFromOption(input.pickNodeUser),
+		createNodeSS:    ZExt_CreateNodeSSFromOption(input.pickNodeUser),
+		stkCreateNodeSS: ZExt_StkCreateNodeSSFromOption(input.pickNodeUser),
+		stkDivisorSS:    ZExt_StkSingleSectorDivisorFromOption(input.pickNodeUser),
+		sectorHits:      make([]byte, whichLen),
+		incidental:      make([]ZExt_IntVertexPairC, 0),
+		solidMap:        solidMap,
+		nonVoidCache:    make(map[int]ZExt_NonVoidPerAlias),
+		SsectorMask:     ssectorMask,
+		blocksHit:       make([]ZExt_BlocksHit, 0),
+		diagonalPenalty: input.diagonalPenalty,
+		pickNodeFactor:  input.pickNodeFactor,
+		pickNodeUser:    input.pickNodeUser,
+		minorIsBetter:   MinorCmpFuncFromOption(input.minorIsBetterUser),
+		multipart: input.minorIsBetterUser == MINOR_CMP_DEPTH &&
+			input.pickNodeUser == PICKNODE_VISPLANE_ADV,
 		depthArtifacts:   input.depthArtifacts,
 		nodeType:         input.nodeType,
 		doLinesIntersect: doLinesIntersect,
@@ -376,7 +378,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.zenScores = make([]ZExt_DepthScoreBundle, 0, len(allSegs))
 	}
 	workData.segAliasObj.Init()
-	initialSuper := workData.doInitialSuperblocks(rootBox)
+	initialSuper := workData.doInitialSuperblocks(rootBox, false)
 	if input.cacheSideness {
 		workData.buildSidenessCache(rootSeg, initialSuper)
 	}
@@ -481,7 +483,8 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
-	if input.stkNode {
+	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
+
 		if workData.nodeType == NODETYPE_VANILLA {
 
 			workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
@@ -1589,8 +1592,13 @@ func (ni *NodesInput) ZExt_applySectorEquivalence(allSegs []*ZExt_NodeSeg, secto
 	}
 }
 
-func (w *ZExt_NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *ZExt_Superblock {
-	ret := w.newSuperblockNoProto()
+func (w *ZExt_NodesWork) doInitialSuperblocks(rootBox *NodeBounds, forceSectors bool) *ZExt_Superblock {
+	var ret *ZExt_Superblock
+	if forceSectors {
+		ret = w.newSectorUsingSuperblock()
+	} else {
+		ret = w.newSuperblockNoProto()
+	}
 	ret.nwlink = w
 	ret.SetBounds(rootBox)
 	for _, seg := range w.allSegs {
@@ -3439,6 +3447,52 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 
 		best = part
 	}
+	if w.multipart {
+
+		if len(w.zenScores) == 0 {
+			w.mlog.Printf("Failed to score segs, falling back to scoreless pick.\n")
+			w.parts = make([]*ZExt_NodeSeg, 1)
+			w.parts[1] = best
+			if best == nil {
+				Log.Panic("Failed hard -- no pick at all, for root of all things!\n")
+			}
+			return nil
+		}
+		ZExt_ZenPickBestScore(w.zenScores)
+		rootN := config.Roots
+		rootChoiceMethod := config.SpecialRootMode
+		w.parts = make([]*ZExt_NodeSeg, 0, rootN)
+		i := 0
+		j := 0
+		run := 0
+		best = w.zenScores[0].seg
+		tst1, tst2, tst3, tst4 := w.zenScores[0].preciousSplit,
+			w.zenScores[0].scoreTotal,
+			w.zenScores[0].equivSplit,
+			w.zenScores[0].segSplit
+		for ; j < len(w.zenScores) && i < rootN; j++ {
+			seg := w.zenScores[j].seg
+			if seg.partner == nil && (rootChoiceMethod&MROOT_ONESIDED == 0) {
+				continue
+			}
+
+			if seg.partner != nil && (rootChoiceMethod&MROOT_TWOSIDED == 0) {
+				continue
+			}
+			i++
+			w.parts = append(w.parts, seg)
+			if tst1 == w.zenScores[j].preciousSplit &&
+				tst2 == w.zenScores[j].scoreTotal &&
+				tst3 == w.zenScores[j].equivSplit &&
+				tst4 == w.zenScores[j].segSplit {
+				run++
+			}
+
+		}
+		w.mlog.Printf("Selected %d best picks (of them %d shared top score)\n", len(w.parts), run)
+		return nil
+	}
+
 	if len(w.zenScores) > 0 {
 		ZExt_ZenPickBestScore(w.zenScores)
 		best = w.zenScores[0].seg
@@ -4191,8 +4245,14 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 		}
 	}
 
-	rootSegCandidates := ZExt_MTPSentinel_GetRootSegCandidates(w.allSegs,
-		rootChoiceMethod)
+	var rootSegCandidates []int
+	if config.Roots == 0 {
+		rootSegCandidates = ZExt_MTPSentinel_GetRootSegCandidates(w.allSegs,
+			rootChoiceMethod)
+	} else {
+
+		rootSegCandidates = ZExt_MTP_ZenRootEnumerate(w, bbox)
+	}
 
 	vanillaBias := w.nodeType == NODETYPE_VANILLA && !config.Ableist
 
@@ -4673,6 +4733,28 @@ func ZExt_MTP_OneTree(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		Log.Panic("Seg from linedef %d is not found\n", lineIdx)
 	}
 	return ZExt_MTP_CreateRootNode(w, ts, bbox, super, idx)
+}
+
+func ZExt_MTP_ZenRootEnumerate(w *ZExt_NodesWork, bbox *NodeBounds) []int {
+
+	w2, bbox2 := ZExt_MTPSentinel_Clone(w, bbox)
+
+	w2.sectorHits = make([]uint8, len(w2.sectors))
+	w2.blocksHit = make([]ZExt_BlocksHit, 0)
+	substSuper := w2.doInitialSuperblocks(bbox2, true)
+	w2.multipart = true
+	ZExt_PickNode_ZennodeDepth(w2, w2.allSegs[0], bbox2, substSuper)
+	res := make([]int, len(w2.parts))
+	for i := range w2.parts {
+		for j := range w2.allSegs {
+			if w2.allSegs[j].Linedef == w2.parts[i].Linedef {
+				res[i] = j
+			}
+		}
+	}
+
+	Log.Merge(w2.mlog, "")
+	return res
 }
 
 func (w *ZExt_NodesWork) isUnsignedOverflow() bool {
@@ -5397,6 +5479,12 @@ func (w *ZExt_NodesWork) newSuperblockNoProto() *ZExt_Superblock {
 	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
 		ret.secEquivs = make([]uint16, 0)
 	}
+	return ret
+}
+
+func (w *ZExt_NodesWork) newSectorUsingSuperblock() *ZExt_Superblock {
+	ret := &ZExt_Superblock{}
+	ret.sectors = make([]uint16, 0)
 	return ret
 }
 

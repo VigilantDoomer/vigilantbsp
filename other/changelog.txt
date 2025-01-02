@@ -1,6 +1,8 @@
 Changelog for VigilantBSP
 
 v0.91 (in development)
+- Added --roots parameter, to run plain multi-tree only for N best roots rated using Zenlike-partitioner (regardless of actual partitioner chosen).
+	See "Debug and other hidden parameters".
 - Enhancement: multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
 - Enhancement: new selectable option for "nodes format compatibility": "Vanilla, but multi-tree is comfortable with unsigned trees"

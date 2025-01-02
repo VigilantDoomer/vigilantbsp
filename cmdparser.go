@@ -288,6 +288,24 @@ func (c *ProgramConfig) FromCommandLine() bool {
 							return false
 						}
 					}
+				} else if bytes.HasPrefix([]byte(arg), []byte("--roots")) {
+					// Parameter to control whether use
+					ns, _ := readNumeric("--roots=", []byte(arg)[len("--roots=")-1:])
+					switch ns.whichType {
+					case ARG_IS_NUMBER:
+						if c.Roots < 0 {
+							Log.Error("Negative value for --roots is not supported\n")
+						} else {
+							c.Roots = ns.value
+							c.RootsReadPending = false
+						}
+					case ARG_ENABLED:
+						c.RootsReadPending = true
+						c.Roots = 0
+					case ARG_DISABLED:
+						c.RootsReadPending = false
+						c.Roots = 0
+					}
 				} else {
 					Log.Error("Unrecognised argument '%s' - aborting.\n", arg)
 					return false
@@ -373,6 +391,12 @@ func (c *ProgramConfig) FromCommandLine() bool {
 			c.EffectiveSecondary = SECONDARY_PRIORITY_BALANCE
 		} else {
 			c.EffectiveSecondary = SECONDARY_PRIORITY_SEGS
+		}
+	}
+	if c.RootsReadPending {
+		c.Roots = c.TreeWidth
+		if c.Roots < 1 {
+			c.Roots = 2
 		}
 	}
 

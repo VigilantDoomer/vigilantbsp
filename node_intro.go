@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -561,8 +561,13 @@ func (ni *NodesInput) applySectorEquivalence(allSegs []*NodeSeg, sectorEquiv []u
 }
 
 // Create superblocks from initial list of segs before the start of partitioning
-func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds) *Superblock {
-	ret := w.newSuperblockNoProto()
+func (w *NodesWork) doInitialSuperblocks(rootBox *NodeBounds, forceSectors bool) *Superblock {
+	var ret *Superblock
+	if forceSectors {
+		ret = w.newSectorUsingSuperblock()
+	} else {
+		ret = w.newSuperblockNoProto()
+	}
 	ret.nwlink = w
 	ret.SetBounds(rootBox)
 	for _, seg := range w.allSegs {

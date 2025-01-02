@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2024, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -1981,6 +1981,57 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 		best = part // this should be overridden later, and only used as a fallback
 	}
+	if w.multipart {
+		// Not a part of normal operation. See multitree_plain!MTP_ZenRootEnumerate
+		// Used for plain multitree to select N roots (if requested by --roots
+		// option), called on the top-level always, whereas actual trees may use a
+		// different partitioner
+		if len(w.zenScores) == 0 { // hopefully never happens
+			w.mlog.Printf("Failed to score segs, falling back to scoreless pick.\n")
+			w.parts = make([]*NodeSeg, 1)
+			w.parts[1] = best
+			if best == nil {
+				Log.Panic("Failed hard -- no pick at all, for root of all things!\n")
+			}
+			return nil
+		}
+		ZenPickBestScore(w.zenScores)
+		rootN := config.Roots                      // reference to global: config
+		rootChoiceMethod := config.SpecialRootMode // reference to global: config
+		w.parts = make([]*NodeSeg, 0, rootN)
+		i := 0
+		j := 0
+		run := 0
+		best = w.zenScores[0].seg
+		tst1, tst2, tst3, tst4 := w.zenScores[0].preciousSplit,
+			w.zenScores[0].scoreTotal,
+			w.zenScores[0].equivSplit,
+			w.zenScores[0].segSplit
+		for ; j < len(w.zenScores) && i < rootN; j++ {
+			seg := w.zenScores[j].seg
+			if seg.partner == nil && (rootChoiceMethod&MROOT_ONESIDED == 0) {
+				continue
+			}
+			// If not choosing segs from two-sided lines, then all segs that have
+			// partner are assumed to have come from two-sided lines and thus skipped
+			// There should not be any no problem with this assumption
+			if seg.partner != nil && (rootChoiceMethod&MROOT_TWOSIDED == 0) {
+				continue
+			}
+			i++
+			w.parts = append(w.parts, seg)
+			if tst1 == w.zenScores[j].preciousSplit &&
+				tst2 == w.zenScores[j].scoreTotal &&
+				tst3 == w.zenScores[j].equivSplit &&
+				tst4 == w.zenScores[j].segSplit {
+				run++
+			}
+
+		}
+		w.mlog.Printf("Selected %d best picks (of them %d shared top score)\n", len(w.parts), run)
+		return nil
+	}
+	// going back to normal things
 	if len(w.zenScores) > 0 {
 		ZenPickBestScore(w.zenScores)
 		best = w.zenScores[0].seg

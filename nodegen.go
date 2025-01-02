@@ -191,7 +191,14 @@ type NodesWork struct {
 	pickNodeUser     int
 	minorIsBetter    MinorIsBetterFunc
 	doLinesIntersect DoLinesIntersectFunc
-	multipart        bool       // whether multiple partition with same PRIMARY costs are considered (for depth evaluation, not to be confused for multi-tree)
+	// multipart now has two functions:
+	// -  whether multiple partition with same PRIMARY costs are considered FOR DEPTH EVALUATION, not for multi-tree
+	//    Only for advanced visplane reduction. Zennode-like applies config.EffectiveSecondary directly
+	//    So must be set to false for anyone else, except for next case
+	// -  for multitree_plain, to implement --roots logic. Zennode-like will use multipart for this
+	//    thus temporary set to true in multitree_plain for roots picking only, than reverted back, and all trees proceed without it
+	// If you accidently set this to true during normal operation, you may break Zennode-like partitioner.
+	multipart        bool
 	parts            []*NodeSeg // this one is for HARD multi-tree - the list of partition candidates with same secondary costs as well
 	width            int        // and this is the width cap for HARD multi-tree, can be -1 (unlimited)
 	depthArtifacts   bool
@@ -526,23 +533,24 @@ func NodesGenerator(input *NodesInput) {
 			segSplits:              0,
 			preciousSplit:          0,
 		},
-		vertices:         intVertices,
-		segAliasObj:      new(SegAliasHolder),
-		pickNode:         PickNodeFuncFromOption(input.pickNodeUser),
-		createNodeSS:     CreateNodeSSFromOption(input.pickNodeUser),
-		stkCreateNodeSS:  StkCreateNodeSSFromOption(input.pickNodeUser),
-		stkDivisorSS:     StkSingleSectorDivisorFromOption(input.pickNodeUser),
-		sectorHits:       make([]byte, whichLen),
-		incidental:       make([]IntVertexPairC, 0),
-		solidMap:         solidMap,
-		nonVoidCache:     make(map[int]NonVoidPerAlias),
-		SsectorMask:      ssectorMask,
-		blocksHit:        make([]BlocksHit, 0),
-		diagonalPenalty:  input.diagonalPenalty,
-		pickNodeFactor:   input.pickNodeFactor,
-		pickNodeUser:     input.pickNodeUser,
-		minorIsBetter:    MinorCmpFuncFromOption(input.minorIsBetterUser),
-		multipart:        input.minorIsBetterUser == MINOR_CMP_DEPTH,
+		vertices:        intVertices,
+		segAliasObj:     new(SegAliasHolder),
+		pickNode:        PickNodeFuncFromOption(input.pickNodeUser),
+		createNodeSS:    CreateNodeSSFromOption(input.pickNodeUser),
+		stkCreateNodeSS: StkCreateNodeSSFromOption(input.pickNodeUser),
+		stkDivisorSS:    StkSingleSectorDivisorFromOption(input.pickNodeUser),
+		sectorHits:      make([]byte, whichLen),
+		incidental:      make([]IntVertexPairC, 0),
+		solidMap:        solidMap,
+		nonVoidCache:    make(map[int]NonVoidPerAlias),
+		SsectorMask:     ssectorMask,
+		blocksHit:       make([]BlocksHit, 0),
+		diagonalPenalty: input.diagonalPenalty,
+		pickNodeFactor:  input.pickNodeFactor,
+		pickNodeUser:    input.pickNodeUser,
+		minorIsBetter:   MinorCmpFuncFromOption(input.minorIsBetterUser),
+		multipart: input.minorIsBetterUser == MINOR_CMP_DEPTH &&
+			input.pickNodeUser == PICKNODE_VISPLANE_ADV, // 2025 multipart received a secondary purpose
 		depthArtifacts:   input.depthArtifacts,
 		nodeType:         input.nodeType, // this *MAY* change during nodebuilding process or after
 		doLinesIntersect: doLinesIntersect,
@@ -600,7 +608,7 @@ func NodesGenerator(input *NodesInput) {
 		workData.zenScores = make([]DepthScoreBundle, 0, len(allSegs))
 	}
 	workData.segAliasObj.Init()
-	initialSuper := workData.doInitialSuperblocks(rootBox)
+	initialSuper := workData.doInitialSuperblocks(rootBox, false)
 	if input.cacheSideness {
 		workData.buildSidenessCache(rootSeg, initialSuper)
 	}
@@ -735,7 +743,25 @@ func NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
-	if input.stkNode {
+	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
+		// If stknode mode was enabled through debug parameter, do perform
+		// rearrangement, so that can compare resulting wad with non-stknode build
+		// for identity and confirm validity that way. This, of course, implies both
+		// stknode and non-stknode builds of the wad are done with deterministism
+		// (-d parameter).
+		// But, won't do this for multi-tree anymore, because:
+		// 1) if hard multi-tree gets implemented (work is underway as of January 2025),
+		// it will be in single-threaded mode, and multi-threaded mode will still
+		// require a lot of work
+		// 2) once supported, can still revert to single-threaded build whenever
+		// user asks for determinism, just like it used to be with blockmap,
+		// multiple offsets and a specified endgoal, until I have implemented
+		// backtracking in later version
+		// 3) for single-threaded, is unnecessary, and creates additional point of
+		// failure at the end of length process of crunching millions of trees
+		// 4) I have another idea, it is a spoiler but it will get around the lack
+		// of multi-threading for initial brainstormed implementation of hard
+		// multi-tree
 		if workData.nodeType == NODETYPE_VANILLA {
 			// NOTE MUST NOT rearrange segs via tooManySegsCantFix(_false_) prior
 			// to this call !!! Assumes segs for subsectors were laid out

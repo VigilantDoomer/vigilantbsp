@@ -2344,6 +2344,24 @@ VigilantBSP defaults are equivalent to the following zenvar option:
 --zenvar:"x1 = 20, x2 = 10, x3 = 1, x4 = 25"
 
 
+--roots=<n>, where n is a number
+New in VigilantBSP v0.91. For use with multi-tree mode. Instead of
+trying every (one-sided, two-sided, any) linedef, up to specified
+number of linedefs will be tried.
+
+Linedefs are scored using Zenlike partitioner, always, regardless
+of what partitioner will be used for building actual trees. The
+reason for such choice is that maintaining every single of them
+for this choice would be hard, and Zenlike partitioner is
+very suitable for this purpose, for it doesn't take shortcuts
+when scoring linedefs but generates a score table for all
+linedefs as part of its normal operation.
+
+The multi-tree variant -- whether to try one-sided, two-sided
+linedefs or both -- IS taken into account. That is, the best N
+are taken from the score table after this filter is applied.
+
+
 --speedtree=<n>, where n is a number
 For use with multi-tree mode, has no effect otherwise. First 
 implemented in VigilantBSP v0.85a.

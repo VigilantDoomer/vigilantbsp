@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //

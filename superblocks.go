@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2024, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -454,6 +454,12 @@ func (w *NodesWork) newSuperblockNoProto() *Superblock {
 	} else if w.pickNodeUser == PICKNODE_VISPLANE_ADV {
 		ret.secEquivs = make([]uint16, 0)
 	}
+	return ret
+}
+
+func (w *NodesWork) newSectorUsingSuperblock() *Superblock {
+	ret := &Superblock{}
+	ret.sectors = make([]uint16, 0)
 	return ret
 }
 

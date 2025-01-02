@@ -283,6 +283,8 @@ type ProgramConfig struct {
 	Eject              bool // whether to only put rebuilt maps into output file and no other lumps
 	ZdoomCompression   int  // zlib compression level for compressed Zdoom nodes
 	Ableist            bool // whether to pick absolute best tree in multi-tree even if it is not compatible with vanilla but vanilla is required/preferred
+	Roots              int  // how many (max) best roots to pick for plain multi-tree, default 0, which means try every linedef that satisfies SpecialRootMode
+	RootsReadPending   bool // if need to set roots from width
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant

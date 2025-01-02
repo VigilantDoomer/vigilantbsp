@@ -115,8 +115,15 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	}
 
 	// Which segs will be used as starting point?
-	rootSegCandidates := MTPSentinel_GetRootSegCandidates(w.allSegs,
-		rootChoiceMethod)
+	var rootSegCandidates []int
+	if config.Roots == 0 { // reference to global: config
+		rootSegCandidates = MTPSentinel_GetRootSegCandidates(w.allSegs,
+			rootChoiceMethod)
+	} else {
+		// code tree will pick from global config directly the needed things
+		// not a good API, admittedly
+		rootSegCandidates = MTP_ZenRootEnumerate(w, bbox)
+	}
 	// whether vanilla nodes format is required or preferred, AND we should be
 	// choosing best tree among specifically vanilla whenever any vanilla-compatible
 	// tree exists
@@ -723,4 +730,26 @@ func MTP_OneTree(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		Log.Panic("Seg from linedef %d is not found\n", lineIdx)
 	}
 	return MTP_CreateRootNode(w, ts, bbox, super, idx)
+}
+
+func MTP_ZenRootEnumerate(w *NodesWork, bbox *NodeBounds) []int {
+
+	w2, bbox2 := MTPSentinel_Clone(w, bbox)
+
+	w2.sectorHits = make([]uint8, len(w2.sectors))
+	w2.blocksHit = make([]BlocksHit, 0)
+	substSuper := w2.doInitialSuperblocks(bbox2, true) // with sectors, always
+	w2.multipart = true
+	PickNode_ZennodeDepth(w2, w2.allSegs[0], bbox2, substSuper)
+	res := make([]int, len(w2.parts))
+	for i := range w2.parts {
+		for j := range w2.allSegs {
+			if w2.allSegs[j].Linedef == w2.parts[i].Linedef {
+				res[i] = j
+			}
+		}
+	}
+
+	Log.Merge(w2.mlog, "")
+	return res
 }
