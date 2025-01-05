@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -93,8 +93,8 @@ func (r *RejectWork) rejectTableIJSymm(i, j int) *uint8 {
 	if i > j {
 		i, j = j, i
 	}
-	return &r.rejectTable[uint64(i)*(uint64(r.numSectors)<<1-1-uint64(i))>>1+
-		uint64(j)]
+	return &r.rejectTable[int64(i)*(r.symmShim-int64(i))>>1+
+		int64(j)]
 }
 
 func (r *RejectWork) getResultSymm() []byte {
@@ -159,6 +159,7 @@ func (r *RejectWork) prepareRejectSymm() {
 	for i, _ := range r.rejectTable {
 		r.rejectTable[i] = 0
 	}
+	r.symmShim = int64(r.numSectors)<<1 - 1
 }
 
 func (r *RejectWork) DFSGetNeighborsAndGroupsiblingsSymm(s *RejSector) []*RejSector {

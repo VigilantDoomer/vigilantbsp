@@ -69,6 +69,7 @@ type SymmetricRejectWork struct {
 	lineEffects       map[uint16]uint8
 	specialSolids     []uint16
 	drLine            *TransLine
+	symmShim          int64
 }
 
 func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
@@ -1791,16 +1792,16 @@ func (w *SymmetricRejectWork) InitializeGraphs(numSectors int) {
 
 	w.graphTable.numGraphs = 0
 	w.graphTable.graphs = make([]RejGraph, w.numSectors*2)
-	w.graphTable.sectorPool = make([]*RejSector, w.numSectors*4)
-	w.graphTable.sectorStart = w.graphTable.sectorPool
+	sectorPool := make([]*RejSector, w.numSectors*4)
+	w.graphTable.sectorStart = sectorPool
 
 	for _, v := range w.graphTable.graphs {
 		v.numSectors = 0
 		v.sectors = nil
 	}
 
-	for i, _ := range w.graphTable.sectorPool {
-		w.graphTable.sectorPool[i] = nil
+	for i, _ := range sectorPool {
+		sectorPool[i] = nil
 	}
 
 	graph := &(w.graphTable.graphs[0])
@@ -1847,7 +1848,7 @@ func (w *SymmetricRejectWork) InitializeGraphs(numSectors int) {
 	Log.Verbose(1, "Reject: created %d graphs.\n", w.graphTable.numGraphs)
 }
 
-func (w *SymmetricRejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
+func (w *SymmetricRejectWork) HideSectorFromComponents(root, sec *RejSector) {
 	graph := sec.graph
 
 	for _, sec2 := range graph.sectors[:root.indexDFS] {
@@ -1943,12 +1944,12 @@ func (w *SymmetricRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 		if sector.loDFS == sector.indexDFS {
 
 			for i := sector.indexDFS; i <= sector.hiDFS; i++ {
-				w.HideSectorFromComponents(key, root, graph.sectors[i])
+				w.HideSectorFromComponents(root, graph.sectors[i])
 			}
 
 		} else {
 
-			w.HideSectorFromComponents(key, root, sector)
+			w.HideSectorFromComponents(root, sector)
 
 			for i := 0; i < sector.numNeighbors; i++ {
 				child := sector.neighbors[i]
@@ -1956,7 +1957,7 @@ func (w *SymmetricRejectWork) ProcessSectorLines(key, root, sector *RejSector,
 
 					if child.loDFS >= sector.indexDFS {
 						for j := child.indexDFS; j <= child.hiDFS; j++ {
-							w.HideSectorFromComponents(key, root, graph.sectors[j])
+							w.HideSectorFromComponents(root, graph.sectors[j])
 						}
 					} else {
 						w.ProcessSectorLines(key, root, child, lines)
@@ -2326,8 +2327,8 @@ func (r *SymmetricRejectWork) rejectTableIJ(i, j int) *uint8 {
 	if i > j {
 		i, j = j, i
 	}
-	return &r.rejectTable[uint64(i)*(uint64(r.numSectors)<<1-1-uint64(i))>>1+
-		uint64(j)]
+	return &r.rejectTable[int64(i)*(r.symmShim-int64(i))>>1+
+		int64(j)]
 }
 
 func (r *SymmetricRejectWork) getResult() []byte {
@@ -2391,6 +2392,7 @@ func (r *SymmetricRejectWork) prepareReject() {
 	for i, _ := range r.rejectTable {
 		r.rejectTable[i] = 0
 	}
+	r.symmShim = int64(r.numSectors)<<1 - 1
 }
 
 func (r *SymmetricRejectWork) DFSGetNeighborsAndGroupsiblings(s *RejSector) []*RejSector {

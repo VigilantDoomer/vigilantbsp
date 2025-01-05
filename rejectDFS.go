@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -111,16 +111,16 @@ func (w *RejectWork) InitializeGraphs(numSectors int) {
 
 	w.graphTable.numGraphs = 0
 	w.graphTable.graphs = make([]RejGraph, w.numSectors*2)
-	w.graphTable.sectorPool = make([]*RejSector, w.numSectors*4)
-	w.graphTable.sectorStart = w.graphTable.sectorPool
+	sectorPool := make([]*RejSector, w.numSectors*4)
+	w.graphTable.sectorStart = sectorPool
 
 	for _, v := range w.graphTable.graphs {
 		v.numSectors = 0
 		v.sectors = nil
 	}
 
-	for i, _ := range w.graphTable.sectorPool {
-		w.graphTable.sectorPool[i] = nil
+	for i, _ := range sectorPool {
+		sectorPool[i] = nil
 	}
 
 	// Create the initial graph
@@ -174,7 +174,7 @@ func (w *RejectWork) InitializeGraphs(numSectors int) {
 	Log.Verbose(1, "Reject: created %d graphs.\n", w.graphTable.numGraphs)
 }
 
-func (w *RejectWork) HideSectorFromComponents(key, root, sec *RejSector) {
+func (w *RejectWork) HideSectorFromComponents(root, sec *RejSector) {
 	graph := sec.graph
 	// Hide sec from all other sectors in its graph that are in different
 	// bi-connected components
@@ -302,13 +302,13 @@ func (w *RejectWork) ProcessSectorLines(key, root, sector *RejSector,
 
 			// Nope. Hide ourself and all our children from the other components
 			for i := sector.indexDFS; i <= sector.hiDFS; i++ {
-				w.HideSectorFromComponents(key, root, graph.sectors[i])
+				w.HideSectorFromComponents(root, graph.sectors[i])
 			}
 
 		} else {
 
 			// Yep. Hide ourself
-			w.HideSectorFromComponents(key, root, sector)
+			w.HideSectorFromComponents(root, sector)
 
 			for i := 0; i < sector.numNeighbors; i++ {
 				child := sector.neighbors[i]
@@ -316,7 +316,7 @@ func (w *RejectWork) ProcessSectorLines(key, root, sector *RejSector,
 					// Hide any child components that aren't in the loop
 					if child.loDFS >= sector.indexDFS {
 						for j := child.indexDFS; j <= child.hiDFS; j++ {
-							w.HideSectorFromComponents(key, root, graph.sectors[j])
+							w.HideSectorFromComponents(root, graph.sectors[j])
 						}
 					} else {
 						w.ProcessSectorLines(key, root, child, lines)

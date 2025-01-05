@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -137,6 +137,7 @@ type RejectWork struct {
 	lineEffects       map[uint16]uint8
 	specialSolids     []uint16   // all linedefs that need to be treated as solid even though they aren't
 	drLine            *TransLine // memory optimization: used in non-reentrant divideRegion
+	symmShim          int64
 }
 
 type RejectInput struct {
@@ -204,7 +205,6 @@ type GraphTable struct {
 	numGraphs   int
 	graphs      []RejGraph
 	sectorStart []*RejSector
-	sectorPool  []*RejSector
 }
 
 type Neighboring struct {
@@ -1542,12 +1542,11 @@ func (r *RejectWork) dontBother(srcLine, tgtLine *TransLine) bool {
 }
 
 // adjustLinePair adjusts the two lines so that:
-//   1) If one line bisects the other:
-//      a) The bisecting line is tgt
-//      b) The point farthest from src is made both start & end
-//   2) tgt is on the left side of src
-//   3) src and tgt go in 'opposite' directions
-//
+//  1. If one line bisects the other:
+//     a) The bisecting line is tgt
+//     b) The point farthest from src is made both start & end
+//  2. tgt is on the left side of src
+//  3. src and tgt go in 'opposite' directions
 func adjustLinePair(src, tgt *TransLine, bisects *bool) bool {
 
 	// Rotate & Translate so that src lies along the +X asix
