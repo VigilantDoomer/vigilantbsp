@@ -36,7 +36,9 @@ const VERSION = "0.91"
 		This option is experimental and is likely to break
 		non-vanilla or non-Doom maps. Enable at your own risk
 	s Subset compress BLOCKMAP.
+	    this parameter may be optionally followed by question mark*
 	a Aggressive subset compression. If enabled, overrides s.
+	    this parameter may be optionally followed by question mark*
 	z= Zero/dummy header configuration
 		0 No dummy header
 		1 Use dummy header, but not necessary zero (default)
@@ -47,6 +49,7 @@ const VERSION = "0.91"
 		0 Smallest blockmap size (default)
 		1 Blockmap fits vanilla limits is enough
 		2 Blockmap works in limit-removing ports is enough
+  * if parameter is followed by question mark, it is tried when a working blockmap can't be produced otherwise.
 
 -d Deterministic output (default: disabled)
 
@@ -208,6 +211,12 @@ const (
 	SECONDARY_PRIORITY_BALANCE
 )
 
+const ( // bitmask
+	BM_TRYCOND_NONE                          = 0x00
+	BM_TRYCOND_PROPER_SUBSET_COMPRESSION     = 0x01
+	BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION = 0x02
+)
+
 type ProgramConfig struct {
 	InputFileName          string
 	OutputFileName         string
@@ -285,6 +294,8 @@ type ProgramConfig struct {
 	Ableist            bool // whether to pick absolute best tree in multi-tree even if it is not compatible with vanilla but vanilla is required/preferred
 	Roots              int  // how many (max) best roots to pick for plain multi-tree, default 0, which means try every linedef that satisfies SpecialRootMode
 	RootsReadPending   bool // if need to set roots from width
+	//
+	BlockmapTryConditionally int // options to try conditionally when blockmap doesn't fit with non-conditional options
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -301,56 +312,57 @@ func init() {
 		// offsets. 0 means "auto = the number of cores, but no more than 16".
 		// If set to specific value, that value is used, and can be greater than
 		// 16.
-		BlockmapThreads:        0,
-		UseZeroHeader:          true,
-		ZeroHeaderIsZero:       false,
-		SubsetCompressBlockmap: false,
-		DumpSegsFlag:           false,
-		SegDumpFile:            "",
-		Profile:                false,
-		ProfilePath:            "",
-		MemProfile:             false,
-		MemProfilePath:         "",
-		NodesDebugFile:         "",
-		Reject:                 REJECT_NORMAL,
-		Deterministic:          false,
-		AggressiveSubsets:      false,
-		VerbosityLevel:         0,
-		PickNodeUser:           PICKNODE_TRADITIONAL,
-		BlockmapSearchAbortion: BM_OFFSET_NOABORT,
-		UseGraphsForLOS:        true,
-		DebugNoSlyForReject:    false,
-		CullInvisibleSegs:      CULL_SEGS_DONT,
-		PenalizeSectorSplits:   true,
-		RejectSelfRefMode:      REJ_SELFREF_TRIVIAL,
-		NodeType:               NODETYPE_VANILLA,
-		PersistThroughInsanity: true,
-		RebuildNodes:           true,
-		RebuildBlockmap:        true,
-		PickNodeFactor:         PICKNODE_FACTOR,
-		DiagonalPenalty:        DIAGONAL_PENALTY,
-		PenalizeDiagonality:    PENALIZE_DIAGONALITY_HEXEN,
-		MinorCmpUser:           MINOR_CMP_BALANCE,
-		DepthArtifacts:         true,
-		FilterLevel:            nil,
-		UseRMB:                 false,
-		MultiTreeMode:          MULTITREE_NOTUSED,
-		SpecialRootMode:        MROOT_ONESIDED,
-		NodeThreads:            0,
-		StraightNodes:          false,
-		RemoveNonCollideable:   false,
-		NodeDetailFriendliness: NODE_DETAIL_AUTO,
-		CacheSideness:          CACHE_SIDENESS_AUTO,
-		SecondaryPriority:      SECONDARY_PRIORITY_AUTO,
-		EffectiveSecondary:     SECONDARY_PRIORITY_BALANCE, // will be overridden in config.FromCommandLine
-		StkNode:                false,
-		TreeWidth:              0, // auto
-		FilterProhibitsLevels:  false,
-		SpeedTree:              false, // overridden dependent on other parameters if SpeedTreeExplicit == false
-		SpeedTreeExplicit:      false,
-		Eject:                  false,
-		ZdoomCompression:       6,
-		Ableist:                false,
+		BlockmapThreads:          0,
+		UseZeroHeader:            true,
+		ZeroHeaderIsZero:         false,
+		SubsetCompressBlockmap:   false,
+		DumpSegsFlag:             false,
+		SegDumpFile:              "",
+		Profile:                  false,
+		ProfilePath:              "",
+		MemProfile:               false,
+		MemProfilePath:           "",
+		NodesDebugFile:           "",
+		Reject:                   REJECT_NORMAL,
+		Deterministic:            false,
+		AggressiveSubsets:        false,
+		VerbosityLevel:           0,
+		PickNodeUser:             PICKNODE_TRADITIONAL,
+		BlockmapSearchAbortion:   BM_OFFSET_NOABORT,
+		UseGraphsForLOS:          true,
+		DebugNoSlyForReject:      false,
+		CullInvisibleSegs:        CULL_SEGS_DONT,
+		PenalizeSectorSplits:     true,
+		RejectSelfRefMode:        REJ_SELFREF_TRIVIAL,
+		NodeType:                 NODETYPE_VANILLA,
+		PersistThroughInsanity:   true,
+		RebuildNodes:             true,
+		RebuildBlockmap:          true,
+		PickNodeFactor:           PICKNODE_FACTOR,
+		DiagonalPenalty:          DIAGONAL_PENALTY,
+		PenalizeDiagonality:      PENALIZE_DIAGONALITY_HEXEN,
+		MinorCmpUser:             MINOR_CMP_BALANCE,
+		DepthArtifacts:           true,
+		FilterLevel:              nil,
+		UseRMB:                   false,
+		MultiTreeMode:            MULTITREE_NOTUSED,
+		SpecialRootMode:          MROOT_ONESIDED,
+		NodeThreads:              0,
+		StraightNodes:            false,
+		RemoveNonCollideable:     false,
+		NodeDetailFriendliness:   NODE_DETAIL_AUTO,
+		CacheSideness:            CACHE_SIDENESS_AUTO,
+		SecondaryPriority:        SECONDARY_PRIORITY_AUTO,
+		EffectiveSecondary:       SECONDARY_PRIORITY_BALANCE, // will be overridden in config.FromCommandLine
+		StkNode:                  false,
+		TreeWidth:                0, // auto
+		FilterProhibitsLevels:    false,
+		SpeedTree:                false, // overridden dependent on other parameters if SpeedTreeExplicit == false
+		SpeedTreeExplicit:        false,
+		Eject:                    false,
+		ZdoomCompression:         6,
+		Ableist:                  false,
+		BlockmapTryConditionally: BM_TRYCOND_NONE,
 	})
 }
 
@@ -396,7 +408,9 @@ func PrintHelp() {
 	Log.Printf("		This option is experimental and is likely to break\n")
 	Log.Printf("		non-vanilla or non-Doom maps. Enable at your own risk\n")
 	Log.Printf("	s Subset compress BLOCKMAP.\n")
+	Log.Printf("	    this parameter may be optionally followed by question mark*\n")
 	Log.Printf("	a Aggressive subset compression. If enabled, overrides s.\n")
+	Log.Printf("	    this parameter may be optionally followed by question mark*\n")
 	Log.Printf("	z= Zero/dummy header configuration\n")
 	Log.Printf("		0 No dummy header\n")
 	Log.Printf("		1 Use dummy header, but not necessary zero (default)\n")
@@ -407,6 +421,7 @@ func PrintHelp() {
 	Log.Printf("		0 Smallest blockmap size (default)\n")
 	Log.Printf("		1 Blockmap fits vanilla limits is enough\n")
 	Log.Printf("		2 Blockmap works in limit-removing ports is enough\n")
+	Log.Printf("  * if parameter is followed by question mark, it is tried when a working blockmap can't be produced otherwise.\n")
 	Log.Printf("\n")
 	Log.Printf("-d Deterministic output (default: disabled)\n")
 	Log.Printf("\n")

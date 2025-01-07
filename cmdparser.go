@@ -501,18 +501,30 @@ func (c *ProgramConfig) parseBlockmapParams(p []byte) {
 		switch p[0] {
 		case 's':
 			{
-				on, rest := isEnabled(p[1:])
-				c.SubsetCompressBlockmap = on || c.AggressiveSubsets
-				p = rest
+				if p[1] == '?' {
+					c.BlockmapTryConditionally = c.BlockmapTryConditionally |
+						BM_TRYCOND_PROPER_SUBSET_COMPRESSION
+					p = p[2:]
+				} else {
+					on, rest := isEnabled(p[1:])
+					c.SubsetCompressBlockmap = on || c.AggressiveSubsets
+					p = rest
+				}
 			}
 		case 'a':
 			{
-				on, rest := isEnabled(p[1:])
-				c.AggressiveSubsets = on
-				if on {
-					c.SubsetCompressBlockmap = true
+				if p[1] == '?' {
+					c.BlockmapTryConditionally = c.BlockmapTryConditionally |
+						BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION
+					p = p[2:]
+				} else {
+					on, rest := isEnabled(p[1:])
+					c.AggressiveSubsets = on
+					if on {
+						c.SubsetCompressBlockmap = true
+					}
+					p = rest
 				}
-				p = rest
 			}
 		case 'z':
 			{

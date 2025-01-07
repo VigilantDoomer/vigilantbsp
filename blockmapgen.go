@@ -52,6 +52,7 @@ type BlockmapBeeInput struct {
 	triedOffsets chan<- TriedOffsets
 	bailout      uint16
 	sieveMode    bool
+	subsetMode   int // bblocks.go!BCOMPRESS_XXX constants
 }
 
 type BlockmapBeeOutput struct {
@@ -109,18 +110,31 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 		&offsetXMax, &offsetYMax, &offsetStep, XCutoff, YCutoff)
 	// Now offsetXMax, offsetYMax, offsetStep were set for multi-blockmap modes!
 
+	var data []byte
+	var subsetMode int
+	if mode != BM_OFFSET_FIXED {
+		// all "try multiple offsets" modes should pass through offset (0,0)
+		subsetMode, data = DetermineSubsetMode(input, 0, 0)
+		if data != nil {
+			// if user enabled early return and conditional blockmap reduction, a
+			// fitting blockmap might have already been found
+			Blockmap_ReportTime(start, subsetMode)
+			where <- data
+		}
+	} // else must be that one fixed offset mode
+
 	switch mode {
 	case BM_OFFSET_THIRTYSIX:
 		{ // Builds 36 blockmaps - (40,40) is the final offset for blockmap to be generated
 			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, input, where,
-				0, start)
+				0, start, subsetMode)
 		}
 	case BM_OFFSET_BRUTEFORCE:
 		{ // Careful what you wish for (Best of all 65536 offset combinations)
 			// blockmaps are built for every value in 0-127 range inclusive
 			// alongside both axises
 			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, input, where,
-				0, start)
+				0, start, subsetMode)
 		}
 	case BM_OFFSET_HEURISTIC:
 		{ // Heuristic method to reduce from 65536 offsets
@@ -137,7 +151,7 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 				bailout = (xblocks + 1) * (yblocks + 1)
 			}
 			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, input, where,
-				bailout, start)
+				bailout, start, subsetMode)
 		}
 	default:
 		{ // BM_OFFSET_FIXED goes here
@@ -150,16 +164,21 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 				input.XOffset = 0
 				input.YOffset = 0
 			}
+			subsetMode, data = DetermineSubsetMode(input, input.XOffset,
+				input.YOffset)
+			if data != nil {
+				Blockmap_ReportTime(start, subsetMode)
+				where <- data
+			}
 			bm := CreateBlockmap(input)
-			var data []byte
-			if config.SubsetCompressBlockmap {
-				data = bm.GetBytesArcane()
+			if subsetMode != BSUBSET_NOCOMPRESSION {
+				data = bm.GetBytesArcane(subsetMode)
 			} else {
 				data = bm.GetBytes()
 			}
 			StatBlockmap(bm)
 			DeleteIfTooBig(bm, &data)
-			Log.Printf("Blockmap took %s\n", time.Since(start))
+			Blockmap_ReportTime(start, subsetMode)
 			where <- data
 		}
 	}
@@ -169,7 +188,8 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 // Sets up a hive of bees to split the "build multiple blockmaps" workload
 // roughly even among the concurrent goroutines (called bees)
 func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
-	input BlockmapInput, where chan<- []byte, bailout uint16, start time.Time) {
+	input BlockmapInput, where chan<- []byte, bailout uint16, start time.Time,
+	subsetMode int) {
 
 	var bees []chan BlockmapBeeOutput
 	beeCount := config.BlockmapThreads // global config
@@ -216,7 +236,7 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 		newInput := input
 		newInput.XOffset = offsetStep * i
 		newInput.YOffset = 0
-		beeConfig := BlockmapBeeInput{
+		beeConfig := &BlockmapBeeInput{
 			offsetYMax:  offsetYMax,
 			offsetXMax:  offsetXMax,
 			offsetXStep: offsetBeeStep,
@@ -224,6 +244,7 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 			replyTo:     bees[i],
 			bailout:     bailout,
 			sieveMode:   sieve != nil,
+			subsetMode:  subsetMode,
 		}
 		if beeConfig.sieveMode {
 			offsetAggregators[i] = make(chan TriedOffsets)
@@ -232,8 +253,8 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 		go BlockmapBee(ctx, newInput, beeConfig)
 	}
 	res := BlockmapHive(ctx, cancel, bees, sieve, input, offsetAggregators,
-		bailout)
-	Log.Printf("Blockmap took %s\n", time.Since(start))
+		bailout, subsetMode)
+	Blockmap_ReportTime(start, subsetMode)
 	where <- res
 }
 
@@ -242,7 +263,7 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 // synchronously for bees to complete their work.
 func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 	bees []chan BlockmapBeeOutput, sieve *OffsetSieve, input BlockmapInput,
-	offsetAggregators []chan TriedOffsets, bailout uint16) []byte {
+	offsetAggregators []chan TriedOffsets, bailout uint16, subsetMode int) []byte {
 	beeCount := len(bees)
 	NA := reflect.Value{}
 	var best BlockmapBeeOutput
@@ -345,7 +366,7 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 		// use the earliest which gives good enough blockmap, even if it is worse
 		// than the best we've found
 		best = BlockmapHoleChaser(&best, sieve, bestXOffset, bestYOffset,
-			input, bailout, cntHoles)
+			input, bailout, cntHoles, subsetMode)
 		bestXOffset = best.XOffset
 		bestYOffset = best.YOffset
 	} else if sieve != nil {
@@ -409,7 +430,7 @@ func BMHive_DeleteBranch(branches []reflect.SelectCase, chi int) []reflect.Selec
 
 // each BlockmapBee is run on its own goroutine and hopefully thread,
 // communicating with BlockmapHive
-func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig BlockmapBeeInput) {
+func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig *BlockmapBeeInput) {
 	var lenOld int
 	var oldBm *Blockmap
 	everRun := false
@@ -420,7 +441,7 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 	}
 
 	gcShield := BlockmapCreateGCShield(BMBeeMaxSize(bmConfig.bounds),
-		config.SubsetCompressBlockmap) // reference to global variable "config"
+		beeConfig.subsetMode != BSUBSET_NOCOMPRESSION)
 	bmConfig.gcShield = gcShield
 
 	// depending on how many bee goroutines were started, starting XOffset
@@ -470,8 +491,8 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 		}
 		if !bailedOut {
 			bm := CreateBlockmap(bmConfig)
-			if config.SubsetCompressBlockmap { // another reference to global variable "config"
-				data = bm.GetBytesArcane()
+			if beeConfig.subsetMode != BSUBSET_NOCOMPRESSION {
+				data = bm.GetBytesArcane(beeConfig.subsetMode)
 			} else {
 				data = bm.GetBytes()
 			}
@@ -538,7 +559,7 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig Blockmap
 	BlockmapBeeFinalize(beeConfig, offsetsTried)
 }
 
-func BlockmapBeeFinalize(beeConfig BlockmapBeeInput, triedOffsets []SieveItemNoBool) {
+func BlockmapBeeFinalize(beeConfig *BlockmapBeeInput, triedOffsets []SieveItemNoBool) {
 	close(beeConfig.replyTo) // allow Hive to exit loop
 	if beeConfig.sieveMode {
 		// Ah, need to supply all the offsets we tried
@@ -617,7 +638,7 @@ func IsBlockmapBetter(newData []byte, newBM *Blockmap, lenOld int, oldBM *Blockm
 	// Only when the ability to fit limits didn't change does length count
 	if len(newData) < lenOld {
 		return true
-	} else if config.Deterministic && (len(newData) == lenOld) { // reference to global variable config
+	} else if config.Deterministic && (len(newData) == lenOld) { // reference to global: config
 		// User requested: make any runs of the program on same input file
 		// produce the same output. So order things to match what a
 		// single-threaded crunch would produce.
@@ -635,7 +656,7 @@ func IsBlockmapBetter(newData []byte, newBM *Blockmap, lenOld int, oldBM *Blockm
 }
 
 func IsBlockmapGoodEnough(bm *Blockmap) bool {
-	switch config.BlockmapSearchAbortion {
+	switch config.BlockmapSearchAbortion { // reference to global: config
 	case BM_OFFSET_FITS_VANILLA:
 		{
 			return !bm.tooBigForVanilla
@@ -843,7 +864,7 @@ func (s *OffsetSieve) CountHoles(LastXOffset, LastYOffset int16) int {
 // of holes is very low, which is what indeed happens on maps I ran it on
 func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 	LastXOffset, LastYOffset int16, input BlockmapInput, bailout uint16,
-	cntHoles int) BlockmapBeeOutput {
+	cntHoles int, subsetMode int) BlockmapBeeOutput {
 	Log.Printf("Blockmap generator: backtracking to produce blockmap for %d skipped blockmap offsets to ensure determinism.\n",
 		cntHoles)
 	best := oldBest
@@ -852,7 +873,7 @@ func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 		Log.Panic("Assertion failure: backtracking after exhaustive search through all tried offsets already revealed that no blockmap satisfies the endgoal limits.")
 	}
 	gcShield := BlockmapCreateGCShield(BMBeeMaxSize(input.bounds),
-		config.SubsetCompressBlockmap) // reference to global variable "config"
+		subsetMode != BSUBSET_NOCOMPRESSION)
 	input.gcShield = gcShield
 	for _, item := range sieve.values {
 		if item.XOffset == LastXOffset && item.YOffset == LastYOffset {
@@ -882,8 +903,8 @@ func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 			}
 			var data []byte
 			bm := CreateBlockmap(input)
-			if config.SubsetCompressBlockmap { // another reference to global variable "config"
-				data = bm.GetBytesArcane()
+			if subsetMode != BSUBSET_NOCOMPRESSION {
+				data = bm.GetBytesArcane(subsetMode)
 			} else {
 				data = bm.GetBytes()
 			}
@@ -1062,4 +1083,110 @@ func hasMultiSectorSpecial(lines AbstractLines, cntLines uint16) bool {
 	}
 	return false
 
+}
+
+// DetermineSubsetMode identifies which subset compression mode of those user allowed
+// will be sufficient. If there are conditionally enabled modes, it may build a
+// blockmap (or several) as part of this process, and if early abort is allowed, it
+// may then return the one that fit
+func DetermineSubsetMode(input BlockmapInput, XOffset, YOffset int16) (int, []byte) {
+	cond := config.BlockmapTryConditionally               // reference to global: config
+	subsetCompressAlways := config.SubsetCompressBlockmap // reference to global: config
+	if subsetCompressAlways {
+		if config.AggressiveSubsets { // reference to global: config
+			// nothing more desperate than explicitly setting this, so can assuredly
+			// return. Revise if even more desperate options are conditionally
+			// supported
+			return BSUBSET_AGGRESSIVE_ELIMINATION, nil
+		} else {
+			if (cond & BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION) == BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION {
+				goto mining
+			}
+			return BSUBSET_PROPER_COMPRESSION, nil
+		}
+	}
+	if cond != BM_TRYCOND_NONE {
+		goto mining
+	}
+	return BSUBSET_NOCOMPRESSION, nil
+	// default choice of subset mode (no question marks used) ends here
+mining:
+	// now, for when user allows to try things conditionally, that is, used question
+	// marks to say certain options are acceptable, but should only be tried if they
+	// are necessary to produce a working blockmap
+	input2 := input
+	input2.XOffset = XOffset
+	input2.YOffset = YOffset
+	input2.gcShield = nil
+
+	// if end goal is not set (produce smallest blockmap) or explicitly set to vanilla,
+	// we try to find options that would produce blockmap fitting under vanilla signed
+	// offset limits
+	mustFitVanilla := config.BlockmapSearchAbortion != BM_OFFSET_FITS_ANYPORT // reference to global: config
+
+	desperateLevel := BSUBSET_NOCOMPRESSION
+
+	for i := 1; i <= 3; i++ { // increasing desperation
+		switch i {
+		case 1:
+			if subsetCompressAlways {
+				continue
+			}
+			bm := CreateBlockmap(input2)
+			data := bm.GetBytes()
+			if (mustFitVanilla && !bm.tooBigForVanilla) ||
+				(!mustFitVanilla && !bm.tooBigForUint16) {
+				return desperateLevel, nilIfNotEarlyReturn(data)
+			}
+		case 2:
+			if !subsetCompressAlways &&
+				(cond&BM_TRYCOND_PROPER_SUBSET_COMPRESSION) != BM_TRYCOND_PROPER_SUBSET_COMPRESSION {
+				continue
+			}
+			desperateLevel = BSUBSET_PROPER_COMPRESSION
+			bm := CreateBlockmap(input2)
+			data := bm.GetBytesArcane(BSUBSET_PROPER_COMPRESSION)
+			if (mustFitVanilla && !bm.tooBigForVanilla) ||
+				(!mustFitVanilla && !bm.tooBigForUint16) {
+				return desperateLevel, nilIfNotEarlyReturn(data)
+			}
+		case 3:
+			if (cond & BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION) != BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION {
+				continue
+			}
+			desperateLevel = BSUBSET_AGGRESSIVE_ELIMINATION
+			bm := CreateBlockmap(input2)
+			data := bm.GetBytesArcane(BSUBSET_AGGRESSIVE_ELIMINATION)
+			if (mustFitVanilla && !bm.tooBigForVanilla) ||
+				(!mustFitVanilla && !bm.tooBigForUint16) {
+				return desperateLevel, nilIfNotEarlyReturn(data)
+			}
+			// it is possible that even aggressive elimination was not enough to
+			// produce a working blockmap, and it won't return from here thus
+		}
+	}
+	return desperateLevel, nil
+}
+
+// wrapper over whether blockmap can return from DetermineSubsetMode
+// the idea is, if end goal of "blockmap fits XXX is enough" is enabled, and
+// DetermineSubsetMode found a method that produces working blockmap, that in can
+// return that blockmap
+func nilIfNotEarlyReturn(data []byte) []byte {
+	if config.BlockmapSearchAbortion == BM_OFFSET_NOABORT { // reference to global: config
+		return nil
+	}
+	return data
+}
+
+func Blockmap_ReportTime(start time.Time, subsetMode int) {
+	switch subsetMode {
+	case BSUBSET_NOCOMPRESSION:
+		Log.Printf("  (blockmap production did not involve subset compression)\n")
+	case BSUBSET_PROPER_COMPRESSION:
+		Log.Printf("  (blockmap production attempted non-aggressive subset compression)\n")
+	case BSUBSET_AGGRESSIVE_ELIMINATION:
+		Log.Printf("  (blockmap production attempted with aggressive subset compression)\n")
+	}
+	Log.Printf("Blockmap took %s\n", time.Since(start))
 }

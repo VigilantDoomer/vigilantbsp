@@ -129,7 +129,9 @@ is either a suboption of option above it, or a possible value:
 		This option is experimental and is likely to break
 		non-vanilla or non-Doom maps. Enable at your own risk
 	s Subset compress BLOCKMAP.
+		this parameter may be optionally followed by question mark*
 	a Aggressive subset compression. If enabled, overrides s.
+		this parameter may be optionally followed by question mark*
 	z= Zero/dummy header configuration
 		0 No dummy header
 		1 Use dummy header, but not necessary zero (default)
@@ -140,6 +142,8 @@ is either a suboption of option above it, or a possible value:
 		0 Smallest blockmap size (default)
 		1 Blockmap fits vanilla limits is enough
 		2 Blockmap works in limit-removing ports is enough
+  * if parameter is followed by question mark, it is tried when
+a working blockmap can't be produced otherwise.
 
 -d Deterministic output (default: disabled)
 
@@ -777,11 +781,26 @@ named 'subset compression' of ZokumBSP, which is also implemented in
 VigilantBSP under a different name: 'aggressive subset compression' 
 (see below).
 
+Since VigilantBSP 0.91, this option may be followed by a question
+mark '?', in which case it won't be tried by default, but will be
+when blockmap can't fit under limits otherwise. That is, user can
+effectively say "don't use subset compression by default, but if
+it is necessary to make a working blockmap, then actually do use it."
+Note that implementation is not guaranteed to try building blockmap
+for all offsets before switching it on if user allowed this --
+for sanity's sake, VigilantBSP may assume that if blockmap overflows
+without subset compression at (0,0), that bruteforce should use
+subsetcompression.
+
+VigilantBSP will only consider subset compression if it is either
+explicitly enabled, or conditionally enabled with a question mark.
+
 05:05 'a' - Aggressive subset compression
 -----------------------------------------
 
-This option, when enabled, completely overrides 's' whether that was
-set or not.
+This option, when unconditionally enabled, completely overrides
+'s' whether that was set or not. Conditionally enabling this option
+with '?' following it won't override 's'.
 
 This option causes VigilantBSP to replace a block pointer to list 
 (when that list is a subset of another bigger list) with the pointer to
@@ -798,6 +817,37 @@ This is what ZokumBSP calls "subset compression" but I would rather call
 it "subset elimination" instead, or you could call it lossy compression
 (think of how WAV compresses into MP3 rather than into FLAC - the process
 is not reversible and involves loss of precision)
+
+Since VigilantBSP 0.91, this option may be followed by a question
+mark '?', in which case it won't be tried by default, but will be
+when blockmap can't fit under limits otherwise. That is, user can
+effectively say "don't use aggressive subset compression by default,
+but if it is necessary to make a working blockmap, then actually do
+use it."
+Note that implementation is not guaranteed to try building blockmap
+for all offsets before switching it on if user allowed this --
+for sanity's sake, VigilantBSP may assume that if blockmap overflows
+without subset compression at (0,0), that bruteforce should use
+aggressive subset compression.
+
+VigilantBSP will only consider aggressive subset compression if it
+is either explicitly enabled, or conditionally enabled with a
+question mark.
+
+Conditionally enabling aggressive subset compression won't toggle
+on regular subset compression, conditionally or otherwise. That is,
+	vigilantbsp -ba? ...
+will try building without any subset compression, then, if it does
+not result in working blockmap, will try _aggressive_ subset
+compression but won't try its less aggressive counterpart.
+	vigilantbsp -bs?a? ...
+	vigilantbsp -bsa? ...
+too have different meanings, both between each other and with
+previous example. But:
+	vigilantbsp -bs?a
+	vigilantbsp -bsa
+are redundant and do the same as
+	vigilantbsp -ba
 
 05:06 't' - Number of cores to use when trying multiple offsets
 ---------------------------------------------------------------

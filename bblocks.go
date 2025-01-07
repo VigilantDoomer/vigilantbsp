@@ -47,6 +47,12 @@ const (
 
 var BLOCKLIST_TERM = []byte{0xFF, 0xFF}
 
+const (
+	BSUBSET_NOCOMPRESSION          = iota // no subset compression
+	BSUBSET_PROPER_COMPRESSION            // subset compression
+	BSUBSET_AGGRESSIVE_ELIMINATION        // subset elimination (aggressive subset compression)
+)
+
 // Type of input argument passed to CreateBlockmap
 type BlockmapInput struct {
 	lines           AbstractLines
@@ -637,7 +643,7 @@ func Scale(a int, b int, c int) int {
 // Subset compression required a change of approach from streaming writer in GetBytes(),
 // as well as a different hash function and more structures (and thus more memory allocations)
 // For this reason, it is separate from GetBytes()
-func (bm *Blockmap) GetBytesArcane() []byte {
+func (bm *Blockmap) GetBytesArcane(subsetMode int) []byte {
 	// Not optimized - just a straightforward way to do this
 	// FIXME subset compression can increase (BAD) the greatest offset while
 	// decreasing overall blockmap size:
@@ -723,7 +729,7 @@ func (bm *Blockmap) GetBytesArcane() []byte {
 	}
 	// 2. Perform subset compression so that minimal amount of BlocklistIdentity
 	// instances remains referenced
-	if config.AggressiveSubsets { // reference to global: config
+	if subsetMode == BSUBSET_AGGRESSIVE_ELIMINATION {
 		// Treat subsets as if they were DUPLICATES of bigger lists - zokumbsp
 		// (v1.0.11) way
 		// Yes, your game engine will test MORE lines in these blocks when using
@@ -743,7 +749,8 @@ func (bm *Blockmap) GetBytesArcane() []byte {
 
 	// 3. Determine order in which blocks should be written and also size, in words,
 	// of memory needed to write all the blocklists
-	identityToWriteLast, totalIdentityWords := bm.IdentifyOrderAndSize(chunks, blocks)
+	identityToWriteLast, totalIdentityWords := bm.IdentifyOrderAndSize(chunks,
+		blocks, subsetMode)
 	part_min := 0
 	part_max := 1
 	if identityToWriteLast == nil {
@@ -1003,7 +1010,8 @@ func (bm *Blockmap) LimitCheck(intBlockOffset int) {
 // Return values remain valid if no further manipulations are done on blocklists,
 // that is subset compression, identical list merge, etc. must be done BEFORE
 // this call
-func (bm *Blockmap) IdentifyOrderAndSize(chunks []*BlocklistChunk, blocks []Block) (*BlocklistIdentity, int) {
+func (bm *Blockmap) IdentifyOrderAndSize(chunks []*BlocklistChunk, blocks []Block,
+	subsetMode int) (*BlocklistIdentity, int) {
 	// TODO choosing last identity is tricky if BLOCKMAP "exceeds" the limit
 	// It may become needed to unpack some subsets so that BLOCKMAP gets *slightly*
 	// bigger but the STARTING offset referencing the rightmost chunk (rightmost
@@ -1042,7 +1050,7 @@ func (bm *Blockmap) IdentifyOrderAndSize(chunks []*BlocklistChunk, blocks []Bloc
 
 	// Let's check if we compressed too much and have our last subset in tricky
 	// position
-	if config.AggressiveSubsets { // reference to global: config
+	if subsetMode == BSUBSET_AGGRESSIVE_ELIMINATION {
 		// ! But if was aggressive, nothing could be done at all for sure,
 		// as no subsets remain - they were merged into full lists
 		return identityToWriteLast, totalIdentityWords

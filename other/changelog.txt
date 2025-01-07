@@ -1,6 +1,8 @@
 Changelog for VigilantBSP
 
 v0.91 (in development)
+- New feature: allow user to enable blockmap subset compression variants conditionally by placing a question mark after respective options.
+- Minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
 - Added --roots parameter, to run plain multi-tree only for N best roots, with best picks for root selected by scoring them with one iteration of Zennode-like partitioner.
 	The trees themselves will be built using user-specified partitioner. Zennode-like is enforced only for scoring the top-level partition choice, and is not used for
 	actual nodes production, unless user does select Zennode-like as partitioner to use.
