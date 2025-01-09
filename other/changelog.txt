@@ -2,18 +2,17 @@ Changelog for VigilantBSP
 
 v0.91 (in development)
 - New feature: allow user to enable blockmap subset compression variants conditionally by placing a question mark after respective options.
-- Minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
-- Added --roots parameter, to run plain multi-tree only for N best roots, with best picks for root selected by scoring them with one iteration of Zennode-like partitioner.
-	The trees themselves will be built using user-specified partitioner. Zennode-like is enforced only for scoring the top-level partition choice, and is not used for
-	actual nodes production, unless user does select Zennode-like as partitioner to use.
-	See "Debug and other hidden parameters".
-- Enhancement: multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
+- Change: among working blockmaps with EQUAL sizes, when dummy linedef is enabled yet allowed to be non-zero (default), prefer blockmap with zero dummy linedef unless its too long.
+	This can decrease load times in Gzdoom by preventing it from discarding a working BLOCKMAP.
+- New feature: --roots=N parameter, where N is a positive number, to run plain multi-tree only for N best roots. See "Debug and other hidden parameters".
+- Enhancement: minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
+- Enhancement: plain multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
 - Enhancement: new selectable option for "nodes format compatibility": "Vanilla, but multi-tree is comfortable with unsigned trees"
 	Turns off a subset of previous enhancement. When not using multi-tree, is fully identical to "v" (default).
 - Bug fix: now can build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow".
-- Added --ableist parameter that restores behavior of previous version for multi-tree: of just selecting the best tree, even if it needs advanced (DeeP or Zdoom) nodes format,
-	while vanilla would be preferred and vanilla trees exist. See "Debug and other hidden parameters"
+- Added --ableist parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
+	See "Debug and other hidden parameters"
 - This release is no longer marked "alpha" -- VigilantBSP has been de facto stable for a while.
 
 v0.86a

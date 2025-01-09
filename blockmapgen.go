@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -95,6 +95,14 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 		input.linesToIgnore = RemoveLinesFromBlockmap(input.linesToIgnore,
 			input.lines, levelFormat, sectors, sidedefs)
 	}
+
+	// if dummy linedef can be other than zero, then try to pick blockmap with zero
+	// linedef given both blockmaps WORK and have EQUAL size, so long as that linedef
+	// doesn't create issues due to its length.
+	// Also, whenever byte stealing ends up not being used, revert to zero as well
+	input.revertibleToZero = input.useZeroHeader &&
+		!config.ZeroHeaderIsZero && // reference to global: config
+		input.lines.Len() > 0 && IsEligibleAsZero(input.lines, 0)
 
 	// Some lines may be excluded from blockmap, their vertices don't count
 	// And neither should any vertices added from building nodes on a map that
@@ -308,7 +316,8 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 				} else {
 					// check against previous best
 					if sieve == nil {
-						if IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap) {
+						if IsBlockmapBetter(work.data, work.blockmap,
+							len(best.data), best.blockmap, input.revertibleToZero) {
 							// Previous best value is now subject to garbage collection
 							best = work
 							bestXOffset = work.XOffset
@@ -322,7 +331,8 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 						// possible, as would be encountered if we were trying
 						// them sequentially
 						if (!IsBlockmapGoodEnough(best.blockmap) &&
-							IsBlockmapBetter(work.data, work.blockmap, len(best.data), best.blockmap)) ||
+							IsBlockmapBetter(work.data, work.blockmap,
+								len(best.data), best.blockmap, input.revertibleToZero)) ||
 							(OffsetPreceedes(work.XOffset, work.YOffset, bestXOffset, bestYOffset) &&
 								IsBlockmapGoodEnough(work.blockmap)) {
 							// Previous best value is now subject to garbage collection
@@ -498,9 +508,10 @@ func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig *Blockma
 			}
 			bmConfig.gcShield = bm.gcShield
 			if !everRun || ((!beeConfig.sieveMode &&
-				IsBlockmapBetter(data, bm, lenOld, oldBm)) ||
+				IsBlockmapBetter(data, bm, lenOld, oldBm, bmConfig.revertibleToZero)) ||
 				(beeConfig.sieveMode && !IsBlockmapGoodEnough(oldBm) &&
-					(IsBlockmapGoodEnough(bm) || IsBlockmapBetter(data, bm, lenOld, oldBm)))) {
+					(IsBlockmapGoodEnough(bm) || IsBlockmapBetter(data, bm, lenOld,
+						oldBm, bmConfig.revertibleToZero)))) {
 				// Found first / better blockmap (or first good enough blockmap
 				// in lieu of better, if deterministic and endgoal parameters
 				// were used)
@@ -611,7 +622,8 @@ func DeleteIfTooBig(bm *Blockmap, data *[]byte) {
 	}
 }
 
-func IsBlockmapBetter(newData []byte, newBM *Blockmap, lenOld int, oldBM *Blockmap) bool {
+func IsBlockmapBetter(newData []byte, newBM *Blockmap, lenOld int, oldBM *Blockmap,
+	preferZero bool) bool {
 	// Fact: slightly bigger blockmap that has all of blocklist starting OFFSETS
 	// WITHIN the limit is BETTER than smaller blockmap with some offsets out
 	// of range!!!
@@ -638,17 +650,32 @@ func IsBlockmapBetter(newData []byte, newBM *Blockmap, lenOld int, oldBM *Blockm
 	// Only when the ability to fit limits didn't change does length count
 	if len(newData) < lenOld {
 		return true
-	} else if config.Deterministic && (len(newData) == lenOld) { // reference to global: config
-		// User requested: make any runs of the program on same input file
-		// produce the same output. So order things to match what a
-		// single-threaded crunch would produce.
-		// Assume convention: earlier offset to be tried is preferred for
-		// blockmaps of the same quality and size
-		if newBM.header.YMin > oldBM.header.YMin { // smaller Y offset was used
-			return true
-		} else if (newBM.header.YMin == oldBM.header.YMin) &&
-			(newBM.header.XMin > oldBM.header.XMin) { // smaller X offset was used for the same Y offset
-			return true
+	} else if len(newData) == lenOld { // reference to global: config
+
+		if preferZero {
+			// Since Gzdoom doesn't trust blockmaps when zero header is absent,
+			// prefer that dummy linedef pick is zero when it doesn't have to be, for
+			// _equal_ _working_ blockmap sizes
+			if oldBM.zeroLinedef == 0 && newBM.zeroLinedef != 0 {
+				return false
+			}
+			if oldBM.zeroLinedef != 0 && newBM.zeroLinedef == 0 {
+				return true
+			}
+		}
+
+		if config.Deterministic {
+			// User requested: make any runs of the program on same input file
+			// produce the same output. So order things to match what a
+			// single-threaded crunch would produce.
+			// Assume convention: earlier offset to be tried is preferred for
+			// blockmaps of the same quality and size
+			if newBM.header.YMin > oldBM.header.YMin { // smaller Y offset was used
+				return true
+			} else if (newBM.header.YMin == oldBM.header.YMin) &&
+				(newBM.header.XMin > oldBM.header.XMin) { // smaller X offset was used for the same Y offset
+				return true
+			}
 		}
 		return false
 	}
@@ -1180,13 +1207,15 @@ func nilIfNotEarlyReturn(data []byte) []byte {
 }
 
 func Blockmap_ReportTime(start time.Time, subsetMode int) {
-	switch subsetMode {
-	case BSUBSET_NOCOMPRESSION:
-		Log.Printf("  (blockmap production did not involve subset compression)\n")
-	case BSUBSET_PROPER_COMPRESSION:
-		Log.Printf("  (blockmap production attempted non-aggressive subset compression)\n")
-	case BSUBSET_AGGRESSIVE_ELIMINATION:
-		Log.Printf("  (blockmap production attempted with aggressive subset compression)\n")
+	if config.BlockmapTryConditionally != BM_TRYCOND_NONE { // reference to global: config
+		switch subsetMode {
+		case BSUBSET_NOCOMPRESSION:
+			Log.Printf("  (blockmap production did not involve subset compression)\n")
+		case BSUBSET_PROPER_COMPRESSION:
+			Log.Printf("  (blockmap production attempted non-aggressive subset compression)\n")
+		case BSUBSET_AGGRESSIVE_ELIMINATION:
+			Log.Printf("  (blockmap production attempted with aggressive subset compression)\n")
+		}
 	}
 	Log.Printf("Blockmap took %s\n", time.Since(start))
 }

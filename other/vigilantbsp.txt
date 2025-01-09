@@ -262,14 +262,20 @@ maps under vanilla limits than hitherto possible. Some of these features
 are opt-in, disabled by default because they can cause problem with
 some versions of advanced source ports, or because they can increase
 build-time significantly. It also has features for advanced ports,
-such as support of DeepBSP ("standard V4") nodes format, "maelstrom"
- - very fast but not visplane- or seg-savvy mode which builds nodes
+such as support of DeepBSP ("standard V4") nodes format, non-GL
+Zdoom extended nodes (including with compression),
+"maelstrom" - very fast but not visplane- or seg-savvy mode which builds nodes
  real fast and can enable frustration-free editing of big complex maps.
  
 VigilantBSP uses several techniques (some are built-in, others are
 opt-in or opt-out) to increase the chance that blockmaps will work
 under either vanilla or limit-removing port, when blockmap is closer
-to limit. 
+to limit. Be careful with trying 65536 offsets option: it can be
+really slow when blockmap exceeds limits hard and can't be brought
+under limits whatsoever. So you shouldn't use it even with endgoal,
+when setting up VigilantBSP to work as nodebuilder invoked
+automatically from your Doom editor. Leave it to calling VigilantBSP
+directly from console when you want to try >36 offsets.
 
 From v0.75a onwards, in vanilla nodes format, VigilantBSP can move 
 segs corresponding to the largest subsector towards the end of SEGS
@@ -725,7 +731,7 @@ Hopefully, ports will include a fix for this bug, but due to demo
 compatibility, older versions will have to emulate this behaviour to properly
 play back demos recorded with this bad optimization in place.
 
-"
+" -- quote from ZokumBSP manual.
 
 z=0 - No dummy header.
 
@@ -757,9 +763,35 @@ mitigation for the bug itself is for the mapper not to have any such
 lines in first place, since long lines in the view will still cause 
 this error, if they are collideable).
 
+From 0.91 onwards, when byte stealing is not successful, dummy linedef
+will be necessary reset to 0 unless it is long. Furthermore, when
+blockmaps are produced for multiple offsets, between two equal size
+and working blockmaps the one with linedef #0 as dummy will be
+prefered over the other. I've discovered that Gzdoom ignores blockmap
+lump and rebuilds blockmaps from scratch when any blocklist doesn't
+start with #0 linedef reference. There are other circumstances where
+Gzdoom forces internal blockmap rebuild anyway, so I wouldn't sweat
+over it: blockmap is not as useful for special effects and you would
+have hard time avoiding Gzdoom internal blockmap rebuild (because far
+as I understood, whenever it does build nodes for himself, it forces
+blockmap rebuild too; moreover, it always rebuilds blockmap that
+is bigger than 32K, which definitely rejects any blockmap that requires
+unsigned limits, and possibly also some blockmap that fit vanilla
+signed limits, where blocklists don't fully fit in the boundary,
+even though all starting offsets do -- this could still be a legitimate
+vanilla-compatible blockmap). See MapLoader::LoadBlockMap in gzdoom
+source code.
+
+This change I implemented in VigilantBSP v0.91 is practically never
+enacted, because byte stealing is usually either successful and produces
+the smallest blockmap which no blockmap with zero dummy equals in size, or
+was never an option in first place and prime dummy candidate was already
+zero. So one really needs to engineer a map in order for this to produce
+different results (from previous versions) in deterministic mode.
+
 z=2 Use linedef #0 as dummy header
 Just like option z=1, this also results in blockmaps universally supported
-by Doom engines. It also adds about 2 bytes of overhead per list in the 
+by Doom engines. It also adds about 2 bytes of overhead per list in the
 blockmap, but the possibility of saving 2 bytes overall via "byte stealing"
 is lost. Also, if this line happens to be longer than 2048 units, it
 will cause hitscan attacks to miss very frequently in ANY part of

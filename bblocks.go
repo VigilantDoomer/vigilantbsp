@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -55,14 +55,15 @@ const (
 
 // Type of input argument passed to CreateBlockmap
 type BlockmapInput struct {
-	lines           AbstractLines
-	bounds          LevelBounds
-	XOffset         int16
-	YOffset         int16
-	useZeroHeader   bool
-	internalPurpose bool              // whether blockmap is for internal purposes only. Used by reject and nodes builder
-	gcShield        *BlockmapGCShield // if non-nil, will reduce allocations by caching them. (NOTE Go supports calling methods on nil object.)
-	linesToIgnore   []bool            // dummy linedefs such as for scrolling, might also be non-collideable lines as judged by faulty(?) heuristic
+	lines            AbstractLines
+	bounds           LevelBounds
+	XOffset          int16
+	YOffset          int16
+	useZeroHeader    bool
+	internalPurpose  bool              // whether blockmap is for internal purposes only. Used by reject and nodes builder
+	gcShield         *BlockmapGCShield // if non-nil, will reduce allocations by caching them. (NOTE Go supports calling methods on nil object.)
+	linesToIgnore    []bool            // dummy linedefs such as for scrolling, might also be non-collideable lines as judged by faulty(?) heuristic
+	revertibleToZero bool              // whether, when stealOneWord is cancelled, should use zero as dummy
 }
 
 type BlockLines []uint16 // these long-lived slices must be tripping gc up... cause there can be like 262144 of them for a single blockmap
@@ -80,7 +81,8 @@ type Blockmap struct {
 	gcShield         *BlockmapGCShield // see BlockmapInput.gcShield
 	XMax             int
 	YMax             int
-	largestOffset    int // statistics: what is the largest offset
+	largestOffset    int  // statistics: what is the largest offset
+	revertibleToZero bool // whether, when stealOneWord is cancelled, should use zero as dummy
 }
 
 // Identity is blocklist that will be actually written after the blocks
@@ -342,6 +344,7 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 		}
 	}
 
+	result.revertibleToZero = input.revertibleToZero
 	result.blocklist = blocklist
 	return result
 }
@@ -437,6 +440,10 @@ func (bm *Blockmap) GetBytes() []byte {
 	// If the last block's blocklist is written last, it can't be written first
 	if bm.stealOneWord && (split_idx == int(totalblocks-1)) {
 		bm.stealOneWord = false
+		if bm.revertibleToZero {
+			bm.zeroLinedef = 0
+			binary.LittleEndian.PutUint16(zeroLinedefBytes, bm.zeroLinedef)
+		}
 	}
 	var intBlockOffset int
 
@@ -777,6 +784,9 @@ func (bm *Blockmap) GetBytesArcane(subsetMode int) []byte {
 	}
 	if bm.stealOneWord {
 		lumpSize -= 2
+	} else if bm.useZeroHeader && bm.revertibleToZero {
+		bm.zeroLinedef = 0
+		binary.LittleEndian.PutUint16(zeroLinedefBytes, bm.zeroLinedef)
 	}
 
 	// lumpSize is the size we already know we will write
