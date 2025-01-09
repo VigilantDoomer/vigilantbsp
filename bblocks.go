@@ -251,22 +251,20 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 		} else if by == by2 { // Horizontal line
 			if bx > bx2 {
 				// swap beginning and end
-				PushAxis(cid, wend, wbeg, 1, blocklist)
+				PushAxis(cid, wend, wbeg, 1, blocklist, result.flags,
+					HAS_HORIZONTAL_LINE)
 			} else {
-				PushAxis(cid, wbeg, wend, 1, blocklist)
-			}
-			if result.flags != nil {
-				result.flags[wbeg] = result.flags[wbeg] | HAS_HORIZONTAL_LINE
+				PushAxis(cid, wbeg, wend, 1, blocklist, result.flags,
+					HAS_HORIZONTAL_LINE)
 			}
 		} else if bx == bx2 { // Vertical line
 			if by > by2 {
 				// swap beginning and end
-				PushAxis(cid, wend, wbeg, int(xblocks), blocklist)
+				PushAxis(cid, wend, wbeg, int(xblocks), blocklist, result.flags,
+					HAS_VERTICAL_LINE)
 			} else {
-				PushAxis(cid, wbeg, wend, int(xblocks), blocklist)
-			}
-			if result.flags != nil {
-				result.flags[wbeg] = result.flags[wbeg] | HAS_VERTICAL_LINE
+				PushAxis(cid, wbeg, wend, int(xblocks), blocklist, result.flags,
+					HAS_VERTICAL_LINE)
 			}
 		} else { // Diagonal line
 			// Toughest case, yeah
@@ -440,10 +438,11 @@ func (bm *Blockmap) GetBytes() []byte {
 	// If the last block's blocklist is written last, it can't be written first
 	if bm.stealOneWord && (split_idx == int(totalblocks-1)) {
 		bm.stealOneWord = false
-		if bm.revertibleToZero {
-			bm.zeroLinedef = 0
-			binary.LittleEndian.PutUint16(zeroLinedefBytes, bm.zeroLinedef)
-		}
+	}
+
+	if !bm.stealOneWord && bm.useZeroHeader && bm.revertibleToZero {
+		bm.zeroLinedef = 0
+		binary.LittleEndian.PutUint16(zeroLinedefBytes, bm.zeroLinedef)
 	}
 	var intBlockOffset int
 
@@ -574,9 +573,15 @@ func (bl *BlockLines) Push(object uint16) {
 	(*bl) = append((*bl), object)
 }
 
-func PushAxis(object uint16, wbeg int, wend int, step int, blocklist []BlockLines) {
+func PushAxis(object uint16, wbeg int, wend int, step int, blocklist []BlockLines,
+	flags []uint8, mask uint8) {
 	for w := wbeg; w <= wend; w += step {
 		blocklist[w].Push(object)
+	}
+	if flags != nil {
+		for w := wbeg; w <= wend; w += step {
+			flags[w] = flags[w] | mask
+		}
 	}
 }
 
@@ -683,7 +688,8 @@ func (bm *Blockmap) GetBytesArcane(subsetMode int) []byte {
 	identityAlloc := bm.gcShield.GetIdentityAlloc(totalblocks)
 	chunks := bm.gcShield.GetChunks(totalblocks)
 	for i, blocklist := range bm.blocklist {
-		uniqueBias := bm.flags[i]&BLOCKLIST_UNIQUE != 0
+		// wow, next line was incorrect for a LONG time. Finally fixed BLOCKLIST_UNIQUE
+		uniqueBias := (bm.flags[i] & BLOCKLIST_UNIQUE) == BLOCKLIST_UNIQUE
 		var bucket uint64
 		var hashblock uint16
 		var hash2 uint64
@@ -861,9 +867,15 @@ func (bm *Blockmap) GetBytesArcane(subsetMode int) []byte {
 
 // Accurate subset merging - doesn't make game do more linedef tests than it
 // already does, for either block
+// I confirmed while developing v0.91 that this function does not find optimal
+// subset compression, which sucks. I see now why Zokum skipped this intermediary
+// implementation
 func (bm *Blockmap) CompressSubsets(chunks []*BlocklistChunk) {
 	// First, BlocklistChunks are sorted by blocklist size in descending order
-	sort.Sort(BListBySizeDesc(chunks)) // see BListBySizeDesc.Less method
+	// We should avoid putting unique blocks before others, though, as they are less
+	// likely to merge biggest sublists. Swapped hash2 comparison by hash comparison
+	// (for equal length)
+	sort.Sort(BListByNoTrashSizeDesc(chunks)) // see BListByNoTrashSizeDesc.Less method
 
 	// To speed up searching for subsets, we maintain a skiplist, which hosts
 	// starting offset for each unique size. This allows us to find contigous
@@ -1097,12 +1109,21 @@ type BListBySizeDesc []*BlocklistChunk
 
 func (x BListBySizeDesc) Len() int { return len(x) }
 func (x BListBySizeDesc) Less(i, j int) bool {
-	// Sort by hash2 improves things even when flags aren't used btw
 	a := len(x[i].identity.data)
 	b := len(x[j].identity.data)
 	return (a > b) || ((a == b) && (x[i].hash2 > x[j].hash2)) // by size DESC, by hash2 DESC
 }
 func (x BListBySizeDesc) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+type BListByNoTrashSizeDesc []*BlocklistChunk
+
+func (x BListByNoTrashSizeDesc) Len() int { return len(x) }
+func (x BListByNoTrashSizeDesc) Less(i, j int) bool {
+	a := len(x[i].identity.data)
+	b := len(x[j].identity.data)
+	return (a > b) || (a == b && x[i].hash > x[j].hash)
+}
+func (x BListByNoTrashSizeDesc) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
 
 func BMIsSubset(sOne BlockLines, bOne BlockLines, bOneOffset int) bool {
 	// Assumes len(bOne[bOneOffset:]) > len(sOne)

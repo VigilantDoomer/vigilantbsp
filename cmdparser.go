@@ -501,7 +501,7 @@ func (c *ProgramConfig) parseBlockmapParams(p []byte) {
 		switch p[0] {
 		case 's':
 			{
-				if p[1] == '?' {
+				if len(p) > 1 && p[1] == '?' {
 					c.BlockmapTryConditionally = c.BlockmapTryConditionally |
 						BM_TRYCOND_PROPER_SUBSET_COMPRESSION
 					p = p[2:]
@@ -513,7 +513,7 @@ func (c *ProgramConfig) parseBlockmapParams(p []byte) {
 			}
 		case 'a':
 			{
-				if p[1] == '?' {
+				if len(p) > 1 && p[1] == '?' {
 					c.BlockmapTryConditionally = c.BlockmapTryConditionally |
 						BM_TRYCOND_AGGRESSIVE_SUBSET_ELIMINATION
 					p = p[2:]

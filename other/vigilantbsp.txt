@@ -782,13 +782,6 @@ even though all starting offsets do -- this could still be a legitimate
 vanilla-compatible blockmap). See MapLoader::LoadBlockMap in gzdoom
 source code.
 
-This change I implemented in VigilantBSP v0.91 is practically never
-enacted, because byte stealing is usually either successful and produces
-the smallest blockmap which no blockmap with zero dummy equals in size, or
-was never an option in first place and prime dummy candidate was already
-zero. So one really needs to engineer a map in order for this to produce
-different results (from previous versions) in deterministic mode.
-
 z=2 Use linedef #0 as dummy header
 Just like option z=1, this also results in blockmaps universally supported
 by Doom engines. It also adds about 2 bytes of overhead per list in the
@@ -805,7 +798,9 @@ and not any other.
 This option will merge every list in the blockmap that is a sub set of
 another big list into the tail of that latter list, as long as it is 
 possible. This will decrease blockmap size, at the cost of increased 
-blockmap build time. 
+blockmap build time. This subset compression is opportunistic, it
+will result in savings, but it is not guaranteed to find optimal
+solution, unlike next option.
 
 This option will not cause vanilla engine to perform any extra checks 
 compared to not using subset compression. This is unlike the similarly 
