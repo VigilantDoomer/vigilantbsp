@@ -93,7 +93,7 @@ func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShare
 	needDistances := input.rmbFrame.NeedDistances()
 	if needDistances {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+		if r.CanCoerceToPendaticSelfRef() {
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
 			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'\n")
 		}
@@ -101,7 +101,7 @@ func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShare
 
 	if input.rmbFrame.HasLineEffects() {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+		if r.CanCoerceToPendaticSelfRef() {
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
 			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options that block sight across a line are present\n")
 		}
@@ -111,7 +111,7 @@ func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShare
 	if maxDistOk {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
 		r.maxDistance = maxDist
-		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+		if r.CanCoerceToPendaticSelfRef() {
 
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
 			Log.Printf("Forcing pedantic mode for self-referencing sectors because DISTANCE is present in RMB options")
@@ -200,6 +200,11 @@ func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShare
 	r.rmbFrame.SymmetricProcessOptionsRMB(r)
 
 	return r.getResult()
+}
+
+func (r *SymmetricRejectWork) CanCoerceToPendaticSelfRef() bool {
+	return r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC &&
+		r.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS
 }
 
 func (r *SymmetricRejectWork) ScheduleSolidBlockmap() {
@@ -751,10 +756,6 @@ func (r *SymmetricRejectWork) mixerSetVisibility(i, j int, visibility uint8) {
 }
 
 func (r *SymmetricRejectWork) eliminateTrivialCases() {
-	if config.DebugNoSlyForReject {
-
-		r.slyLinesInSector = make(map[uint16]bool)
-	}
 
 	if r.groupShareVis {
 
@@ -807,22 +808,6 @@ func (r *SymmetricRejectWork) eliminateTrivialCases() {
 			}
 		}
 	}
-}
-
-func (r *SymmetricRejectWork) entireGroupHiddenNoSly(sector int) bool {
-	if r.sectors[sector].numLines != 0 {
-		return false
-	}
-
-	for _, sec := range r.groups[r.groups[sector].parent].sectors {
-		if r.sectors[sec].numLines != 0 {
-			return false
-		}
-		if r.slyLinesInSector[uint16(sec)] {
-			return false
-		}
-	}
-	return true
 }
 
 func (r *SymmetricRejectWork) testLinePair(srcLine, tgtLine *TransLine) bool {

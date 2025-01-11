@@ -194,6 +194,7 @@ a working blockmap can't be produced otherwise.
 		0 Mark such sectors as always visible (default)
 		1 Mark visible only when self-referencing sector effects are detected
 		2 Be pedantic about self-referencing sector visibility
+		3 Assume self-referencing sectors don't exist (not recommended)
 	m Process RMB option file (.rej)
 		
 -m (example -m:map01+map03) Rebuild only specific maps
@@ -1860,11 +1861,9 @@ sectors. Their boundary is defined by 2-sided lines referencing the same
 sector on both sides, so the real neighbor is not referenced by lines
 Zennode would call transient. 
 
-Two options - if we are to avoid reinventing the algorithm from scratch
-- can be considered: either identify real neighbor somehow, or just mark
-all sectors with 2-sided lines having same sector on both sides as always
-visible which results in REJECT lump that is correct but no so efficient
-(still damn more effecient than zero-filled though)
+Certain RMB effects can force s=2 option value even if user specified
+a different one, unless user specified s=3, which reverts to Zennode
+behavior of not supporting self-referencing sector effects.
 
 s=0 Mark such sectors as always visible (default)
 
@@ -1913,6 +1912,20 @@ If code can't reach certainty, it will fallback to marking sector
 always visible just in case.
 
 There are plans to improve accuracy in these algos in future versions.
+
+s=3 Assume self-referencing sectors don't exist (not recommended)
+
+This option debutes in VigilantBSP v0.91, and is intended for
+large, intensely detailed maps, without self-referencing sector
+effects that need an effective (as in hiding as much as possible)
+reject in order to not lag.
+
+Unlike other options, presence of RMB effects will not be allowed
+to override this selection with s=2, thus if those sectors are
+actually present, nearly all RMB effects will either ignore them
+or might compute incorrectly. The exception is options like
+INCLUDE, which directly reference which sector to operate
+on.
 
 08:04 'm' - Load and apply RMB options file (*.rej)
 ---------------------------------------------------
@@ -1966,6 +1979,14 @@ if it didn't exist. That is, assumptions made by wad editing
 programs may not expect nodebuilder to do certain things
 like accessing similarly named files, making use of RMB
 rather inconvenient. 
+
+Certain options may force -rs=2 to be applied, even if
+user supplied another mode of treating self-referencing
+sectors, unless user specified -rs=3 (assume self-referencing
+sectors do not exist / don't bother identifying them for reject)
+which will be respected. Thus whenever next paragraphs
+mention self-referencing sectors or coercion to -rs=2,
+it applies only unless -rs=3 has been set.
 
 The support is currently work in progress and as such
 should be considered experimental. Only some options

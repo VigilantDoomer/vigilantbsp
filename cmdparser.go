@@ -982,6 +982,10 @@ func (c *ProgramConfig) parseRejectParams(p []byte) {
 					{
 						c.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
 					}
+				case 3:
+					{
+						c.RejectSelfRefMode = REJ_SELFREF_IGNORE_ALWAYS
+					}
 				default:
 					{
 						Log.Error("Unknown mode for treating 2-sided lines with same sector on both sides when building reject. Ignoring it.\n")

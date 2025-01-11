@@ -100,6 +100,7 @@ const VERSION = "0.91"
 		0 Mark such sectors as always visible (default)
 		1 Mark visible only when self-referencing sector effects are detected
 		2 Be pedantic about self-referencing sector visibility
+		3 Assume self-referencing sectors don't exist (not recommended)
 		s+ will temporarily be interpreted as s=1
 	m Process RMB option file (.rej)
 
@@ -132,9 +133,10 @@ const (
 )
 
 const (
-	REJ_SELFREF_TRIVIAL  = iota // all sectors with 2-sided lines pointing to the same sector are marked always visible
-	REJ_SELFREF_CHECK           // all sectors with self-referencing effect are marked always visible
-	REJ_SELFREF_PEDANTIC        // visibility of sectors with self-referencing effect is determined as robustly as visibility of normal sectors
+	REJ_SELFREF_TRIVIAL       = iota // all sectors with 2-sided lines pointing to the same sector are marked always visible
+	REJ_SELFREF_CHECK                // all sectors with self-referencing effect are marked always visible
+	REJ_SELFREF_PEDANTIC             // visibility of sectors with self-referencing effect is determined as robustly as visibility of normal sectors
+	REJ_SELFREF_IGNORE_ALWAYS        // ignore (do not check for) self-referencing sector effects, even in presence of RMB
 )
 
 const (
@@ -247,7 +249,6 @@ type ProgramConfig struct {
 	UseGraphsForLOS        bool   // use graphs for LOS calculations (build reject faster)
 	DumpSegsFlag           bool   // seg debugging
 	SegDumpFile            string // where do dumped segs go?
-	DebugNoSlyForReject    bool   // reenable zennodes' buggy behavior of making self-referencing sectors always invisible
 	CullInvisibleSegs      int    // do not create segs for linedefs that will be invisible anyway
 	PenalizeSectorSplits   bool   // Another options which may or may not help with visplanes. Vigilant visplane algorithm only
 	RejectSelfRefMode      int    // what measures are taken for self-referencing sector support in reject
@@ -331,7 +332,6 @@ func init() {
 		PickNodeUser:             PICKNODE_TRADITIONAL,
 		BlockmapSearchAbortion:   BM_OFFSET_NOABORT,
 		UseGraphsForLOS:          true,
-		DebugNoSlyForReject:      false,
 		CullInvisibleSegs:        CULL_SEGS_DONT,
 		PenalizeSectorSplits:     true,
 		RejectSelfRefMode:        REJ_SELFREF_TRIVIAL,
@@ -477,6 +477,7 @@ func PrintHelp() {
 	Log.Printf("		1 Mark visible only when self-referencing sector effects are\n")
 	Log.Printf("			detected\n")
 	Log.Printf("		2 Be pedantic about self-referencing sector visibility\n")
+	Log.Printf("		3 Assume self-referencing sectors don't exist (not recommended)\n")
 	Log.Printf("	m Process RMB option file (.rej)\n")
 	Log.Printf("\n")
 	Log.Printf("-m (example -m:map01+map03) Rebuild only specific maps\n")

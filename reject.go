@@ -334,7 +334,7 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 	needDistances := input.rmbFrame.NeedDistances()
 	if needDistances {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+		if r.CanCoerceToPendaticSelfRef() {
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
 			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'\n")
 		}
@@ -342,7 +342,7 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 
 	if input.rmbFrame.HasLineEffects() {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+		if r.CanCoerceToPendaticSelfRef() {
 			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
 			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options that block sight across a line are present\n")
 		}
@@ -354,7 +354,7 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 	if maxDistOk {
 		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
 		r.maxDistance = maxDist
-		if r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC {
+		if r.CanCoerceToPendaticSelfRef() {
 			// Yes, here too, because other options could either get us sectors
 			// that are not self-referencing, or bypass this option by making
 			// them always visible. Can't do this, must obey DISTANCE
@@ -466,6 +466,11 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 		}*/
 
 	return r.getResult()
+}
+
+func (r *RejectWork) CanCoerceToPendaticSelfRef() bool {
+	return r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC &&
+		r.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS
 }
 
 // This may do one of the following two things:
@@ -1347,12 +1352,10 @@ func (r *RejectWork) mixerIJ(i, j int) *uint8 {
 }
 
 func (r *RejectWork) eliminateTrivialCases() {
-	if config.DebugNoSlyForReject { // reference to global: config
-		// debug. Revert to zennode's behavior of not counting lines which
-		// refer to the same sector on both sides as transient. (empty map
-		// substituted for the real map of which sectors contain such lines)
-		r.slyLinesInSector = make(map[uint16]bool)
-	}
+	// slyLinesInSector stays an empty map for when self-referencing sectors
+	// discovery is disabled, or for pedantic/coerced to pedantic mode where
+	// discovery of actual sector on another side was successful for every
+	// self-referencing sector
 
 	if r.groupShareVis {
 		// GROUP is being combined with some of the trickier RMB options
@@ -1423,26 +1426,6 @@ func (r *RejectWork) eliminateTrivialCases() {
 			}
 		}
 	}
-}
-
-// Returns true if all sectors in group which the given sector belongs to
-// have no transient lines, and no self-referencing effects are suspected in
-// either. If at least one sector is suspected to be self-referencing or
-// has transient lines, returns false
-func (r *RejectWork) entireGroupHiddenNoSly(sector int) bool {
-	if r.sectors[sector].numLines != 0 {
-		return false
-	}
-
-	for _, sec := range r.groups[r.groups[sector].parent].sectors {
-		if r.sectors[sec].numLines != 0 {
-			return false
-		}
-		if r.slyLinesInSector[uint16(sec)] {
-			return false
-		}
-	}
-	return true
 }
 
 func reSectorsCompare(x reSectorsType, i, j int) int {
