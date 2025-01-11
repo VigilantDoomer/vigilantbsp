@@ -2439,6 +2439,21 @@ linedefs or both -- IS taken into account. That is, the best N
 are taken from the score table after this filter is applied.
 
 
+--nosymm
+Forces disabling a certain optimization for reject building
+that is implemented conditionally (which optimization tends
+to be used when there is either no RMB, or RMB options don't
+break symmetry). --nosymm option is present since
+VigilantBSP v0.91, whereas the optimization it disables was
+implemented in v0.85a.
+
+There is no purpose in disabling optimization for end user
+(other than curiosity) as it doesn't affect output, but can
+increase build times for reject. It is only there for debug
+reasons: to test VigilantBSP against regressions prior to
+publishing a release.
+
+
 --speedtree=<n>, where n is a number
 For use with multi-tree mode, has no effect otherwise. First 
 implemented in VigilantBSP v0.85a.

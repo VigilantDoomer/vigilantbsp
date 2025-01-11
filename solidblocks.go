@@ -158,7 +158,7 @@ func bcon_NeedToDie(us []BconRequest) bool {
 	return true
 }
 
-func (input BlockmapInput) SolidBlocks_Generator(recv <-chan BgenRequest) {
+func (input *BlockmapInput) SolidBlocks_Generator(recv <-chan BgenRequest) {
 	var bm *Blockmap
 	generated := false
 	for msg := range recv {

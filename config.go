@@ -295,7 +295,8 @@ type ProgramConfig struct {
 	Roots              int  // how many (max) best roots to pick for plain multi-tree, default 0, which means try every linedef that satisfies SpecialRootMode
 	RootsReadPending   bool // if need to set roots from width
 	//
-	BlockmapTryConditionally int // options to try conditionally when blockmap doesn't fit with non-conditional options
+	BlockmapTryConditionally int  // options to try conditionally when blockmap doesn't fit with non-conditional options
+	NoSymm                   bool // disable symm reject interface
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -363,6 +364,7 @@ func init() {
 		ZdoomCompression:         6,
 		Ableist:                  false,
 		BlockmapTryConditionally: BM_TRYCOND_NONE,
+		NoSymm:                   false,
 	})
 }
 

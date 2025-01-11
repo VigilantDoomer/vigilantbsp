@@ -361,9 +361,12 @@ func NodesGenerator(input *NodesInput) {
 			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
 		}
 	}
-	if input.stkNode && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
-		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED &&
+		(input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+			input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 		// stknode doesn't support vanilla_or_zdoom format mode -- yet.
+		// ok, disabled node_rearrange for multi-tree, so vanilla_or_zdoom can work
+		// properly with (future) hard multi-tree
 		// TODO implement support for stknode to build vanilla but fallback on zdoom format
 		input.stkNode = false
 		if !isZDoomNodes() { // so that message is printed only once
@@ -623,7 +626,7 @@ func NodesGenerator(input *NodesInput) {
 			// only and is only available for single-tree to make it easier
 			// compare results in deterministic mode and ensure they are
 			// identical)
-			rootNode = StkEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			rootNode = StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
 		} else {
 			if cloneEarly {
 				// vanilla_or_zdoom* nodes format -- contrived operation here
@@ -762,21 +765,29 @@ func NodesGenerator(input *NodesInput) {
 		// 4) I have another idea, it is a spoiler but it will get around the lack
 		// of multi-threading for initial brainstormed implementation of hard
 		// multi-tree
-		if workData.nodeType == NODETYPE_VANILLA {
-			// NOTE MUST NOT rearrange segs via tooManySegsCantFix(_false_) prior
-			// to this call !!! Assumes segs for subsectors were laid out
-			// sequentially (recomputes FirstSeg based on SegCount as there
-			// might have been integer overflow in FirstSeg)
-			// NOTE call to tooManySegsCantFix(_true_) is ok, because it doesn't
-			// modify stuff. Just don't mess with seg arrangement
-			workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
-				pristineVertexMap)
-		} else if workData.nodeType == NODETYPE_DEEP {
-			workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
-				pristineVertexMap)
-		} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
-			workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
-				pristineVertexMap)
+		if workData.stkExtra == nil {
+			// if rearrangement is used with multi-tree again, this catches changes
+			// programmer forgot to implement, such as NOT calling StkFree anymore,
+			// which deletes this data exactly
+			Log.Printf("Impossible to do rearrangement -- workData.stkExtra not kept (programmer error)\n")
+			Log.Printf("Rearrangement step skipped, program will proceed fine\n")
+		} else {
+			if workData.nodeType == NODETYPE_VANILLA {
+				// NOTE MUST NOT rearrange segs via tooManySegsCantFix(_false_) prior
+				// to this call !!! Assumes segs for subsectors were laid out
+				// sequentially (recomputes FirstSeg based on SegCount as there
+				// might have been integer overflow in FirstSeg)
+				// NOTE call to tooManySegsCantFix(_true_) is ok, because it doesn't
+				// modify stuff. Just don't mess with seg arrangement
+				workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
+					pristineVertexMap)
+			} else if workData.nodeType == NODETYPE_DEEP {
+				workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
+					pristineVertexMap)
+			} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
+				workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
+					pristineVertexMap)
+			}
 		}
 	}
 

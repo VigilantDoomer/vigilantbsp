@@ -118,7 +118,7 @@ func MinorCmpFuncFromOption(userOption int) MinorIsBetterFunc {
 // which means it is not advised to be used for vanilla maps unless absolutely
 // necessary
 func IsTooDetailed(lines AbstractLines, linesToIgnore []bool, bounds *NodeBounds) bool {
-	bmi := BlockmapInput{
+	bmi := &BlockmapInput{
 		lines:           lines,
 		bounds:          *NodeBoundsToLevelBounds(bounds),
 		XOffset:         0,

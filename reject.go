@@ -279,7 +279,7 @@ func RejectGenerator(input RejectInput) {
 		groupShareVis = true
 	}
 
-	if !needSlowPath {
+	if !needSlowPath && !config.NoSymm { // reference to global: config
 		useSymmPath = input.rmbFrame.CompatibleWithSymmetry()
 	}
 
@@ -369,7 +369,7 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 	if r.setupLines() {
 		r.ScheduleSolidBlockmap()
 		// Blockmap will be needed a little bit later, do other tasks meanwhile
-		r.createSectorInfo()
+		r.sectors = createSectorInfo(r.numSectors, r.transLines)
 		if r.hasGroups {
 			computeGroupNeighbors(r.groups, r.sectors)
 		}
@@ -531,7 +531,7 @@ func (r *RejectWork) NoNeedSolidBlockmap() {
 // we can compute distanceTable in parallel
 func (r *RejectWork) createSolidBlockmapNow() {
 	lines := r.input.lines.GetSolidVersion()
-	bmi := BlockmapInput{
+	bmi := &BlockmapInput{
 		bounds:          r.input.bounds,
 		XOffset:         0,
 		YOffset:         0,
@@ -715,7 +715,7 @@ func (r *RejectWork) setupLines() bool {
 		// multiple neighbors
 		var it *BlockityLines
 		var blXMin, blXMax, blYMin, blYMax int
-		bm := CreateBlockmap(BlockmapInput{
+		bm := CreateBlockmap(&BlockmapInput{
 			lines:           r.input.lines.GetAuxVersion(),
 			bounds:          r.input.bounds,
 			XOffset:         0,
@@ -1176,12 +1176,11 @@ func (r *RejectWork) finishLineSetup() {
 
 }
 
-func (r *RejectWork) createSectorInfo() {
-	numSectors := r.numSectors
+func createSectorInfo(numSectors int, transLines []TransLine) []RejSector {
 
-	r.sectors = make([]RejSector, numSectors)
-	for i := 0; i < numSectors; i++ {
-		r.sectors[i] = RejSector{
+	sectors := make([]RejSector, numSectors)
+	for i := range sectors {
+		sectors[i] = RejSector{
 			index:        i,
 			numNeighbors: 0,
 			numLines:     0,
@@ -1190,12 +1189,12 @@ func (r *RejectWork) createSectorInfo() {
 	}
 
 	isNeighbor := make(map[Neighboring]bool)
-	numTransLines := len(r.transLines)
+	numTransLines := len(transLines)
 	// Count the number of lines for each sector first
-	for i := 0; i < numTransLines; i++ {
-		line := &r.transLines[i]
-		r.sectors[line.frontSector].numLines++
-		r.sectors[line.backSector].numLines++
+	for i := range transLines {
+		line := &transLines[i]
+		sectors[line.frontSector].numLines++
+		sectors[line.backSector].numLines++
 	}
 
 	// Allocate contiguous arrays (efficient allocation). Each transient line
@@ -1207,30 +1206,31 @@ func (r *RejectWork) createSectorInfo() {
 	neighbors := neighborList
 
 	// Set up the line & neighbor array for each sector
-	for i := 0; i < numSectors; i++ {
+	for i := range sectors {
 		// cut the slice part designated for this sector
-		r.sectors[i].lines = lines[:r.sectors[i].numLines]
-		r.sectors[i].neighbors = neighbors[:r.sectors[i].numLines]
+		sectors[i].lines = lines[:sectors[i].numLines]
+		sectors[i].neighbors = neighbors[:sectors[i].numLines]
 		// skip the cut part
-		lines = lines[r.sectors[i].numLines:]
-		neighbors = neighbors[r.sectors[i].numLines:]
-		r.sectors[i].numLines = 0
+		lines = lines[sectors[i].numLines:]
+		neighbors = neighbors[sectors[i].numLines:]
+		sectors[i].numLines = 0
 	}
 
 	// Fill in line information & mark off neighbors
-	for i := 0; i < numTransLines; i++ {
-		line := &r.transLines[i]
-		sec1 := &r.sectors[line.frontSector]
-		sec2 := &r.sectors[line.backSector]
+	for i := range transLines {
+		line := &transLines[i]
+		sec1 := &sectors[line.frontSector]
+		sec2 := &sectors[line.backSector]
 		sec1.lines[sec1.numLines] = line
 		sec1.numLines++
 		sec2.lines[sec2.numLines] = line
 		sec2.numLines++
-		r.makeNeighbors(sec1, sec2, isNeighbor)
+		makeNeighbors(sec1, sec2, isNeighbor)
 	}
+	return sectors
 }
 
-func (r *RejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighboring]bool) {
+func makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighboring]bool) {
 	nei := Neighboring{
 		smallIndex: sec1.index,
 		bigIndex:   sec2.index,
@@ -1798,9 +1798,10 @@ func computeGroupNeighbors(groups []RejGroup, sectors []RejSector) {
 // existing reject lump fails or it was not compatible (different number of
 // sectors)
 func (r *RejectWork) NoProcess_TryLoad() bool {
-	if !(r.rmbFrame.IsNOPROCESSInEffect()) {
+	// not implemented yet, so let go compiler eliminate this
+	/*if !(r.rmbFrame.IsNOPROCESSInEffect()) {
 		return false
-	}
+	}*/
 	return false
 }
 

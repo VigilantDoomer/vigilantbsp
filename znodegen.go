@@ -149,8 +149,9 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
 		}
 	}
-	if input.stkNode && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
-		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
+	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED &&
+		(input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
+			input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 
 		input.stkNode = false
 		if !ZExt_isZDoomNodes() {
@@ -388,7 +389,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	if input.multiTreeMode == MULTITREE_NOTUSED {
 		if input.stkNode {
 
-			rootNode = ZExt_StkEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			rootNode = ZExt_StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
 		} else {
 			if cloneEarly {
 
@@ -485,16 +486,22 @@ func ZExt_NodesGenerator(input *NodesInput) {
 
 	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
 
-		if workData.nodeType == NODETYPE_VANILLA {
+		if workData.stkExtra == nil {
 
-			workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
-				pristineVertexMap)
-		} else if workData.nodeType == NODETYPE_DEEP {
-			workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
-				pristineVertexMap)
+			Log.Printf("Impossible to do rearrangement -- workData.stkExtra not kept (programmer error)\n")
+			Log.Printf("Rearrangement step skipped, program will proceed fine\n")
 		} else {
-			workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
-				pristineVertexMap)
+			if workData.nodeType == NODETYPE_VANILLA {
+
+				workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
+					pristineVertexMap)
+			} else if workData.nodeType == NODETYPE_DEEP {
+				workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
+					pristineVertexMap)
+			} else {
+				workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
+					pristineVertexMap)
+			}
 		}
 	}
 
@@ -3454,6 +3461,7 @@ func ZExt_PickNode_ZennodeDepth(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeB
 			w.parts = make([]*ZExt_NodeSeg, 1)
 			w.parts[1] = best
 			if best == nil {
+				Log.Merge(w.mlog, "")
 				Log.Panic("Failed hard -- no pick at all, for root of all things!\n")
 			}
 			return nil
@@ -4318,7 +4326,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	pseudoSuper := super.DerivePseudo()
 
 	for i := 0; i < workerCount; i++ {
-		clonedWorkData, clonedBbox := ZExt_MTPSentinel_Clone(w, bbox)
+		clonedWorkData, clonedBbox := ZExt_MultiTree_Clone(w, bbox)
 		workerChans[i] <- ZExt_MTPWorker_Input{
 			workData:    clonedWorkData,
 			pickSegIdx:  rootSegCandidates[i],
@@ -4358,7 +4366,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 
 		if lastFedIdx < len(rootSegCandidates)-1 {
 			lastFedIdx++
-			clonedWorkData, clonedBbox := ZExt_MTPSentinel_Clone(w, bbox)
+			clonedWorkData, clonedBbox := ZExt_MultiTree_Clone(w, bbox)
 			workerChans[branchIdx[chi]] <- ZExt_MTPWorker_Input{
 				workData:    clonedWorkData,
 				pickSegIdx:  rootSegCandidates[lastFedIdx],
@@ -4525,7 +4533,7 @@ func ZExt_MTP_IsBSPTreeBetter(oldResult *ZExt_MTPWorker_Result, newResult *ZExt_
 	return false
 }
 
-func ZExt_MTPSentinel_Clone(w *ZExt_NodesWork, bbox *NodeBounds) (*ZExt_NodesWork, *NodeBounds) {
+func ZExt_MultiTree_Clone(w *ZExt_NodesWork, bbox *NodeBounds) (*ZExt_NodesWork, *NodeBounds) {
 	clonedWorkData := w.GetInitialStateClone()
 	clonedWorkData.mlog = CreateMiniLogger()
 	clonedBbox := new(NodeBounds)
@@ -4737,7 +4745,7 @@ func ZExt_MTP_OneTree(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 
 func ZExt_MTP_ZenRootEnumerate(w *ZExt_NodesWork, bbox *NodeBounds) []int {
 
-	w2, bbox2 := ZExt_MTPSentinel_Clone(w, bbox)
+	w2, bbox2 := ZExt_MultiTree_Clone(w, bbox)
 
 	w2.sectorHits = make([]uint8, len(w2.sectors))
 	w2.blocksHit = make([]ZExt_BlocksHit, 0)
@@ -6979,7 +6987,7 @@ func (w *ZExt_NodesWork) reallyRearrangeExtendedVertices(translate []int,
 
 type ZExt_StkQueue struct {
 	tasks      []ZExt_StkQueueTask
-	depthLimit int
+	DepthLimit int
 	cur        int
 
 	tmp *ZExt_StkQueueTask
@@ -7000,17 +7008,38 @@ type ZExt_StkQueueTask struct {
 	node         *NodeInProcess
 }
 
-func ZExt_StkEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
+func ZExt_StkTestEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
+	pqueue := new(*ZExt_StkQueue)
+	ZExt_StkInitOrReinit(w, pqueue)
+	queue := *pqueue
+
+	queue.DepthLimit = 7
+	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
+
+	return ZExt_StkCreateNode(w, ts, bbox, super, queue)
+}
+
+func ZExt_StkInitOrReinit(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
 	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
 	w.parts = make([]*ZExt_NodeSeg, 0)
 	w.vertexSink = make([]int, 0, cap(w.vertices))
 
-	queue := &ZExt_StkQueue{}
+	if *pqueue == nil {
+		*pqueue = &ZExt_StkQueue{}
+	} else {
+		(*pqueue).tasks = nil
+		(*pqueue).tmp = nil
+		(*pqueue).cur = 0
+	}
+}
 
-	queue.depthLimit = 7
-	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
-
-	return ZExt_StkCreateNode(w, ts, bbox, super, queue)
+func ZExt_StkFree(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
+	w.stkExtra = nil
+	w.parts = nil
+	w.vertexSink = nil
+	if pqueue != nil && *pqueue != nil {
+		*pqueue = nil
+	}
 }
 
 func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
@@ -7220,7 +7249,7 @@ func (q *ZExt_StkQueue) Enqueue(action int, seg *ZExt_NodeSeg, box *NodeBounds,
 
 		return false
 	}
-	if q.depthLimit != -1 && q.getDepth()+1 > q.depthLimit {
+	if q.DepthLimit != -1 && q.getDepth()+1 > q.DepthLimit {
 		return false
 	}
 	num := len(q.tasks)

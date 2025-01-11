@@ -138,7 +138,7 @@ type BlockmapGCShield struct {
 	lumpPool      BlockmapLumpPool
 }
 
-func CreateBlockmap(input BlockmapInput) *Blockmap {
+func CreateBlockmap(input *BlockmapInput) *Blockmap {
 	// TODO handle zero number of vertices. What to do then?
 	// Maybe doesn't need to be handled here? Could be handled in the caller
 	// instead - no lumps can be built if the vertices (and thus linedefs and
@@ -157,7 +157,6 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 		XBlocks: xblocks,
 		YBlocks: yblocks,
 	}
-	result.blocklist = nil
 	result.useZeroHeader = input.useZeroHeader
 	result.zeroLinedef = 0 // default
 	result.stealOneWord = false
@@ -173,6 +172,7 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 	if !input.internalPurpose { // only needed if we are writing a lump to speed up identifying unique blocklists
 		result.flags = result.gcShield.GetFlags(blockCount)
 	}
+	result.blocklist = blocklist
 
 	cntLines := input.lines.Len()
 	if !input.internalPurpose && input.useZeroHeader && !config.ZeroHeaderIsZero && cntLines > 0 { // use of global: config
@@ -251,20 +251,16 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 		} else if by == by2 { // Horizontal line
 			if bx > bx2 {
 				// swap beginning and end
-				PushAxis(cid, wend, wbeg, 1, blocklist, result.flags,
-					HAS_HORIZONTAL_LINE)
+				result.PushAxis(cid, wend, wbeg, 1, HAS_HORIZONTAL_LINE)
 			} else {
-				PushAxis(cid, wbeg, wend, 1, blocklist, result.flags,
-					HAS_HORIZONTAL_LINE)
+				result.PushAxis(cid, wbeg, wend, 1, HAS_HORIZONTAL_LINE)
 			}
 		} else if bx == bx2 { // Vertical line
 			if by > by2 {
 				// swap beginning and end
-				PushAxis(cid, wend, wbeg, int(xblocks), blocklist, result.flags,
-					HAS_VERTICAL_LINE)
+				result.PushAxis(cid, wend, wbeg, int(xblocks), HAS_VERTICAL_LINE)
 			} else {
-				PushAxis(cid, wbeg, wend, int(xblocks), blocklist, result.flags,
-					HAS_VERTICAL_LINE)
+				result.PushAxis(cid, wbeg, wend, int(xblocks), HAS_VERTICAL_LINE)
 			}
 		} else { // Diagonal line
 			// Toughest case, yeah
@@ -343,7 +339,6 @@ func CreateBlockmap(input BlockmapInput) *Blockmap {
 	}
 
 	result.revertibleToZero = input.revertibleToZero
-	result.blocklist = blocklist
 	return result
 }
 
@@ -573,12 +568,15 @@ func (bl *BlockLines) Push(object uint16) {
 	(*bl) = append((*bl), object)
 }
 
-func PushAxis(object uint16, wbeg int, wend int, step int, blocklist []BlockLines,
-	flags []uint8, mask uint8) {
+func (o *Blockmap) PushAxis(object uint16, wbeg int, wend int, step int, mask uint8) {
+	bl := o.blocklist
+	_ = bl[wend]
 	for w := wbeg; w <= wend; w += step {
-		blocklist[w].Push(object)
+		bl[w].Push(object)
 	}
+	flags := o.flags
 	if flags != nil {
+		_ = flags[wend]
 		for w := wbeg; w <= wend; w += step {
 			flags[w] = flags[w] | mask
 		}

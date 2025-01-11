@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -15,10 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
-
-/*import (
-	"strconv"
-)*/
 
 // This unit contains algorithm to build BSP tree breadth-first (or in mixed
 // manner) rather than depth-first, to make efficient (=done early) workload
@@ -69,7 +65,7 @@ type StkNodeExtraData struct {
 // dequeued. Only cursor is moved on dequeue
 type StkQueue struct {
 	tasks      []StkQueueTask
-	depthLimit int
+	DepthLimit int
 	cur        int // cursor (points at task not yet processed)
 
 	tmp *StkQueueTask // persistent pointer, but value to be accessed through it is changed on every call to .Dequeue() method - to a copy of dequeued value
@@ -110,21 +106,53 @@ const ( // enumeration for StkQueueTask.action - notably, ready convex sectors a
 	STK_QUEUE_SINGLE_NONCONVEX        // for single sector (non-convex)
 )
 
-// StkEntryPoint is where the node tree building starts
-func StkEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess {
-	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
-	w.parts = make([]*NodeSeg, 0) // FIXME debug - it should not be created here, I think. Then again...
-	w.vertexSink = make([]int, 0, cap(w.vertices))
-
-	queue := &StkQueue{}
-	// if making parameter for depthLimit, 0 should mean auto, -1 means
-	// unbounded, value above 0 are specific and values below -1 are undefined
-	// behavior (yet) or downright verbotten
-	//queue.depthLimit = -1
-	queue.depthLimit = 7 // TODO depth limit must be a parameter (debug single-tree mode) or a calculated value (multi-tree hard)
+// StkEntryPoint is where the node tree building starts for --stknode
+// multi-tree hard should rather use StkInitOrReinit and StkCreateNode directly,
+// filling up queue in between
+func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess {
+	pqueue := new(*StkQueue)
+	StkInitOrReinit(w, pqueue)
+	queue := *pqueue
+	// depthLimit:
+	// 0 probably should not be used, but may accidentally work. User interface should
+	//   replace it with 1
+	// -1 means unbounded
+	// value above 0 are specific
+	// values below -1 are undefined or panics
+	queue.DepthLimit = 7
 	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
 
 	return StkCreateNode(w, ts, bbox, super, queue)
+}
+
+// multi-tree hard will setup this first
+func StkInitOrReinit(w *NodesWork, pqueue **StkQueue) {
+	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
+	w.parts = make([]*NodeSeg, 0)
+	w.vertexSink = make([]int, 0, cap(w.vertices))
+
+	if *pqueue == nil {
+		*pqueue = &StkQueue{}
+	} else {
+		(*pqueue).tasks = nil
+		(*pqueue).tmp = nil
+		(*pqueue).cur = 0
+	}
+}
+
+// Frees data associated with stknode module. Shall only be used for multi-tree
+// Don't pass non-nil pqueue unless you don't want to reuse queues between runs,
+// or the queue won't be reused anymore.
+// Don't call this if you intend to call rearrangement! It deletes all data that
+// would be used by it (such as stkExtra, vertexSink in NodesWork)
+// Operation should allow to be repeatable
+func StkFree(w *NodesWork, pqueue **StkQueue) {
+	w.stkExtra = nil
+	w.parts = nil
+	w.vertexSink = nil
+	if pqueue != nil && *pqueue != nil {
+		*pqueue = nil
+	}
 }
 
 // StkCreateNode begins with doing things breadth first, until Queue no longer
@@ -368,6 +396,8 @@ func (q *StkQueue) getDepth() int {
 	return q.tasks[len(q.tasks)-1].depth
 }
 
+// TODO Enqueue doesn't need to knows box, impossible to know from PartSeg breadcrumbs
+// must change this interface to something multi-tree actually can use
 func (q *StkQueue) Enqueue(action int, seg *NodeSeg, box *NodeBounds,
 	super *Superblock, isRightChild bool) bool {
 	if q == nil {
@@ -375,7 +405,7 @@ func (q *StkQueue) Enqueue(action int, seg *NodeSeg, box *NodeBounds,
 		// do, this will function as queue that reached its limit anyway
 		return false
 	}
-	if q.depthLimit != -1 && q.getDepth()+1 > q.depthLimit {
+	if q.DepthLimit != -1 && q.getDepth()+1 > q.DepthLimit {
 		return false // limit reached, refused to queue
 	}
 	num := len(q.tasks)

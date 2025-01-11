@@ -269,6 +269,11 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					// user requested to select best tree in multi-tree regardless of
 					// compatibility
 					c.Ableist = true
+				} else if bytes.Equal([]byte(arg), []byte("--nosymm")) {
+					// user requested not to use symmetric interface for reject
+					// (debug option, disables performance optimization that is
+					// particularly good at big maps)
+					c.NoSymm = true
 				} else if bytes.HasPrefix([]byte(arg), []byte("--speedtree")) {
 					// Parameter to control whether use
 					ns, _ := readNumeric("--speedtree=", []byte(arg)[len("--speedtree=")-1:])

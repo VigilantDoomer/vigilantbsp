@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -724,19 +724,21 @@ func TrimLines(src, tgt *TransLine, set *LineSet) int {
 func FindObstacles(world *WorldInfo) bool {
 	// VigilantDoomer: looks like zennode's author didn't finish this - it
 	// always returns false
+	// 2025 -- so eliminate dead code
 
-	if world.solidSet.hiIndex < world.solidSet.loIndex {
-		return false
-	}
+	/*
+		if world.solidSet.hiIndex < world.solidSet.loIndex {
+			return false
+		}
 
-	// If we have an unbroken line between src & tgt there is a direct LOS
-	if world.upperPoly.numPoints == 2 {
-		return false
-	}
-	if world.lowerPoly.numPoints == 2 {
-		return false
-	}
-
+		// If we have an unbroken line between src & tgt there is a direct LOS
+		if world.upperPoly.numPoints == 2 {
+			return false
+		}
+		if world.lowerPoly.numPoints == 2 {
+			return false
+		}
+	*/
 	// To be absolutely correct, we should create a list of obstacles
 	// (ie: connected lineDefs completely enclosed by upperPoly & lowerPoly)
 	// and see if any of them completely block the LOS
@@ -744,15 +746,13 @@ func FindObstacles(world *WorldInfo) bool {
 	return false
 }
 
-//
 // Find out which side of the poly-line the line is on
 //
-//  Return Values:
-//      1 - above (not completely below) the poly-line
-//      0 - intersects the poly-line
-//     -1 - below the poly-line (one or both end-points may touch the poly-line)
-//     -2 - can't tell start this segment
-//
+//	Return Values:
+//	    1 - above (not completely below) the poly-line
+//	    0 - intersects the poly-line
+//	   -1 - below the poly-line (one or both end-points may touch the poly-line)
+//	   -2 - can't tell start this segment
 func Intersects(p1, p2, t1, t2 *IntVertex) int {
 	var DX, DY, y1, y2 int
 

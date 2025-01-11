@@ -124,7 +124,7 @@ func (r *SymmetricRejectWork) main(input RejectInput, hasGroups bool, groupShare
 	if r.setupLines() {
 		r.ScheduleSolidBlockmap()
 
-		r.createSectorInfo()
+		r.sectors = createSectorInfo(r.numSectors, r.transLines)
 		if r.hasGroups {
 			computeGroupNeighbors(r.groups, r.sectors)
 		}
@@ -251,7 +251,7 @@ func (r *SymmetricRejectWork) NoNeedSolidBlockmap() {
 
 func (r *SymmetricRejectWork) createSolidBlockmapNow() {
 	lines := r.input.lines.GetSolidVersion()
-	bmi := BlockmapInput{
+	bmi := &BlockmapInput{
 		bounds:          r.input.bounds,
 		XOffset:         0,
 		YOffset:         0,
@@ -352,7 +352,7 @@ func (r *SymmetricRejectWork) setupLines() bool {
 
 		var it *BlockityLines
 		var blXMin, blXMax, blYMin, blYMax int
-		bm := CreateBlockmap(BlockmapInput{
+		bm := CreateBlockmap(&BlockmapInput{
 			lines:           r.input.lines.GetAuxVersion(),
 			bounds:          r.input.bounds,
 			XOffset:         0,
@@ -726,74 +726,6 @@ func (r *SymmetricRejectWork) finishLineSetup() {
 
 }
 
-func (r *SymmetricRejectWork) createSectorInfo() {
-	numSectors := r.numSectors
-
-	r.sectors = make([]RejSector, numSectors)
-	for i := 0; i < numSectors; i++ {
-		r.sectors[i] = RejSector{
-			index:        i,
-			numNeighbors: 0,
-			numLines:     0,
-		}
-	}
-
-	isNeighbor := make(map[Neighboring]bool)
-	numTransLines := len(r.transLines)
-
-	for i := 0; i < numTransLines; i++ {
-		line := &r.transLines[i]
-		r.sectors[line.frontSector].numLines++
-		r.sectors[line.backSector].numLines++
-	}
-
-	sectorLines := make([]*TransLine, uint64(numTransLines)*2)
-	neighborList := make([]*RejSector, uint64(numTransLines)*2)
-
-	lines := sectorLines
-	neighbors := neighborList
-
-	for i := 0; i < numSectors; i++ {
-
-		r.sectors[i].lines = lines[:r.sectors[i].numLines]
-		r.sectors[i].neighbors = neighbors[:r.sectors[i].numLines]
-
-		lines = lines[r.sectors[i].numLines:]
-		neighbors = neighbors[r.sectors[i].numLines:]
-		r.sectors[i].numLines = 0
-	}
-
-	for i := 0; i < numTransLines; i++ {
-		line := &r.transLines[i]
-		sec1 := &r.sectors[line.frontSector]
-		sec2 := &r.sectors[line.backSector]
-		sec1.lines[sec1.numLines] = line
-		sec1.numLines++
-		sec2.lines[sec2.numLines] = line
-		sec2.numLines++
-		r.makeNeighbors(sec1, sec2, isNeighbor)
-	}
-}
-
-func (r *SymmetricRejectWork) makeNeighbors(sec1, sec2 *RejSector, isNeighbor map[Neighboring]bool) {
-	nei := Neighboring{
-		smallIndex: sec1.index,
-		bigIndex:   sec2.index,
-	}
-	if nei.smallIndex > nei.bigIndex {
-		nei.smallIndex, nei.bigIndex = nei.bigIndex, nei.smallIndex
-	}
-	_, ok := isNeighbor[nei]
-	if ok {
-		return
-	}
-	isNeighbor[nei] = true
-	sec1.neighbors[sec1.numNeighbors] = sec2
-	sec1.numNeighbors++
-	sec2.neighbors[sec2.numNeighbors] = sec1
-	sec2.numNeighbors++
-}
-
 func (r *SymmetricRejectWork) sectorIsNotGroup(i int) bool {
 	return r.groups[i].legal && len(r.groups[i].sectors) == 1
 }
@@ -1066,9 +998,7 @@ func (r *SymmetricRejectWork) forceVisibility(i, j int, visibility uint8) {
 }
 
 func (r *SymmetricRejectWork) NoProcess_TryLoad() bool {
-	if !(r.rmbFrame.IsNOPROCESSInEffect()) {
-		return false
-	}
+
 	return false
 }
 

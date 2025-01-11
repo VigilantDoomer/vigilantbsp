@@ -12,6 +12,7 @@ v0.91 (in development)
 	Turns off a subset of previous enhancement. When not using multi-tree, is fully identical to "v" (default).
 - Added --ableist parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
 	See "Debug and other hidden parameters"
+- Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user. See "Debug and other hidden parameters"
 - Bug fix: can now build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
 - Bug fix: subset compression (both variants) used to miss some significant blockmap size savings, which has now been corrected, resulting in smaller blockmap sizes
 - This release is no longer marked "alpha" -- VigilantBSP has been de facto stable for a while (above bugs didn't result in output corruption and so don't refute this statement)

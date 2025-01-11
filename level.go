@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -255,7 +255,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			// And this actually generates BLOCKMAP lump
 			Log.Printf("Generating BLOCKMAP...\n")
 			l.BlockmapLumpChannel = make(chan []byte)
-			go BlockmapGenerator(BlockmapInput{
+			go BlockmapGenerator(&BlockmapInput{
 				lines:           l.newLines,
 				bounds:          bounds,
 				XOffset:         config.BlockmapXOffset,

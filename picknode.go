@@ -1991,6 +1991,7 @@ func PickNode_ZennodeDepth(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			w.parts = make([]*NodeSeg, 1)
 			w.parts[1] = best
 			if best == nil {
+				Log.Merge(w.mlog, "") // ensure user sees the above error before panic
 				Log.Panic("Failed hard -- no pick at all, for root of all things!\n")
 			}
 			return nil

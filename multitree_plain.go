@@ -207,7 +207,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 
 	// At start, feed each channel/thread exactly once
 	for i := 0; i < workerCount; i++ {
-		clonedWorkData, clonedBbox := MTPSentinel_Clone(w, bbox)
+		clonedWorkData, clonedBbox := MultiTree_Clone(w, bbox)
 		workerChans[i] <- MTPWorker_Input{
 			workData:    clonedWorkData,
 			pickSegIdx:  rootSegCandidates[i],
@@ -254,7 +254,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 		// Reseed worker with next seg to try as root
 		if lastFedIdx < len(rootSegCandidates)-1 {
 			lastFedIdx++
-			clonedWorkData, clonedBbox := MTPSentinel_Clone(w, bbox)
+			clonedWorkData, clonedBbox := MultiTree_Clone(w, bbox)
 			workerChans[branchIdx[chi]] <- MTPWorker_Input{
 				workData:    clonedWorkData,
 				pickSegIdx:  rootSegCandidates[lastFedIdx],
@@ -470,7 +470,7 @@ func getBSPHeights(rootNode *NodeInProcess) (int, int) {
 }
 
 // Because of stateful nature of node workers, must clone all used records
-func MTPSentinel_Clone(w *NodesWork, bbox *NodeBounds) (*NodesWork, *NodeBounds) {
+func MultiTree_Clone(w *NodesWork, bbox *NodeBounds) (*NodesWork, *NodeBounds) {
 	clonedWorkData := w.GetInitialStateClone()
 	clonedWorkData.mlog = CreateMiniLogger()
 	clonedBbox := new(NodeBounds)
@@ -734,7 +734,7 @@ func MTP_OneTree(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 func MTP_ZenRootEnumerate(w *NodesWork, bbox *NodeBounds) []int {
 
-	w2, bbox2 := MTPSentinel_Clone(w, bbox)
+	w2, bbox2 := MultiTree_Clone(w, bbox)
 
 	w2.sectorHits = make([]uint8, len(w2.sectors))
 	w2.blocksHit = make([]BlocksHit, 0)

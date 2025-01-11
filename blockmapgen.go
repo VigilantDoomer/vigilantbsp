@@ -84,7 +84,7 @@ type OffsetSieve struct {
 
 // This is goroutine used to produce BLOCKMAP lump data and give it back
 // to the thing that run it
-func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
+func BlockmapGenerator(input *BlockmapInput, where chan<- []byte,
 	levelFormat int, sectors []Sector, sidedefs []Sidedef) {
 	var offsetXMax int16 // not inclusive, i.e. use < rather than <=
 	var offsetYMax int16 // not inclusive, i.e. use < rather than <=
@@ -196,7 +196,7 @@ func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 // Sets up a hive of bees to split the "build multiple blockmaps" workload
 // roughly even among the concurrent goroutines (called bees)
 func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
-	input BlockmapInput, where chan<- []byte, bailout uint16, start time.Time,
+	input *BlockmapInput, where chan<- []byte, bailout uint16, start time.Time,
 	subsetMode int) {
 
 	var bees []chan BlockmapBeeOutput
@@ -241,7 +241,8 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 	var i int16
 	for i = 0; i < beeCount; i++ {
 		bees[i] = make(chan BlockmapBeeOutput)
-		newInput := input
+		newInput := new(BlockmapInput)
+		*newInput = *input
 		newInput.XOffset = offsetStep * i
 		newInput.YOffset = 0
 		beeConfig := &BlockmapBeeInput{
@@ -270,7 +271,7 @@ func BlockmapQueen(offsetXMax int16, offsetYMax int16, offsetStep int16,
 // to BlockmapQueen. Also a regular function called from BlockmapQueen, waiting
 // synchronously for bees to complete their work.
 func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
-	bees []chan BlockmapBeeOutput, sieve *OffsetSieve, input BlockmapInput,
+	bees []chan BlockmapBeeOutput, sieve *OffsetSieve, input *BlockmapInput,
 	offsetAggregators []chan TriedOffsets, bailout uint16, subsetMode int) []byte {
 	beeCount := len(bees)
 	NA := reflect.Value{}
@@ -376,7 +377,7 @@ func BlockmapHive(ctx context.Context, cancel context.CancelFunc,
 		// use the earliest which gives good enough blockmap, even if it is worse
 		// than the best we've found
 		best = BlockmapHoleChaser(&best, sieve, bestXOffset, bestYOffset,
-			input, bailout, cntHoles, subsetMode)
+			*input, bailout, cntHoles, subsetMode)
 		bestXOffset = best.XOffset
 		bestYOffset = best.YOffset
 	} else if sieve != nil {
@@ -440,7 +441,7 @@ func BMHive_DeleteBranch(branches []reflect.SelectCase, chi int) []reflect.Selec
 
 // each BlockmapBee is run on its own goroutine and hopefully thread,
 // communicating with BlockmapHive
-func BlockmapBee(ctx context.Context, bmConfig BlockmapInput, beeConfig *BlockmapBeeInput) {
+func BlockmapBee(ctx context.Context, bmConfig *BlockmapInput, beeConfig *BlockmapBeeInput) {
 	var lenOld int
 	var oldBm *Blockmap
 	everRun := false
@@ -929,7 +930,7 @@ func BlockmapHoleChaser(oldBest *BlockmapBeeOutput, sieve *OffsetSieve,
 				continue
 			}
 			var data []byte
-			bm := CreateBlockmap(input)
+			bm := CreateBlockmap(&input)
 			if subsetMode != BSUBSET_NOCOMPRESSION {
 				data = bm.GetBytesArcane(subsetMode)
 			} else {
@@ -1116,7 +1117,7 @@ func hasMultiSectorSpecial(lines AbstractLines, cntLines uint16) bool {
 // will be sufficient. If there are conditionally enabled modes, it may build a
 // blockmap (or several) as part of this process, and if early abort is allowed, it
 // may then return the one that fit
-func DetermineSubsetMode(input BlockmapInput, XOffset, YOffset int16) (int, []byte) {
+func DetermineSubsetMode(input *BlockmapInput, XOffset, YOffset int16) (int, []byte) {
 	cond := config.BlockmapTryConditionally               // reference to global: config
 	subsetCompressAlways := config.SubsetCompressBlockmap // reference to global: config
 	if subsetCompressAlways {
