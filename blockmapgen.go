@@ -1031,8 +1031,8 @@ func RemoveLinesFromBlockmap(linesToIgnore []bool, lines AbstractLines,
 				sectors[fsector].CeilHeight == sectors[bsector].CeilHeight &&
 				sectors[fsector].Tag == 0 && sectors[bsector].Tag == 0 &&
 				// timed doors sector specials
-				sectors[fsector].Special != 10 && sectors[bsector].Special != 10 &&
-				sectors[fsector].Special != 14 && sectors[bsector].Special != 14 {
+				!sectorSpecialChangesHeight(sectors[fsector].Special) &&
+				!sectorSpecialChangesHeight(sectors[bsector].Special) {
 				linesToIgnore[cid] = true
 			}
 		}
@@ -1070,6 +1070,14 @@ func RemoveLinesFromBlockmap(linesToIgnore []bool, lines AbstractLines,
 	Log.Printf("Blockmap: removed %d non-collideable lines.\n", efficiency)
 
 	return linesToIgnore
+}
+
+func sectorSpecialChangesHeight(special uint16) bool {
+	switch special {
+	case 10, 14: // timed doors sector specials
+		return true
+	}
+	return false
 }
 
 // Returns true if there exist linedef with a type which affects or can

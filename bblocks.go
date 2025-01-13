@@ -217,7 +217,7 @@ func CreateBlockmap(input *BlockmapInput) *Blockmap {
 	// I don't deny there may be bugs in my code, just check carefully and
 	// make sure it was a bug in my code before reporting! -- VigilantDoomer
 
-	// Cycle over lines ONCE  - the way zennode, zdbsp and others do
+	// Loop over lines ONCE  - the way zennode, zdbsp and others do
 	// BSP v5.2 used cycle over blocks with inner cycle over all lines, which
 	// is slower, although could allow not to hold more than a single blocklist
 	// in memory

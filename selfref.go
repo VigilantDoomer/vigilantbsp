@@ -396,6 +396,8 @@ func FirstStageUncollideable(lines AbstractLines, sidedefs []Sidedef,
 	return (uint16(flags)&LF_TWOSIDED == LF_TWOSIDED) &&
 		!(uint16(flags)&LF_IMPASSABLE == LF_IMPASSABLE) &&
 		!(uint16(flags)&LF_BLOCK_MONSTER == LF_BLOCK_MONSTER) &&
+		!(uint16(flags)&LF_MBF21_BLOCK_LAND_MONSTERS == LF_MBF21_BLOCK_LAND_MONSTERS) &&
+		!(uint16(flags)&LF_MBF21_BLOCK_PLAYERS == LF_MBF21_BLOCK_PLAYERS) &&
 		lines.GetAction(i) == 0 &&
 		firstSdef != SIDEDEF_NONE && secondSdef != SIDEDEF_NONE
 }

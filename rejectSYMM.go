@@ -289,7 +289,7 @@ func (r *SymmetricRejectWork) setupLines() bool {
 	numSolidLines := 0
 	numTransLines := 0
 	var cull *Culler
-	if r.RejectSelfRefMode != REJ_SELFREF_TRIVIAL {
+	if r.RejectSelfRefMode != REJ_SELFREF_TRIVIAL && r.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS {
 		cull = new(Culler)
 		cull.SetMode(CREATE_REJECT, r.input.sidedefs)
 		cull.SetAbstractLines(r.input.lines)
@@ -999,6 +999,8 @@ func (fr *RMBFrame) SymmetricProcessOptionsRMB(r *SymmetricRejectWork) {
 	fr.SymmetricprocessDistanceUsingOptions(r, nil)
 	fr.SymmetricprocessSimpleBlindSafeOptions(r, nil)
 
+	fr.SymmetricprocessVORTEXes(r)
+
 	fr.SymmetricprocessINCLUDEs(r)
 
 	fr.SymmetricprocessEXCLUDEs(r)
@@ -1612,6 +1614,190 @@ func (r *SymmetricRejectWork) applySimpleSafe(sector SectorRMB, i int) {
 
 				if sector.SafeHi == 1 && grI == grJ {
 					*r.rejectTableIJ(k, i) = VIS_HIDDEN
+				}
+			}
+		}
+	}
+}
+
+func (fr *RMBFrame) SymmetricprocessVORTEXes(r *SymmetricRejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.SymmetricvortexesFirstStage(r)
+	fr.SymmetricvortexesSecondStage(r)
+	fr.SymmetricvortexesThirdStage(r)
+}
+
+func (fr *RMBFrame) SymmetricvortexesFirstStage(r *SymmetricRejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.Parent.SymmetricvortexesFirstStage(r)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_VORTEX {
+			for _, i := range cmd.List[0] {
+				if !r.rmbCheckSectorInRange(i, cmd) {
+					continue
+				}
+				for _, j := range cmd.List[1] {
+					if !r.rmbCheckSectorInRange(j, cmd) {
+						continue
+					}
+
+					r.forceVisibility(i, j, VIS_VISIBLE)
+					r.forceVisibility(j, i, VIS_VISIBLE)
+				}
+			}
+		}
+	}
+}
+
+func (fr *RMBFrame) SymmetricvortexesSecondStage(r *SymmetricRejectWork) {
+	if fr == nil {
+		return
+	}
+	allVortexes := make([][]int, 0)
+	fr.SymmetricgetAllVortexes(&allVortexes, r)
+	for i := range allVortexes {
+		otherSelf := otherVortexList(i)
+		for j := range allVortexes {
+			if j == i || j == otherSelf {
+				continue
+			}
+			anySees := false
+			for _, k0 := range allVortexes[i] {
+				for _, k1 := range allVortexes[j] {
+					if *(r.rejectTableIJ(k0, k1)) == VIS_VISIBLE {
+						anySees = true
+						break
+					}
+				}
+			}
+			if !anySees {
+				continue
+			}
+
+			otherJ := otherVortexList(j)
+			for _, k0 := range allVortexes[i] {
+				for _, k1 := range allVortexes[otherJ] {
+					r.forceVisibility(k0, k1, VIS_VISIBLE)
+				}
+			}
+			for _, k0 := range allVortexes[otherSelf] {
+				for _, k1 := range allVortexes[j] {
+					r.forceVisibility(k0, k1, VIS_VISIBLE)
+				}
+				for _, k1 := range allVortexes[otherJ] {
+					r.forceVisibility(k0, k1, VIS_VISIBLE)
+				}
+			}
+		}
+	}
+}
+
+func (fr *RMBFrame) SymmetricgetAllVortexes(allVortexes *[][]int, r *SymmetricRejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.Parent.SymmetricgetAllVortexes(allVortexes, r)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_VORTEX {
+			list0 := make([]int, 0)
+			list1 := make([]int, 0)
+			for _, i := range cmd.List[0] {
+				if !r.rmbCheckSectorInRange(i, cmd) {
+					continue
+				}
+				list0 = append(list0, i)
+			}
+			for _, j := range cmd.List[1] {
+				if !r.rmbCheckSectorInRange(j, cmd) {
+					continue
+				}
+				list1 = append(list1, j)
+			}
+			*allVortexes = append(*allVortexes, list0)
+			*allVortexes = append(*allVortexes, list1)
+		}
+	}
+}
+
+func (fr *RMBFrame) SymmetricvortexesThirdStage(r *SymmetricRejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.Parent.SymmetricvortexesThirdStage(r)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_VORTEX {
+			list0 := make([]int, 0)
+			list1 := make([]int, 0)
+			for _, i := range cmd.List[0] {
+				if !r.rmbCheckSectorInRange(i, cmd) {
+					continue
+				}
+				list0 = append(list0, i)
+			}
+			for _, j := range cmd.List[1] {
+				if !r.rmbCheckSectorInRange(j, cmd) {
+					continue
+				}
+				list1 = append(list1, j)
+			}
+
+			seesList0 := make([]bool, r.numSectors)
+			seesList1 := make([]bool, r.numSectors)
+			for k0 := 0; k0 < r.numSectors; k0++ {
+				for _, i := range list0 {
+					if *(r.rejectTableIJ(k0, i)) == VIS_VISIBLE {
+						seesList0[k0] = true
+					}
+				}
+			}
+			for k1 := 0; k1 < r.numSectors; k1++ {
+				for _, j := range list1 {
+					if *(r.rejectTableIJ(k1, j)) == VIS_VISIBLE {
+						seesList1[k1] = true
+					}
+				}
+			}
+			seenFromList0 := make([]bool, r.numSectors)
+			seenFromList1 := make([]bool, r.numSectors)
+			for k0 := 0; k0 < r.numSectors; k0++ {
+				for _, i := range list0 {
+					if *(r.rejectTableIJ(i, k0)) == VIS_VISIBLE {
+						seenFromList0[k0] = true
+					}
+				}
+			}
+			for k1 := 0; k1 < r.numSectors; k1++ {
+				for _, j := range list1 {
+					if *(r.rejectTableIJ(j, k1)) == VIS_VISIBLE {
+						seenFromList1[k1] = true
+					}
+				}
+			}
+
+			for i := range seesList0 {
+				if !seesList0[i] {
+					continue
+				}
+				for j := range seenFromList1 {
+					if !seenFromList1[j] {
+						continue
+					}
+					*(r.rejectTableIJ(i, j)) = VIS_VISIBLE
+				}
+			}
+			for i := range seesList1 {
+				if !seesList1[i] {
+					continue
+				}
+				for j := range seenFromList0 {
+					if !seenFromList0[j] {
+						continue
+					}
+					*(r.rejectTableIJ(i, j)) = VIS_VISIBLE
 				}
 			}
 		}

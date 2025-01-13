@@ -641,7 +641,7 @@ func (r *RejectWork) setupLines() bool {
 	numSolidLines := 0
 	numTransLines := 0
 	var cull *Culler
-	if r.RejectSelfRefMode != REJ_SELFREF_TRIVIAL {
+	if r.RejectSelfRefMode != REJ_SELFREF_TRIVIAL && r.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS {
 		cull = new(Culler)
 		cull.SetMode(CREATE_REJECT, r.input.sidedefs)
 		cull.SetAbstractLines(r.input.lines)

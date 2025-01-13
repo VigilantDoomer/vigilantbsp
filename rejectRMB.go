@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -243,6 +243,8 @@ func (fr *RMBFrame) ProcessOptionsRMB(r *RejectWork) {
 	// It's either zero or one of two getting done.
 	fr.processDistanceUsingOptions(r, nil)
 	fr.processSimpleBlindSafeOptions(r, nil)
+
+	fr.processVORTEXes(r)
 
 	// INCLUDE is the 2nd highest priority option
 	fr.processINCLUDEs(r)
@@ -969,7 +971,9 @@ func (r *RejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 }
 
 // This attempts to rewrite frame so that:
-//  	if BLIND/SAFE is only ever used with 0/1 and no BAND prefix, they are
+//
+//	if BLIND/SAFE is only ever used with 0/1 and no BAND prefix, they are
+//
 // replaced with RMB_SIMPLE_BLIND and RMB_SIMPLE_SAFE
 // If rewriting anything, it has to make a copy, though, because in the future
 // stuff might be shared between threads
@@ -1174,4 +1178,225 @@ func (fr *RMBFrame) CompatibleWithSymmetry() bool {
 		}
 	}
 	return fr.Parent.CompatibleWithSymmetry()
+}
+
+// VORTEXes are elaborate "visibility transfer" specifications
+func (fr *RMBFrame) processVORTEXes(r *RejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.vortexesFirstStage(r)
+	fr.vortexesSecondStage(r)
+	fr.vortexesThirdStage(r)
+}
+
+// vortexesFirstStage ensures that:
+// list0 sees list1 (as if INCLUDE list0, list1)
+// list1 sees list0 (as if INCLUDE list1, list0)
+func (fr *RMBFrame) vortexesFirstStage(r *RejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.Parent.vortexesFirstStage(r)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_VORTEX {
+			for _, i := range cmd.List[0] {
+				if !r.rmbCheckSectorInRange(i, cmd) {
+					continue
+				}
+				for _, j := range cmd.List[1] {
+					if !r.rmbCheckSectorInRange(j, cmd) {
+						continue
+					}
+					// there should not be i=j generally, although no harm will
+					// result if there suddenly is
+					r.forceVisibility(i, j, VIS_VISIBLE)
+					r.forceVisibility(j, i, VIS_VISIBLE)
+				}
+			}
+		}
+	}
+}
+
+// vortexesSecondStage ensures that:
+// if list from ANY vortex option sees list from ANY OTHER vortex option, it sees the
+// other list from that latter option, and its' own other list sees both lists from
+// the latter.
+// This should enable self-referencing sectors seeing each other when they each are
+// vortex-joined in separate statements only with their encompassing normal sectors,
+// and those normal sectors can see each other. This, importantly, ensures that
+// self-referencing sectors don't need to be vortex-joined to unrelated normal sectors
+// (those not encompassing them) in order for visibility to work as one would expect
+// in game. Also, it should result that the order of VORTEX options doesn't matter.
+func (fr *RMBFrame) vortexesSecondStage(r *RejectWork) {
+	if fr == nil {
+		return
+	}
+	allVortexes := make([][]int, 0)
+	fr.getAllVortexes(&allVortexes, r) // even number always -- 2 lists per vortex
+	for i := range allVortexes {
+		otherSelf := otherVortexList(i)
+		for j := range allVortexes {
+			if j == i || j == otherSelf { // don't check self
+				continue
+			}
+			anySees := false
+			for _, k0 := range allVortexes[i] {
+				for _, k1 := range allVortexes[j] {
+					if *(r.rejectTableIJ(k0, k1)) == VIS_VISIBLE {
+						anySees = true
+						break
+					}
+				}
+			}
+			if !anySees {
+				continue
+			}
+			// these use forceVisibility instead of direct rejectTableIJ access
+			// forceVisibility handles GROUPed sectors
+			otherJ := otherVortexList(j)
+			for _, k0 := range allVortexes[i] {
+				for _, k1 := range allVortexes[otherJ] {
+					r.forceVisibility(k0, k1, VIS_VISIBLE)
+				}
+			}
+			for _, k0 := range allVortexes[otherSelf] {
+				for _, k1 := range allVortexes[j] {
+					r.forceVisibility(k0, k1, VIS_VISIBLE)
+				}
+				for _, k1 := range allVortexes[otherJ] {
+					r.forceVisibility(k0, k1, VIS_VISIBLE)
+				}
+			}
+		}
+	}
+}
+
+// in list populated by getAllVortexes, identifies the other list for a list with
+// index i
+func otherVortexList(i int) int {
+	odd := i%2 == 1
+	other := i + 1
+	if odd {
+		other = i - 1
+	}
+	return other
+}
+
+// appends 2 lists per each vortex option to allVortexes
+// TODO get rid of rmbCheckSectorInRange and hence r parameter -- this shall be done
+// somewhere else
+func (fr *RMBFrame) getAllVortexes(allVortexes *[][]int, r *RejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.Parent.getAllVortexes(allVortexes, r)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_VORTEX {
+			list0 := make([]int, 0)
+			list1 := make([]int, 0)
+			for _, i := range cmd.List[0] {
+				if !r.rmbCheckSectorInRange(i, cmd) {
+					continue
+				}
+				list0 = append(list0, i)
+			}
+			for _, j := range cmd.List[1] {
+				if !r.rmbCheckSectorInRange(j, cmd) {
+					continue
+				}
+				list1 = append(list1, j)
+			}
+			*allVortexes = append(*allVortexes, list0)
+			*allVortexes = append(*allVortexes, list1)
+		}
+	}
+}
+
+// vortexesThirdStage ensures that:
+// anything that sees list0, must see anything that is seen from list1
+// anything that sees list1, must see anything that is seen from list0
+// That is, it handles what sectors that have not directly VORTEXed see because the
+// visibility of VORTEXed sectors has been updated in previous stages
+func (fr *RMBFrame) vortexesThirdStage(r *RejectWork) {
+	if fr == nil {
+		return
+	}
+	fr.Parent.vortexesThirdStage(r)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_VORTEX {
+			list0 := make([]int, 0)
+			list1 := make([]int, 0)
+			for _, i := range cmd.List[0] {
+				if !r.rmbCheckSectorInRange(i, cmd) {
+					continue
+				}
+				list0 = append(list0, i)
+			}
+			for _, j := range cmd.List[1] {
+				if !r.rmbCheckSectorInRange(j, cmd) {
+					continue
+				}
+				list1 = append(list1, j)
+			}
+			// anything that sees list0, must see anything that is seen from list1
+			// anything that sees list1, must see anything that is seen from list0
+			seesList0 := make([]bool, r.numSectors)
+			seesList1 := make([]bool, r.numSectors)
+			for k0 := 0; k0 < r.numSectors; k0++ {
+				for _, i := range list0 {
+					if *(r.rejectTableIJ(k0, i)) == VIS_VISIBLE {
+						seesList0[k0] = true
+					}
+				}
+			}
+			for k1 := 0; k1 < r.numSectors; k1++ {
+				for _, j := range list1 {
+					if *(r.rejectTableIJ(k1, j)) == VIS_VISIBLE {
+						seesList1[k1] = true
+					}
+				}
+			}
+			seenFromList0 := make([]bool, r.numSectors)
+			seenFromList1 := make([]bool, r.numSectors)
+			for k0 := 0; k0 < r.numSectors; k0++ {
+				for _, i := range list0 {
+					if *(r.rejectTableIJ(i, k0)) == VIS_VISIBLE {
+						seenFromList0[k0] = true
+					}
+				}
+			}
+			for k1 := 0; k1 < r.numSectors; k1++ {
+				for _, j := range list1 {
+					if *(r.rejectTableIJ(j, k1)) == VIS_VISIBLE {
+						seenFromList1[k1] = true
+					}
+				}
+			}
+			// I think can bypass handling of GROUPs here and use rejectTableIJ
+			// directly, instead of forceVisibility
+			for i := range seesList0 {
+				if !seesList0[i] {
+					continue
+				}
+				for j := range seenFromList1 {
+					if !seenFromList1[j] {
+						continue
+					}
+					*(r.rejectTableIJ(i, j)) = VIS_VISIBLE
+				}
+			}
+			for i := range seesList1 {
+				if !seesList1[i] {
+					continue
+				}
+				for j := range seenFromList0 {
+					if !seenFromList0[j] {
+						continue
+					}
+					*(r.rejectTableIJ(i, j)) = VIS_VISIBLE
+				}
+			}
+		}
+	}
 }

@@ -1924,8 +1924,8 @@ Unlike other options, presence of RMB effects will not be allowed
 to override this selection with s=2, thus if those sectors are
 actually present, nearly all RMB effects will either ignore them
 or might compute incorrectly. The exception is options like
-INCLUDE, which directly reference which sector to operate
-on.
+INCLUDE, EXCLUDE and VORTEX, which directly reference which sector
+to operate on.
 
 08:04 'm' - Load and apply RMB options file (*.rej)
 ---------------------------------------------------
@@ -2002,10 +2002,86 @@ LENGTH
 LINE
 REPORT
 SAFE
+VORTEX *
+* VORTEX is not part of original RMB! It originates in
+VigilantBSP v0.91
 
 map markers and comments. All other options are ignored
 as of yet. Future versions of VigilantBSP intend to 
 support more options.
+
+VORTEX was not part of original RMB program and in many
+ways, its work is directly opposite of concept behind RMB:
+RMB is mostly about hiding things that are normally seen,
+or making reject building process go faster at the expense
+of accuracy, but VORTEX is about workaround the lack of
+rejectbuilder support for advanced features like portals that
+some engines have. It can also be used to manually render
+self-referencing sectors operational if automatic detection
+was disabled with -rs=3.
+
+VORTEX takes two arguments, each of them is sector lists
+like in INCLUDE. This sector lists will be marked as seeing
+each other (not within list, but across lists), and then
+everything that sees sectors in any list of any VORTEX
+option per previous reject processing stages, will additionally
+see every sector that can be seen from the other list of
+the same VORTEX option. Which reject processing stages are
+previous, though? Basically the entire reject sans
+INCLUDE or EXCLUDE, which have second and first priority
+respectively. So in VigilantBSP v0.91 where VORTEX is
+added, it has third priority and is thus priority over
+anything that is not VORTEX, INCLUDE or EXCLUDE.
+
+Since the meaning of VORTEX is "conduit visibility across
+the vortex both ways", care is taken by VigilantBSP
+to ensure that, for example, self-referencing sectors
+vortex-linked only with their respective wrapping normal
+sectors in separate VORTEX statements will be able to see
+each other if the sectors they are vortex-linked to can.
+
+That is, if 1 and 4 are self-referencing sectors,
+and 2 and 5 are normal ones, and 2 and 5 can see each other,
+then:
+
+VORTEX 1 2
+VORTEX 5 4
+
+will result in 1 and 4 also seeing each other, as well as 1
+seeing anything seen from 2 (and anything seeing 2 seeing 1),
+and 4 seeing anything seen from 5 (and anything seeing 5
+seeing 4). Changing the order of VORTEX statements won't
+undo this. Of course, when REJECT says "potentially visible"
+the engine will still do the real check of visibility, so this
+won't make things visible across true walls (no reject hack can,
+through RMB or otherwise). But if engine has portals, for example,
+then it might be seeing what reject builder normally would
+not, hence the utility of this hack.
+
+Note in above example there were implicit sector lists:
+
+VORTEX (1) (2)
+VORTEX (5) (4)
+
+and putting multiple sectors in one sector list won't
+mark them as visible from each other if it was determined
+they cannot -- VORTEX conduits positive visibility across
+lists both ways, but not within the list.
+
+VORTEXes do not implement explicit interoperation with
+DISTANCE or LENGTH options just like INCLUDE and EXCLUDE
+don't, because VORTEXes don't establish "neighborship"
+of sectors, they just hack visibility by applying certain
+rules. Other options executing before VORTEX (including
+DISTANCE and LENGTH) can affect the results of VORTEX
+(if anything is prevented seeing into / from any
+argument to VORTEX), but VORTEX won't enforce intended
+constraints of any other options, such as see "no further
+than this distance" etc. Implementing such support would
+amount to implementing all the visibility physics from
+all advanced engines, all their ways of doing 3D in
+2.5D etc -- so it is just not done and not planned to
+be done.
 
 NOTE Combining BLIND and SAFE options might not match
 what is written in the manual. I didn't actually test

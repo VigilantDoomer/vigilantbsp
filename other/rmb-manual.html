@@ -35,6 +35,8 @@ pre         { margin: 5px auto 5px 25%; width: 90% }
 
       <p>written by<br/>
        Jens Hykkelbjerg and Steve Benner</p>
+
+      <p>Modified by VigilantDoomer to describe VigilantBSP v0.91 addition</p>
     </center>
 
     <a name="#section-0."/></a>
@@ -926,6 +928,7 @@ next monster
    RIGHT      Makes a 2s line one-way see-through (from right to left)
 &amp;! SAFE       Makes sector(s) invisible to far monsters
 +  TRACE      For debugging only: use is not recommended
+   VORTEX     Not part of any version of RMB. Conduits visibility across sector lists
 </pre>
 
     <p>INV is short for INVERT. Any option can be abbreviated to its shortest
@@ -1831,6 +1834,79 @@ next monster
     is very slow, so don't use it unless you are very interested in the way RMB
     works. While tracing, the available memory is displayed in the top left
     corner (the number to the right of the three numbers).</p>
+
+    <div class="syntax">VORTEX Syntax: VORTEX &lt;Sector list&gt; &lt;Sector list&gt;</div>
+
+    <p>This option is not supported by any version of RMB, and is instead part of VigilantBSP since v0.91
+    version of the latter. It is a "bidirectional INCLUDE on steroids": its purpose is to enable mapper
+    to adjust for features present in advanced engines or self-referencing sectors which reject builder
+    fails to account for. By default, VigilantBSP identifies self-referencing sectors, but this automatic
+    identification can be turned off -- for example, if it is proven buggy on some map.</p>
+
+    <p>VORTEX takes two arguments, each of them is sector lists
+like in INCLUDE. This sector lists will be marked as seeing
+each other (not within list, but across lists), and then
+everything that sees sectors in any list of any VORTEX
+option per previous reject processing stages, will additionally
+see every sector that can be seen from the other list of
+the same VORTEX option. Which reject processing stages are
+previous, though? Basically the entire reject sans
+INCLUDE or EXCLUDE, which have second and first priority
+respectively. So in VigilantBSP v0.91 where VORTEX is
+added, it has third priority and is thus priority over
+anything that is not VORTEX, INCLUDE or EXCLUDE.</p>
+
+<p>Since the meaning of VORTEX is "conduit visibility across
+the vortex both ways", care is taken by VigilantBSP
+to ensure that, for example, self-referencing sectors
+vortex-linked only with their respective wrapping normal
+sectors in separate VORTEX statements will be able to see
+each other if the sectors they are vortex-linked to can.</p>
+
+<p>That is, if 1 and 4 are self-referencing sectors,
+and 2 and 5 are normal ones, and 2 and 5 can see each other,
+then:</p>
+
+<p><strong>VORTEX 1 2</strong></p>
+
+<p><strong>VORTEX 5 4</strong></p>
+
+<p>will result in 1 and 4 also seeing each other, as well as 1
+seeing anything seen from 2 (and anything seeing 2 seeing 1),
+and 4 seeing anything seen from 5 (and anything seeing 5
+seeing 4). Changing the order of VORTEX statements won't
+undo this. Of course, when REJECT says "potentially visible"
+the engine will still do the real check of visibility, so this
+won't make things visible across true walls (no reject hack can,
+through RMB or otherwise). But if engine has portals, for example,
+then it might be seeing what reject builder normally would
+not, hence the utility of this hack.</p>
+
+<p>Note in above example there were implicit sector lists:</p>
+
+<p><strong>VORTEX (1) (2)</strong></p>
+
+<p><strong>VORTEX (5) (4)</strong></p>
+
+<p>and putting multiple sectors in one sector list won't
+mark them as visible from each other if it was determined
+they cannot -- VORTEX conduits positive visibility across
+lists both ways, but not within the list.</p>
+
+<p>VORTEXes do not implement explicit interoperation with
+DISTANCE or LENGTH options just like INCLUDE and EXCLUDE
+don't, because VORTEXes don't establish "neighborship"
+of sectors, they just hack visibility by applying certain
+rules. Other options executing before VORTEX (including
+DISTANCE and LENGTH) can affect the results of VORTEX
+(if anything is prevented seeing into / from any
+argument to VORTEX), but VORTEX won't enforce intended
+constraints of any other options, such as see "no further
+than this distance" etc. Implementing such support would
+amount to implementing all the visibility physics from
+all advanced engines, all their ways of doing 3D in
+2.5D etc -- so it is just not done and not planned to
+be done.</p>
 
     <h3><a name="section-3.3.">3.3 Combining Options</a></h3>
 

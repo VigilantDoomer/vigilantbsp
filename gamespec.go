@@ -32,7 +32,6 @@ var MAP_ExMx *regexp.Regexp = regexp.MustCompile(`^E[1-9]M[0-9][0-9]?$`)
 // This constant group is for internal program usage only
 const (
 	FORMAT_DOOM = iota
-	// Not yet ready
 	FORMAT_HEXEN
 	//FORMAT_UDMF
 )
@@ -104,6 +103,8 @@ const LF_SECRET = uint16(0x0020) // shown as 1-sided on automap
 const LF_BLOCK_SOUND = uint16(0x0040)
 const LF_NEVER_ON_AUTOMAP = uint16(0x0080)
 const LF_ALWAYS_ON_AUTOMAP = uint16(0x0100)
+const LF_MBF21_BLOCK_LAND_MONSTERS = uint16(4096)
+const LF_MBF21_BLOCK_PLAYERS = uint16(8192)
 
 // Linedef flags: Strife additions to COMMON linedef flags
 const SLF_JUMPABLE = uint16(0x200)

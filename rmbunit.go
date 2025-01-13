@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -51,6 +51,7 @@ const ( // RMB option/command types
 	RMB_RIGHT
 	RMB_SAFE
 	RMB_TRACE
+	RMB_VORTEX
 
 	RMB_SIMPLE_BLIND // BLIND 0/1 might be replaced by this
 	RMB_SIMPLE_SAFE  // SAFE 0/1 might be replaced by this

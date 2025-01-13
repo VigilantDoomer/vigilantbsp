@@ -1,22 +1,34 @@
 Changelog for VigilantBSP
 
 v0.91 (in development)
+- New feature: invented RMB option named "VORTEX" to conduit positive visibility "through" sectors. Accepts two sector lists as an argument
+	Sectors in one list will see every sector in the other list and vice versa + anything that *sees* any sector in one sector list will *see*
+	  anything that can be *seen from* any sector in the other sector list. Of course, positive visibility is always verified by engine, so this
+	  won't create visibility across solid walls. This is like "bidirectional INCLUDE on steroids".
+	This is not part of original RMB and will not recognized by RMB executable. I took the liberty to add a new option.
+	Use this to support portals or manually specify which self-referencing sectors are visible when you disable automatic recognition of them.
 - New feature: allow user to enable blockmap subset compression variants conditionally by placing a question mark after respective options.
 - Change: among working blockmaps with EQUAL sizes, when dummy linedef is enabled yet allowed to be non-zero (default), prefer blockmap with zero dummy linedef unless its too long.
 	This can decrease load times in Gzdoom by preventing it from discarding a working BLOCKMAP.
 - New feature: --roots=N parameter, where N is a positive number, to run plain multi-tree only for N best roots. See "Debug and other hidden parameters".
 - New feature: new selectable option for reject's 2-sided lines treatment: "Assume self-referencing sectors don't exist (not recommended)"
+	You can then use RMB options file with VigilantBSP-specific option VORTEX to render specific self-referencing sectors capable of seeing to/from again.
 - Enhancement: minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
 - Enhancement: plain multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
 - Enhancement: new selectable option for "nodes format compatibility": "Vanilla, but multi-tree is comfortable with unsigned trees"
 	Turns off a subset of previous enhancement. When not using multi-tree, is fully identical to "v" (default).
 - Added --ableist parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
-	See "Debug and other hidden parameters"
+	See "Debug and other hidden parameters". Generally the likelihood of best tree not being vanilla is very low, but such case is conceivable.
 - Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user. See "Debug and other hidden parameters"
 - Bug fix: can now build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
 - Bug fix: subset compression (both variants) used to miss some significant blockmap size savings, which has now been corrected, resulting in smaller blockmap sizes
+- Bug fix: recognize MBF21 linedef flags "Block land monsters" and "Block players" and do not remove such linedefs from BLOCKMAP when non-default "remove non-collideable" option is set
 - This release is no longer marked "alpha" -- VigilantBSP has been de facto stable for a while (above bugs didn't result in output corruption and so don't refute this statement)
+- The RMB manual that is bundled with VigilantBSP has been modified to include the new VORTEX option.
+- Updated configuration file (packaged with VigilantBSP) for GzdoomBuilder-Bugfix/Ultimate Doom Builder/Doom Builder family of editors
+	VigilantBSP has many useful options, but cluttering nodebuilder selection is undesirable. Run vigilantbsp.exe with no options from console/shell to see option list.
+- (Relevant to programmers) Makefile no longer produces executables for 3rd microarchitecture level, was a failed experiment in previous version. These files were never released
 
 v0.86a
 - New feature: allow user to set zlib compression level for compressed Zdoom nodes compatibility format, e.g. via -nc=z9 instead of -nc=z.
