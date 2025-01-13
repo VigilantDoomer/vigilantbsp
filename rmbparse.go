@@ -105,7 +105,7 @@ var RMB_PARSE_TABLE = []ParseDef{
 	{[]byte("RIGHT"), []byte("N"), RMB_RIGHT, ParseGeneric, false},
 	{[]byte("SAFE"), []byte("NL"), RMB_SAFE, ParseGeneric, true},
 	{[]byte("TRACE"), []byte("L"), RMB_TRACE, ParseGeneric, false},
-	{[]byte("VORTEX"), []byte("LL"), RMB_VORTEX, ParseGeneric, false},
+	{[]byte("VORTEX"), []byte("LL"), RMB_VORTEX, ParseGeneric, true},
 }
 
 // What INVERT prefix can be applied to?
