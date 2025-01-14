@@ -2269,11 +2269,17 @@ func (r *FastRejectWork) initializeWorld(world *WorldInfo, src, tgt *TransLine) 
 func (r *FastRejectWork) markBlockMap(world *WorldInfo) {
 	r.loRow = int(r.blockmap.header.YBlocks)
 	r.hiRow = -1
+	XMin, YMin := int(r.blockmap.header.XMin), int(r.blockmap.header.YMin)
+	bounds := r.blockMapBounds
 
-	r.drawBlockMapLine(world.src.start, world.src.end)
-	r.drawBlockMapLine(world.tgt.start, world.tgt.end)
-	r.drawBlockMapLine(world.src.start, world.tgt.end)
-	r.drawBlockMapLine(world.tgt.start, world.src.end)
+	drawBlockMapLine(bounds, world.src.start, world.src.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
+	drawBlockMapLine(bounds, world.tgt.start, world.tgt.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
+	drawBlockMapLine(bounds, world.src.start, world.tgt.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
+	drawBlockMapLine(bounds, world.tgt.start, world.src.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
 
 }
 
@@ -2300,130 +2306,6 @@ func (r *FastRejectWork) prepareBlockmapForLOS() {
 			r.solidMap[i] = r.indexToSolid[v]
 			i++
 		}
-	}
-}
-
-func (r *FastRejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
-	x0 := p1.X - int(r.blockmap.header.XMin)
-	y0 := p1.Y - int(r.blockmap.header.YMin)
-	x1 := p2.X - int(r.blockmap.header.XMin)
-	y1 := p2.Y - int(r.blockmap.header.YMin)
-
-	startX := x0 >> BLOCK_BITS
-	startY := y0 >> BLOCK_BITS
-	endX := x1 >> BLOCK_BITS
-	endY := y1 >> BLOCK_BITS
-
-	if startY < r.loRow {
-		r.loRow = startY
-	}
-	if startY > r.hiRow {
-		r.hiRow = startY
-	}
-
-	if endY < r.loRow {
-		r.loRow = endY
-	}
-	if endY > r.hiRow {
-		r.hiRow = endY
-	}
-
-	r.updateRow(startX, startY)
-
-	if startX == endX {
-
-		if startY != endY {
-
-			var dy int
-			if endY > startY {
-				dy = 1
-			} else {
-				dy = -1
-			}
-			b := true
-			for b {
-				startY += dy
-				r.updateRow(startX, startY)
-				b = startY != endY
-			}
-
-		}
-
-	} else {
-
-		if startY != endY {
-
-			var deltaX int
-			deltaY := (y1 - y0) << BLOCK_BITS
-			nextX := x0 * (y1 - y0)
-
-			var dy int
-			if endY > startY {
-
-				nextX += (startY<<BLOCK_BITS + BLOCK_WIDTH - y0) * (x1 - x0)
-				deltaX = ((x1 - x0) << BLOCK_BITS)
-				dy = 1
-			} else {
-
-				nextX += (startY<<BLOCK_BITS - y0) * (x1 - x0)
-				deltaX = ((x0 - x1) << BLOCK_BITS)
-				dy = -1
-			}
-
-			lastX := nextX / deltaY
-			r.updateRow(lastX, startY)
-
-			curY := startY
-			if x0 < x1 {
-				for true {
-
-					curY = curY + dy
-					bound := &(r.blockMapBounds[curY])
-					if lastX < bound.lo {
-						bound.lo = lastX
-					}
-
-					if curY == endY {
-						break
-					}
-					nextX += deltaX
-					lastX = nextX / deltaY
-					if lastX > bound.hi {
-						bound.hi = lastX
-					}
-				}
-			} else {
-				for true {
-
-					curY = curY + dy
-					bound := &(r.blockMapBounds[curY])
-					if lastX > bound.hi {
-						bound.hi = lastX
-					}
-
-					if curY == endY {
-						break
-					}
-					nextX += deltaX
-					lastX = nextX / deltaY
-					if lastX < bound.lo {
-						bound.lo = lastX
-					}
-				}
-			}
-		}
-
-		r.updateRow(endX, endY)
-	}
-}
-
-func (r *FastRejectWork) updateRow(col, row int) {
-	bound := &(r.blockMapBounds[row])
-	if col < bound.lo {
-		bound.lo = col
-	}
-	if col > bound.hi {
-		bound.hi = col
 	}
 }
 

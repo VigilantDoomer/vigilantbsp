@@ -95,16 +95,22 @@ func (p *IntVertex) String() string {
 func (r *RejectWork) markBlockMap(world *WorldInfo) {
 	r.loRow = int(r.blockmap.header.YBlocks)
 	r.hiRow = -1
+	XMin, YMin := int(r.blockmap.header.XMin), int(r.blockmap.header.YMin)
+	bounds := r.blockMapBounds
 
 	// Determine boundaries for the BLOCKMAP search
 	// VigilantDoomer: bet this can be redone more efficiently eventually
 	// UPD April 2023: Actually really hard to do anything about it. The prime
 	// culprit is the REPEATED division operation (inside loop) that is
 	// unavoidable when a line spawns multiple blocks diagonally.
-	r.drawBlockMapLine(world.src.start, world.src.end)
-	r.drawBlockMapLine(world.tgt.start, world.tgt.end)
-	r.drawBlockMapLine(world.src.start, world.tgt.end)
-	r.drawBlockMapLine(world.tgt.start, world.src.end)
+	drawBlockMapLine(bounds, world.src.start, world.src.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
+	drawBlockMapLine(bounds, world.tgt.start, world.tgt.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
+	drawBlockMapLine(bounds, world.src.start, world.tgt.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
+	drawBlockMapLine(bounds, world.tgt.start, world.src.end, XMin, YMin, &(r.loRow),
+		&(r.hiRow))
 
 }
 
@@ -261,54 +267,47 @@ func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 	}
 }*/
 
-func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
-	x0 := p1.X - int(r.blockmap.header.XMin)
-	y0 := p1.Y - int(r.blockmap.header.YMin)
-	x1 := p2.X - int(r.blockmap.header.XMin)
-	y1 := p2.Y - int(r.blockmap.header.YMin)
+func drawBlockMapLine(bounds []BlockMapBounds, p1, p2 *IntVertex, XMin, YMin int,
+	loRow, hiRow *int) {
+	x0 := p1.X - XMin
+	y0 := p1.Y - YMin
+	x1 := p2.X - XMin
+	y1 := p2.Y - YMin
 
 	startX := x0 >> BLOCK_BITS
 	startY := y0 >> BLOCK_BITS
 	endX := x1 >> BLOCK_BITS
 	endY := y1 >> BLOCK_BITS
 
-	if startY < r.loRow {
-		r.loRow = startY
+	if startY < *loRow {
+		*loRow = startY
 	}
-	if startY > r.hiRow {
-		r.hiRow = startY
-	}
-
-	if endY < r.loRow {
-		r.loRow = endY
-	}
-	if endY > r.hiRow {
-		r.hiRow = endY
+	if startY > *hiRow {
+		*hiRow = startY
 	}
 
-	r.updateRow(startX, startY)
+	if endY < *loRow {
+		*loRow = endY
+	}
+	if endY > *hiRow {
+		*hiRow = endY
+	}
+
+	bounds[startY].update(startX)
 
 	if startX == endX {
 
-		if startY != endY { // vertical line
-
-			// unrolling to get rid of dy makes this function significantly
-			// longer, and it is copied over by codegen because it's a
-			// RejectWork method
-			// --VigilantDoomer
-			var dy int
-			if endY > startY {
-				dy = 1
-			} else {
-				dy = -1
-			}
-			b := true
-			for b {
-				startY += dy
-				r.updateRow(startX, startY)
-				b = startY != endY
+		if startY < endY { // vertical line, case1
+			_ = bounds[endY]
+			for i := startY + 1; i <= endY; i++ {
+				bounds[i].update(startX)
 			}
 
+		} else if startY > endY { // vertical line, case2
+			_ = bounds[startY]
+			for i := endY; i < startY; i++ {
+				bounds[i].update(startX)
+			}
 		}
 
 	} else {
@@ -334,7 +333,7 @@ func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 			}
 
 			lastX := nextX / deltaY
-			r.updateRow(lastX, startY)
+			bounds[startY].update(lastX)
 
 			// Now do the rest using integer math - each row is a delta Y of 128
 			// bound := &(r.blockMapBounds[startY]) // doesn't seem to be used now that I've converted away from pointer arithmetic
@@ -343,7 +342,7 @@ func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 				for true {
 					// Do the next row
 					curY = curY + dy
-					bound := &(r.blockMapBounds[curY])
+					bound := &(bounds[curY])
 					if lastX < bound.lo {
 						bound.lo = lastX
 					}
@@ -361,7 +360,7 @@ func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 				for true {
 					// Do the next row
 					curY = curY + dy
-					bound := &(r.blockMapBounds[curY])
+					bound := &(bounds[curY])
 					if lastX > bound.hi {
 						bound.hi = lastX
 					}
@@ -378,12 +377,11 @@ func (r *RejectWork) drawBlockMapLine(p1, p2 *IntVertex) {
 			}
 		}
 
-		r.updateRow(endX, endY)
+		bounds[endY].update(endX)
 	}
 }
 
-func (r *RejectWork) updateRow(col, row int) {
-	bound := &(r.blockMapBounds[row])
+func (bound *BlockMapBounds) update(col int) {
 	if col < bound.lo {
 		bound.lo = col
 	}

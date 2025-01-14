@@ -816,7 +816,7 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 						} else {
 							// I intentionally do not advertise support for -2,-1, 0
 							// zlib compression levels
-							Log.Error("Ignoring unsupported zdoom compression level %d (out of range [1..9]).\n")
+							Log.Error("Ignoring unsupported zdoom compression level %d (out of range [1..9]).\n", tmp)
 						}
 						displace = len(p[3:]) - len(sl)
 					}

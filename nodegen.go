@@ -357,7 +357,7 @@ func NodesGenerator(input *NodesInput) {
 	var linesForZdoom WriteableLines
 	if input.nodeType == NODETYPE_VANILLA_RELAXED {
 		input.nodeType = NODETYPE_VANILLA
-		if input.multiTreeMode != MULTITREE_NOTUSED {
+		if input.multiTreeMode == MULTITREE_NOTUSED {
 			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
 		}
 	}

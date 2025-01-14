@@ -21,7 +21,6 @@ package main
 
 import (
 	"fmt"
-	"strconv"
 )
 
 const ( // RMB option/command types
@@ -60,7 +59,7 @@ const ( // RMB option/command types
 const ( // RMB_FRAME_TYPE
 	RMB_FRAME_GLOBAL = iota // applies to all levels
 	RMB_FRAME_EXMY          // applies to a specific ExMy level
-	RMB_FRAME_MAPXY         // applies to a specific MapXY level
+	RMB_FRAME_MAPXY         // applies to a specific MapXY level, or to UDMF level with arbitrary name
 )
 
 // RMB actually references to these as options, not commands, but from
@@ -75,13 +74,13 @@ type RMBCommand struct {
 	List [2][]int // stores list(s) of sectors specified for this option
 	//
 	WadFileName []byte    // for NOPROCESS command, this can exist - the wad to get reject from
+	MapLumpName []byte    // for NOPROCESS command, second optional argument is map name. Since UDMF, it does not have to be MAPXY or EXMY anymore
 	Frame       *RMBFrame // which frame this belongs to. Only assigned at the end of LoadRMB
 }
 
 type RMBFrameId struct {
-	Type    int // RMB_FRAME_TYPE constant
-	Episode int // for Type = RMB_FRAME_EXMY defines an episode
-	Map     int // full map num for Type = RMB_FRAME_MAPXY, or Y num for RMB_FRAME_EXMY
+	Type int    // RMB_FRAME_TYPE constant
+	Name string // name of map
 }
 
 // RMB allows specifying options:
@@ -126,28 +125,15 @@ func (l *LoadedRMB) LookupRMBFrameForMapMarker(marker []byte) *RMBFrame {
 		return nil
 	}
 	var frameId RMBFrameId
-	if marker[0] == 'E' {
-		val := RMB_MAP_ExMx.FindSubmatch(marker)
-		if val == nil {
-			Log.Panic("Expected a ExMy map, got %s\n", string(marker))
-		}
-		episode, _ := strconv.Atoi(string(val[1]))
-		nmap, _ := strconv.Atoi(string(val[2]))
-
+	if marker[0] == 'E' && MAP_ExMx.FindSubmatch(marker) != nil {
 		frameId = RMBFrameId{
-			Type:    RMB_FRAME_EXMY,
-			Episode: episode,
-			Map:     nmap,
+			Type: RMB_FRAME_EXMY,
+			Name: string(marker),
 		}
-	} else if marker[0] == 'M' {
-		if !RMB_MAP_SEQUEL.Match(marker) {
-			Log.Panic("Expected a MAPXY map, got %s\n", string(marker))
-		}
-		nmap, _ := strconv.Atoi(string(marker)[3:])
+	} else {
 		frameId = RMBFrameId{
-			Type:    RMB_FRAME_MAPXY,
-			Episode: 0,
-			Map:     nmap,
+			Type: RMB_FRAME_MAPXY,
+			Name: string(marker),
 		}
 	}
 	return l.LookupRMBFrameForMap(frameId)

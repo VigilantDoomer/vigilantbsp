@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -78,9 +78,8 @@ func TestEasyRMB(t *testing.T) {
 			ld.globalFrame.Commands[0].Data[1])
 	}
 	frm := ld.LookupRMBFrameForMap(RMBFrameId{
-		Type:    RMB_FRAME_EXMY,
-		Episode: 1,
-		Map:     1,
+		Type: RMB_FRAME_EXMY,
+		Name: "E1M1",
 	})
 	if frm == nil {
 		t.Fatalf("Failed to produced frame for E1M1\n")
@@ -146,6 +145,20 @@ func TestComplexRMB(t *testing.T) {
 	rmb.WriteString("MAP95 # yes I can define levels beyond vanilla Doom support\n")
 	rmb.WriteString("BAND BLIND 2 4 (5 6 7)\n")
 	rmb.WriteString("SAFE 1 74\n")
+	rmb.WriteString("# This map will occur twice\n")
+	rmb.WriteString("E2M3\n")
+	rmb.WriteString("len 15\n")
+	rmb.WriteString("# Next marker is also extension not present in original RMB\n")
+	rmb.WriteString("# It is for UDMF map support\n")
+	rmb.WriteString("MAP GOFY\n")
+	rmb.WriteString("VORTEX 12 35\n")
+	rmb.WriteString("VORTEX 14 11\n")
+	rmb.WriteString("# Unnecessary use of long map extension, but should parse fine\n")
+	rmb.WriteString("MAP E1M2\n")
+	rmb.WriteString("INCLUDE 1 (3 5)\n")
+	rmb.WriteString("# this map has been before, but marker was in short form\n")
+	rmb.WriteString("MAP E2M3 # counting previous frame, it will have 2 commands total\n")
+	rmb.WriteString("EXCLUDE 3 2\n")
 	suc, ld := LoadRMB([]byte(rmb.String()), "test_complexrmb.rej")
 	if !suc {
 		t.Fatalf("Couldn't load complex rmb\n")
@@ -183,9 +196,8 @@ func TestComplexRMB(t *testing.T) {
 	// First make sure there is not a E1M1 frame... ah, wait, I made
 	// LookupRMBFrameForMap return global frame in this case. Stupid me.
 	frm = ld.LookupRMBFrameForMap(RMBFrameId{
-		Type:    RMB_FRAME_EXMY,
-		Episode: 1,
-		Map:     1,
+		Type: RMB_FRAME_EXMY,
+		Name: "E1M1",
 	})
 	if frm != nil && frm != ld.globalFrame {
 		t.Fatalf("Got frame for non-existent map E1M1")
@@ -193,9 +205,8 @@ func TestComplexRMB(t *testing.T) {
 
 	// Check MAP01 frame
 	frm = ld.LookupRMBFrameForMap(RMBFrameId{
-		Type:    RMB_FRAME_MAPXY,
-		Episode: 0,
-		Map:     1,
+		Type: RMB_FRAME_MAPXY,
+		Name: "MAP01",
 	})
 	if frm == nil {
 		t.Fatalf("Failed to produced frame for MAP01\n")
@@ -231,9 +242,8 @@ func TestComplexRMB(t *testing.T) {
 
 	// Check MAP95 frame
 	frm = ld.LookupRMBFrameForMap(RMBFrameId{
-		Type:    RMB_FRAME_MAPXY,
-		Episode: 0,
-		Map:     95,
+		Type: RMB_FRAME_MAPXY,
+		Name: "MAP95",
 	})
 	if frm == nil {
 		t.Fatalf("Failed to produced frame for MAP95n")
@@ -254,6 +264,49 @@ func TestComplexRMB(t *testing.T) {
 		len(frm.Commands[1].List[0]) != 1 || frm.Commands[1].List[0][0] != 74 {
 		t.Fatalf("MAP95 frame command #1 is wrong")
 	}
+
+	frm = ld.LookupRMBFrameForMap(RMBFrameId{
+		Type: RMB_FRAME_MAPXY,
+		Name: "GOFY",
+	})
+	if frm == nil {
+		t.Fatalf("Failed to produce frame for map GOFY")
+	}
+	if frm.Parent == nil { // good luck ascertaining it is the same though
+		t.Fatalf("The GOFY frame doesn't link to global frame.\n")
+	}
+	if len(frm.Commands) != 2 {
+		t.Fatalf("Wrong number of commands in GOFY frame.\n")
+	}
+
+	frm = ld.LookupRMBFrameForMap(RMBFrameId{
+		Type: RMB_FRAME_EXMY,
+		Name: "E1M2",
+	})
+	if frm == nil {
+		t.Fatalf("Failed to produce frame for map E1M2")
+	}
+	if frm.Parent == nil { // good luck ascertaining it is the same though
+		t.Fatalf("The E1M2 frame doesn't link to global frame.\n")
+	}
+	if len(frm.Commands) != 1 {
+		t.Fatalf("Wrong number of commands in E1M2 frame.\n")
+	}
+
+	frm = ld.LookupRMBFrameForMap(RMBFrameId{
+		Type: RMB_FRAME_EXMY,
+		Name: "E2M3",
+	})
+	if frm == nil {
+		t.Fatalf("Failed to produce frame for map E2M3")
+	}
+	if frm.Parent == nil { // good luck ascertaining it is the same though
+		t.Fatalf("The E2M3 frame doesn't link to global frame.\n")
+	}
+	if len(frm.Commands) != 2 {
+		t.Fatalf("Wrong number of commands in E2M3 frame.\n")
+	}
+
 }
 
 // Although RMB manual doesn't say this, example *.rej shipped with RMB
@@ -324,4 +377,10 @@ func TestCommaListRMB(t *testing.T) {
 		t.Fatalf("frame command #4 is wrong")
 	}
 
+}
+
+func TestNotInvertible(t *testing.T) {
+	if NOT_INVERTIBLE != "illegal argument to INVERT, expected BAND, BLIND or SAFE\n" {
+		t.Fatalf("Table to INVERTible commands changed, or message is not produced correctly. Needs update\n")
+	}
 }

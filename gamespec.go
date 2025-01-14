@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -26,14 +26,15 @@ import (
 // Both brought in accordance with Prboom-Plus 2.6.1um map name ranges, except
 // that E1M0x is possible (when it is probably shouldn't be) since I don't
 // want to complicate these regexp's (and E9M97 is perfectly legal, for example)
-var MAP_SEQUEL *regexp.Regexp = regexp.MustCompile(`^MAP[0-9][0-9]$`)
-var MAP_ExMx *regexp.Regexp = regexp.MustCompile(`^E[1-9]M[0-9][0-9]?$`)
+// RMB parser now uses these too, rather than its own forks. Hence the subgroups
+var MAP_SEQUEL *regexp.Regexp = regexp.MustCompile(`^MAP([0-9])([0-9])$`)
+var MAP_ExMx *regexp.Regexp = regexp.MustCompile(`^E([1-9])M([0-9])([0-9]?)$`)
 
 // This constant group is for internal program usage only
 const (
 	FORMAT_DOOM = iota
 	FORMAT_HEXEN
-	//FORMAT_UDMF
+	FORMAT_UDMF
 )
 
 const BLOCK_WIDTH = 128

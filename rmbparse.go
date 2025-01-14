@@ -19,7 +19,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"regexp"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -36,8 +36,9 @@ import (
 // accomodate for potentially elaborate *.rej RMB option files) and generally
 // more sanely written code.
 
-var RMB_MAP_SEQUEL *regexp.Regexp = regexp.MustCompile(`^MAP([0-9])([0-9])$`)
-var RMB_MAP_ExMx *regexp.Regexp = regexp.MustCompile(`^E([1-9])M([0-9])([0-9]?)$`)
+// TODO review -- does it have to be separate from MAP_SEQUEL and MAP_ExMx in gamespec
+// module? I don't think that subgroups impose significant performance cost. And for
+// validity with original RMB, ExMx already allows more than originally
 
 type ParseRMBCommandFunc func(context *ParseContext, tblIdx int, cmd *RMBCommand) bool
 
@@ -93,6 +94,8 @@ var RMB_PARSE_TABLE = []ParseDef{
 	{[]byte("LEFT"), []byte("N"), RMB_LEFT, ParseGeneric, false},
 	{[]byte("LENGTH"), []byte("N"), RMB_LENGTH, ParseGeneric, true},
 	{[]byte("LINE"), []byte("N"), RMB_LINE, ParseGeneric, true},
+	// Now it is "MAPXY" or "MAP lumpname", actually -- to account for UDMF arbitrary
+	// named maps
 	{[]byte("MAP**") /*string unused*/, nil, RMB_MAPXY_MAP, ParseMap, true},
 	{[]byte("NODOOR"), []byte("L"), RMB_NODOOR, ParseGeneric, false},
 	{[]byte("NOMAP"), nil, RMB_NOMAP, ParseGeneric, false},
@@ -110,6 +113,11 @@ var RMB_PARSE_TABLE = []ParseDef{
 
 // What INVERT prefix can be applied to?
 var RMB_INVERTABLE = []int{RMB_BAND, RMB_BLIND, RMB_SAFE}
+
+// NOT_INVERTIBLE error message is logged when user specifies INVERT prefix to a
+// command not supporting it.
+// init() constructs this from RMB_INVERTABLE and RMB_PARSE_TABLE
+var NOT_INVERTIBLE string
 
 func GetParseDef(tblIdx int) *ParseDef {
 	return &(RMB_PARSE_TABLE[tblIdx])
@@ -360,39 +368,50 @@ func ParseMap(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 	// context.getParseDef -> workaround against compiler bug that "detects"
 	// loop for RMB_PARSE_TABLE. I really don't understand what the fuck
 	// is going on and why I can't reference RMB_PARSE_TABLE here
+	longFormat := false
 	switch context.getParseDef(tblIdx).Type {
 	case RMB_EXMY_MAP:
 		{
-			sub := RMB_MAP_ExMx.FindSubmatch(context.command)
+			sub := MAP_ExMx.FindSubmatch(context.command)
 			// 0 is entire string
 			// 1 is first group (episode number in this case)
 			// 2 is first digit of map number
 			// 3 is second digit of map number, if any (PrBoom-plus supports
 			// maps like E9M12)
 			if len(sub) > 4 || len(sub) < 3 {
-				context.LogError("invalid map marker %s\n", context.command)
+				context.LogError("invalid map marker %s. Try MAP <lumpname> if you need to support anything more than EXMY or MAPXY \n", context.command)
 				return false
 			}
-			// Not checking for errors next - regexp should have taken care of
-			// it
-			cmd.Data[0], _ = strconv.Atoi(string(sub[1]))
-			cmd.Data[1], _ = strconv.Atoi(string(sub[2]))
-			if len(sub) == 4 && len(sub[3]) != 0 {
-				sDigit, _ := strconv.Atoi(string(sub[3]))
-				cmd.Data[1] = cmd.Data[1]*10 + sDigit
-			}
+			cmd.MapLumpName = []byte(string(context.command))
 		}
 	case RMB_MAPXY_MAP:
 		{
-			mapNum, err := strconv.Atoi(string(context.command)[3:])
-			if err != nil {
-				// fuck. I need to format error using liNum. Basically,
-				// all this functions need to be redesigned
-				context.LogError("couldn't convert map numeral to integer: %s\n",
-					err.Error())
-				return false
+			if len(context.command) > 3 {
+				_, err := strconv.Atoi(string(context.command)[3:])
+				if err != nil {
+					// fuck. I need to format error using liNum. Basically,
+					// all this functions need to be redesigned
+					context.LogError("couldn't convert map numeral to integer: %s\n",
+						err.Error())
+					return false
+				}
+				cmd.MapLumpName = []byte(string(context.command))
+			} else {
+				success := false
+				longFormat = true
+				if context.wordScanner.Scan() {
+					longName := context.wordScanner.Bytes()
+					if len(longName) > 0 && longName[0] != '#' {
+						cmd.MapLumpName = []byte(string(bytes.ToUpper(longName)))
+						success = true
+					}
+				}
+				if !success {
+					context.LogError("MAP (long format) found, but it had no argument. Expected a string argument\n")
+					return false
+				}
 			}
-			cmd.Data[0] = mapNum
+
 		}
 	default:
 		{
@@ -405,7 +424,11 @@ func ParseMap(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 		if len(wtf) > 0 && wtf[0] != '#' {
 			// Be strict rather than lax. Zennode misses this check I believe,
 			// although enforces it for options handled by ParseGeneric
-			context.LogError("map markers are not accepting any arguments in RMB options file\n")
+			if !longFormat {
+				context.LogError("conventional map markers are not accepting any arguments in RMB options file. Use MAP <lumpname> if you want to specify UDMF map with non-standard name\n")
+			} else {
+				context.LogError("long format MAP accepts only one argument\n")
+			}
 			return false
 		}
 	} // else (it returned false) we think it is EOF rather than some error xD
@@ -461,6 +484,13 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 		return false
 	}
 
+	if bytes.IndexRune(fname, os.PathSeparator) != -1 {
+		// paranoid considerations -- will be lifted once I am sure this does not
+		// create security errors
+		context.LogError("filename must be a basename -- path separators not allowed in NOPROCESS argument in VigilantBSP")
+		return false
+	}
+
 	cmd.WadFileName = fname
 
 	// FIXME to read from scanner here might be incorrect when quotes will be
@@ -474,8 +504,9 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 		return true
 	}
 	mapName := bytes.ToUpper(rawMapName)
+	cmd.MapLumpName = mapName // for ease of fetching, store it here always
 	validMap := false
-	s1 := RMB_MAP_ExMx.FindSubmatch(mapName)
+	s1 := MAP_ExMx.FindSubmatch(mapName)
 	if s1 != nil {
 		// Not checking for errors next - regexp should have taken care of
 		// it
@@ -488,7 +519,7 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 		validMap = true
 
 	} else {
-		s2 := RMB_MAP_SEQUEL.FindSubmatch(mapName)
+		s2 := MAP_SEQUEL.FindSubmatch(mapName)
 		if s2 != nil {
 			validMap = true
 			cmd.Data[0] = -2
@@ -499,8 +530,13 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 	}
 
 	if !validMap {
-		context.LogError("%s is not a valid or supported map name\n", string(rawMapName))
-		return false
+		validMap = true // anyway
+		cmd.Data[0] = -666
+		// UDMF allows for any lump name -- an UDMF map marker is any that is
+		// followed by TEXTMAP lump. But might there be still symbols that best not
+		// appear here?
+		context.LogWarning("%s (%s) is a non-conventional name for map marker lump -- assuming it may be an UDMF lump, will check later\n",
+			string(rawMapName), string(mapName))
 	}
 
 	if context.wordScanner.Scan() {
@@ -527,9 +563,8 @@ func LoadRMB(src []byte, fname string) (bool, *LoadedRMB) {
 	allFrames := []RMBFrame{
 		{
 			Id: RMBFrameId{
-				Type:    RMB_FRAME_GLOBAL,
-				Episode: 0,
-				Map:     0,
+				Type: RMB_FRAME_GLOBAL,
+				Name: "",
 			},
 			Commands: make([]RMBCommand, 0),
 			Parent:   nil,
@@ -705,7 +740,7 @@ func (c *ParseContext) parseRMBLine(line []byte, fromInvert bool) bool {
 			// Ugly code for now
 			if entry.Type == RMB_EXMY_MAP {
 				if len(command) > 2 && bytes.HasPrefix(command, []byte("E")) &&
-					RMB_MAP_ExMx.Match(command) {
+					MAP_ExMx.Match(command) {
 					fnd = true
 				} else {
 					continue
@@ -714,8 +749,8 @@ func (c *ParseContext) parseRMBLine(line []byte, fromInvert bool) bool {
 				if !bytes.HasPrefix(command, []byte("MAP")) {
 					continue
 				}
-				if !RMB_MAP_SEQUEL.Match(command) {
-					c.LogError("unsupported map marker, expected MAP followed by 2 digits\n")
+				if len(command) != 3 && !MAP_SEQUEL.Match(command) {
+					c.LogError("unsupported map marker, expected MAP followed by 2 digits immediately, or followed by a space and a lump marker\n")
 				}
 				fnd = true
 			}
@@ -760,9 +795,8 @@ func (c *ParseContext) parseRMBLine(line []byte, fromInvert bool) bool {
 						// All future options, until next switch, will be local
 						// to this map
 						c.switchToMapFrame(RMBFrameId{
-							Type:    RMB_FRAME_EXMY,
-							Episode: cmd.Data[0],
-							Map:     cmd.Data[1],
+							Type: RMB_FRAME_EXMY,
+							Name: string(cmd.MapLumpName),
 						})
 
 					}
@@ -772,11 +806,20 @@ func (c *ParseContext) parseRMBLine(line []byte, fromInvert bool) bool {
 						// It might or might not exist already
 						// All future options, until next switch, will be local
 						// to this map
-						c.switchToMapFrame(RMBFrameId{
-							Type:    RMB_FRAME_MAPXY,
-							Episode: 0,
-							Map:     cmd.Data[0],
-						})
+						if len(cmd.MapLumpName) > 2 &&
+							bytes.HasPrefix(cmd.MapLumpName, []byte("E")) &&
+							MAP_ExMx.Match(cmd.MapLumpName) {
+							// ExMy specified using long map format
+							c.switchToMapFrame(RMBFrameId{
+								Type: RMB_FRAME_EXMY,
+								Name: string(cmd.MapLumpName),
+							})
+						} else {
+							c.switchToMapFrame(RMBFrameId{
+								Type: RMB_FRAME_MAPXY,
+								Name: string(cmd.MapLumpName),
+							})
+						}
 					}
 				default:
 					{
@@ -792,7 +835,8 @@ func (c *ParseContext) parseRMBLine(line []byte, fromInvert bool) bool {
 
 	if !fnd {
 		if fromInvert {
-			c.LogError("illegal argument to INVERT, expected BAND, BLIND or SAFE\n")
+			// Jan 2025 -- now error string is dynamically formed at initialization
+			c.LogError(NOT_INVERTIBLE)
 		} else {
 			c.LogError("unrecognised RMB option: %s\n",
 				string(origCommand))
@@ -823,4 +867,41 @@ func (c *ParseContext) switchToMapFrame(frameId RMBFrameId) {
 		c.idToFrame[frameId] = frame
 	}
 	c.activeFrame = frame
+}
+
+// Composes error string to return when INVERT prefix is invoked with unsupported
+// command. The error string lists supported commands, in order defined by
+// RMB_INVERTABLE. This is to make adding prefix support to future commands easily,
+// and have error message reflect the up-to-date list without programmer needing
+// to remember this.
+func getNotInvertibleErrorStr() string {
+	var buf strings.Builder
+	buf.WriteString("illegal argument to INVERT, expected ") // preamble
+	// example: preamble + "BAND, BLIND or SAFE\n"
+	for i := range RMB_INVERTABLE {
+		s := findStringForRMBCommand(RMB_INVERTABLE[i])
+		if i == 0 {
+			// nothing
+		} else if i < len(RMB_INVERTABLE)-1 {
+			buf.WriteString(", ")
+		} else { // last element
+			buf.WriteString(" or ")
+		}
+		buf.Write(s)
+	}
+	buf.WriteString("\n")
+	return buf.String()
+}
+
+func findStringForRMBCommand(cmdI int) []byte {
+	for _, item := range RMB_PARSE_TABLE {
+		if item.Type == cmdI {
+			return item.Name
+		}
+	}
+	return []byte("")
+}
+
+func init() {
+	NOT_INVERTIBLE = getNotInvertibleErrorStr()
 }
