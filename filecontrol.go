@@ -51,6 +51,7 @@ func (fc *FileControl) OpenInputFile(inputFileName string) (*os.File, error) {
 	fc.inputFileName = inputFileName
 	var err error
 	fc.fin, err = os.Open(inputFileName)
+	// because I'm stupid? Should have specified EXCLUSIVE
 	//fc.fin, err = os.OpenFile(inputFileName, os.O_RDONLY, 0) // wouldn't protect from opening same file as output with read-write access!
 	return fc.fin, err
 }

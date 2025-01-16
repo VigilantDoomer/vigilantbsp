@@ -19,7 +19,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -484,12 +483,24 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 		return false
 	}
 
-	if bytes.IndexRune(fname, os.PathSeparator) != -1 {
+	// Nah. If editors start supporting copying rmb files alongside a map wad into
+	// that temporary folder for nodebuilding, users might put absolute paths as
+	// argument to NOPROCESS in order to source their reject from a wad that
+	// obviously is not getting copied along to that temporary folder. And the RMB
+	// options file is never loaded unless user enabled it via an argument. Running
+	// editors and nodebuilders on untrusted wads (the usual case without any .rej
+	// option file) has more security implications than sourcing a reject lump with
+	// NOPROCESS because one configured VigilantBSP to load *.rej file and forgot
+	// about it. Nevermind loading a wad in source port (or worse yet, original
+	// game) is inherently dangerous, because most of those are written in system
+	// programming languages without any safety guarantees
+	// What should really be a priority, is supporting quotes.
+	/*if bytes.IndexRune(fname, os.PathSeparator) != -1 {
 		// paranoid considerations -- will be lifted once I am sure this does not
 		// create security errors
 		context.LogError("filename must be a basename -- path separators not allowed in NOPROCESS argument in VigilantBSP")
 		return false
-	}
+	}*/
 
 	cmd.WadFileName = fname
 

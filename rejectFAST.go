@@ -28,23 +28,21 @@ type FastRejectWork struct {
 	rejectTable []byte
 	input       *RejectInput
 
-	solidLines       []SolidLine
-	transLines       []TransLine
-	indexToSolid     []uint16
-	lineVisDone      []uint8
-	sectors          []RejSector
-	slyLinesInSector map[uint16]bool
-	maxDistance      uint64
-	testLines        []*SolidLine
-	polyPoints       []*IntVertex
-	reSectors        []*RejSector
-	lineMap          []*TransLine
-	blockmap         *Blockmap
-	solidList        []SolidmapSlice
-	solidMap         []uint16
-	loRow            int
-	hiRow            int
-
+	solidLines     []SolidLine
+	transLines     []TransLine
+	indexToSolid   []uint16
+	lineVisDone    []uint8
+	sectors        []RejSector
+	maxDistance    uint64
+	testLines      []*SolidLine
+	polyPoints     []*IntVertex
+	reSectors      []*RejSector
+	lineMap        []*TransLine
+	blockmap       *Blockmap
+	solidList      []SolidmapSlice
+	solidMap       []uint16
+	loRow          int
+	hiRow          int
 	blockMapBounds []BlockMapBounds
 	src, tgt       TransLine
 	p1, p2, p3, p4 IntVertex
@@ -59,17 +57,15 @@ type FastRejectWork struct {
 
 	linesToIgnore []bool
 
-	rmbFrame          *RMBFrame
-	RejectSelfRefMode int
-	PedanticFailMode  int
-	distanceTable     []uint16
-	maxLength         uint16
-	fileControl       *FileControl
-	mapName           string
-	lineEffects       map[uint16]uint8
-	specialSolids     []uint16
-	drLine            *TransLine
-	symmShim          int64
+	rmbFrame      *RMBFrame
+	distanceTable []uint16
+	maxLength     uint16
+	fileControl   *FileControl
+	mapName       string
+	specialSolids []uint16
+
+	drLine   *TransLine
+	symmShim int64
 }
 
 func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
@@ -79,59 +75,42 @@ func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis b
 		input:         &input,
 		linesToIgnore: input.linesToIgnore,
 		rmbFrame:      input.rmbFrame,
+		fileControl:   input.fileControl,
+		mapName:       input.mapName,
+		hasGroups:     hasGroups,
+		groups:        groups,
+		groupShareVis: groupShareVis,
+	}
+
+	rsetup := &RejectInternalSetup{
+		rejectChan: input.rejectChan,
 
 		RejectSelfRefMode: config.RejectSelfRefMode,
 
 		PedanticFailMode: PEDANTIC_FAIL_NOTMATTER,
-		fileControl:      input.fileControl,
-		mapName:          input.mapName,
-		hasGroups:        hasGroups,
-		groups:           groups,
-		groupShareVis:    groupShareVis,
+		rmbFrame:         r.rmbFrame,
 	}
 
-	needDistances := input.rmbFrame.NeedDistances()
-	if needDistances {
-		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		if r.CanCoerceToPendaticSelfRef() {
-			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
-			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'\n")
-		}
-	}
+	if ShortcutIfNOPROCESSAlone(r.numSectors, rsetup) {
 
-	if input.rmbFrame.HasLineEffects() {
-		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		if r.CanCoerceToPendaticSelfRef() {
-			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
-			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options that block sight across a line are present\n")
-		}
-	}
-
-	maxDistOk, maxDist := input.rmbFrame.GetDISTANCEValue()
-	if maxDistOk {
-		r.PedanticFailMode = PEDANTIC_FAIL_REPORT
-		r.maxDistance = maxDist
-		if r.CanCoerceToPendaticSelfRef() {
-
-			r.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
-			Log.Printf("Forcing pedantic mode for self-referencing sectors because DISTANCE is present in RMB options")
-		}
-	} else {
-		r.maxDistance = UNLIMITED_DISTANCE
+		r.NoNeedSolidBlockmap()
+		return nil
 	}
 
 	r.prepareReject()
-	if r.setupLines() {
+	setupOk, causeSkip := r.setupLines(rsetup)
+	if setupOk {
+
 		r.ScheduleSolidBlockmap()
 
 		r.sectors = createSectorInfo(r.numSectors, r.transLines)
 		if r.hasGroups {
 			computeGroupNeighbors(r.groups, r.sectors)
 		}
-		r.finishLineSetup()
-		r.eliminateTrivialCases()
+		r.finishLineSetup(rsetup)
+		r.eliminateTrivialCases(rsetup)
 
-		if needDistances {
+		if rsetup.needDistances {
 
 			r.CreateDistanceTable()
 			r.ApplyDistanceLimits()
@@ -194,17 +173,13 @@ func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis b
 
 	} else {
 		r.NoNeedSolidBlockmap()
-		Log.Printf("Reject builder: not a single two-sided linedef between two distinct sectors was found. You will have an empty, zero-filled REJECT.")
+
+		Log.Printf(causeSkip)
 	}
 
 	r.rmbFrame.FastProcessOptionsRMB(r)
 
 	return r.getResult()
-}
-
-func (r *FastRejectWork) CanCoerceToPendaticSelfRef() bool {
-	return r.RejectSelfRefMode != REJ_SELFREF_PEDANTIC &&
-		r.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS
 }
 
 func (r *FastRejectWork) ScheduleSolidBlockmap() {
@@ -282,7 +257,7 @@ func (r *FastRejectWork) prepareReject() {
 }
 
 func (r *FastRejectWork) getResult() []byte {
-	rejectSize := int((r.numSectors*r.numSectors)+7) / 8
+	rejectSize := rejectLumpSize_nonUDMF(r.numSectors)
 	result := make([]byte, rejectSize, rejectSize)
 	tbIdx := 0
 	for i := 0; i < rejectSize; i++ {
@@ -324,28 +299,63 @@ func (r *FastRejectWork) getResult() []byte {
 	return result
 }
 
-func (r *FastRejectWork) setupLines() bool {
-	if r.NoProcess_TryLoad() {
-		return false
+func (r *FastRejectWork) setupLines(rsetup *RejectInternalSetup) (setupDone bool,
+	cause string) {
+
+	rmbFrame := r.rmbFrame
+	if NoProcess_TryLoad(r.numSectors, rsetup, r.rejectTable) {
+		return false, "NOPROCESS is in effect. Physical LOS computations, and neighborship identification are skipped.\n"
 	}
+
+	rsetup.needDistances = rmbFrame.NeedDistances()
+	if rsetup.needDistances {
+		rsetup.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		if rsetup.CanCoerceToPendaticSelfRef() {
+			rsetup.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options make use of length aka 'distance in sector units'\n")
+		}
+	}
+
+	if rmbFrame.HasLineEffects() {
+		rsetup.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		if rsetup.CanCoerceToPendaticSelfRef() {
+			rsetup.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because RMB options that block sight across a line are present\n")
+		}
+	}
+
+	maxDistOk, maxDist := rmbFrame.GetDISTANCEValue()
+	if maxDistOk {
+		rsetup.PedanticFailMode = PEDANTIC_FAIL_REPORT
+		r.maxDistance = maxDist
+		if rsetup.CanCoerceToPendaticSelfRef() {
+
+			rsetup.RejectSelfRefMode = REJ_SELFREF_PEDANTIC
+			Log.Printf("Forcing pedantic mode for self-referencing sectors because DISTANCE is present in RMB options")
+		}
+	} else {
+		r.maxDistance = UNLIMITED_DISTANCE
+	}
+
 	numLines := r.input.lines.Len()
-	r.RMBLoadLineEffects()
+	rsetup.RMBLoadLineEffects()
 	r.specialSolids = make([]uint16, 0)
 
 	r.solidLines = make([]SolidLine, numLines)
 	r.transLines = make([]TransLine, numLines)
 	r.drLine = new(TransLine)
 	r.indexToSolid = make([]uint16, numLines)
-	r.slyLinesInSector = make(map[uint16]bool)
+	rsetup.slyLinesInSector = make(map[uint16]bool)
 	vertices := make([]IntVertex, int(numLines)*2)
 	numSolidLines := 0
 	numTransLines := 0
 	var cull *Culler
-	if r.RejectSelfRefMode != REJ_SELFREF_TRIVIAL && r.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS {
+	if rsetup.RejectSelfRefMode != REJ_SELFREF_TRIVIAL &&
+		rsetup.RejectSelfRefMode != REJ_SELFREF_IGNORE_ALWAYS {
 		cull = new(Culler)
 		cull.SetMode(CREATE_REJECT, r.input.sidedefs)
 		cull.SetAbstractLines(r.input.lines)
-		cull.EnablePerimeterSink(r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC)
+		cull.EnablePerimeterSink(rsetup.RejectSelfRefMode == REJ_SELFREF_PEDANTIC)
 	}
 	for i := uint16(0); i < numLines; i++ {
 
@@ -360,7 +370,7 @@ func (r *FastRejectWork) setupLines() bool {
 		}
 		culled := cull.AddLine(i)
 		twoSided := uint16(r.input.lines.GetFlags(i))&LF_TWOSIDED == LF_TWOSIDED
-		if twoSided && !r.HasRMBEffectLINE(i) {
+		if twoSided && !rsetup.HasRMBEffectLINE(i) {
 			fSide := r.input.lines.GetSidedefIndex(i, true)
 			bSide := r.input.lines.GetSidedefIndex(i, false)
 			if fSide == SIDEDEF_NONE || bSide == SIDEDEF_NONE {
@@ -369,9 +379,9 @@ func (r *FastRejectWork) setupLines() bool {
 			fSector := r.input.sidedefs[fSide].Sector
 			bSector := r.input.sidedefs[bSide].Sector
 			if fSector == bSector || culled {
-				if r.RejectSelfRefMode == REJ_SELFREF_TRIVIAL {
+				if rsetup.RejectSelfRefMode == REJ_SELFREF_TRIVIAL {
 
-					r.slyLinesInSector[fSector] = true
+					rsetup.slyLinesInSector[fSector] = true
 				}
 				Log.Verbose(2, "Reject: sector %d has line %d which references it on both sides.\n",
 					fSector, i)
@@ -405,7 +415,7 @@ func (r *FastRejectWork) setupLines() bool {
 		}
 	}
 	cull.Analyze()
-	if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
+	if rsetup.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
 
 		var it *BlockityLines
 		var blXMin, blXMax, blYMin, blYMax int
@@ -430,7 +440,7 @@ func (r *FastRejectWork) setupLines() bool {
 			for _, perimeter := range perimeters {
 				whichSector := r.traceSelfRefLines(&numTransLines,
 					&numSolidLines, sector, perimeter, it,
-					lineTraces, blXMin, blXMax, blYMin, blYMax, vertices)
+					lineTraces, blXMin, blXMax, blYMin, blYMax, vertices, rsetup)
 				if whichSector != -1 {
 					Log.Verbose(1, "Self-referencing sector %d has sector %d as its neighbor.\n",
 						sector, whichSector)
@@ -441,9 +451,9 @@ func (r *FastRejectWork) setupLines() bool {
 
 	for cull.SpewBack() {
 		i := cull.GetLine()
-		if r.HasRMBEffectLINE(i) {
+		if rsetup.HasRMBEffectLINE(i) {
 
-			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
+			if rsetup.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
 				fSide := r.input.lines.GetSidedefIndex(i, true)
 				fSector := r.input.sidedefs[fSide].Sector
 				Log.Verbose(1, "Reject: line %d from sector %d is affected by line effect, but I failed to classify sector as self-referencing or not.\nIf EVERY 2-sided line that references this sector on both sides is like this, this sector will be hidden from all, but if at least one such line is not marked, it will be hacked to be visible to all.\n",
@@ -453,13 +463,13 @@ func (r *FastRejectWork) setupLines() bool {
 		}
 		fSide := r.input.lines.GetSidedefIndex(i, true)
 		fSector := r.input.sidedefs[fSide].Sector
-		_, ok := r.slyLinesInSector[fSector]
-		r.slyLinesInSector[fSector] = true
+		_, ok := rsetup.slyLinesInSector[fSector]
+		rsetup.slyLinesInSector[fSector] = true
 		if !ok {
-			if r.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
+			if rsetup.RejectSelfRefMode == REJ_SELFREF_PEDANTIC {
 				Log.Verbose(1, "Reject: sector %d seems to be self-referencing, I failed to be pedantic about which lines make up the border though: will resort to a hack to make it always visible.\n", fSector)
-				if r.PedanticFailMode == PEDANTIC_FAIL_REPORT {
-					r.PedanticFailMode = PEDANTIC_FAIL_REPORTED
+				if rsetup.PedanticFailMode == PEDANTIC_FAIL_REPORT {
+					rsetup.PedanticFailMode = PEDANTIC_FAIL_REPORTED
 				}
 			} else {
 				Log.Verbose(1, "Reject: sector %d is self-referencing.\n",
@@ -471,15 +481,17 @@ func (r *FastRejectWork) setupLines() bool {
 	r.solidLines = r.solidLines[:numSolidLines]
 	r.transLines = r.transLines[:numTransLines]
 	r.seenLines = make([]uint8, numSolidLines>>3+1)
-	return numTransLines > 0
+
+	return numTransLines > 0, "Reject builder: not a single two-sided linedef between two distinct sectors was found. You will have a zero-filled REJECT.\n"
 }
 
 func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *int,
 	sector uint16, perimeter []uint16, it *BlockityLines,
 	lineTraces map[[2]IntOrientedVertex]IntCollinearOrientedVertices,
-	blXMin, blXMax, blYMin, blYMax int, vertices []IntVertex) int {
+	blXMin, blXMax, blYMin, blYMax int, vertices []IntVertex,
+	rsetup *RejectInternalSetup) int {
 
-	if r.slyLinesInSector[sector] {
+	if rsetup.slyLinesInSector[sector] {
 		return -1
 	}
 
@@ -497,7 +509,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *in
 		if r.input.sidedefs[fSide].Sector != sector || r.input.sidedefs[bSide].Sector != sector {
 			continue
 		}
-		if r.HasRMBEffectLINE(i) {
+		if rsetup.HasRMBEffectLINE(i) {
 			lineEffect = true
 		}
 
@@ -702,7 +714,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *in
 			Log.Verbose(1, "Reject: sector %d contains lines that have RMB effect LINE applied to them.\n",
 				sector)
 		} else {
-			r.slyLinesInSector[sector] = true
+			rsetup.slyLinesInSector[sector] = true
 			Log.Verbose(1, "Reject: sector %d is self-referencing, but I failed to trace any of its lines to an outside sector. I will have to resort to 'make it visible to all' hack.\n",
 				sector)
 		}
@@ -719,7 +731,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *in
 		if r.input.sidedefs[fSide].Sector != sector || r.input.sidedefs[bSide].Sector != sector {
 			continue
 		}
-		if r.HasRMBEffectLINE(i) {
+		if rsetup.HasRMBEffectLINE(i) {
 
 			Log.Verbose(2, "Reject: line %d is border of self-referencing sector %d, however RMB option LINE is applied to it, so I will treat it as solid not transient.\n",
 				i, sector)
@@ -768,7 +780,7 @@ func (r *FastRejectWork) traceSelfRefLines(numTransLines *int, numSolidLines *in
 	return int(whichSector)
 }
 
-func (r *FastRejectWork) finishLineSetup() {
+func (r *FastRejectWork) finishLineSetup(rsetup *RejectInternalSetup) {
 	numTransLines := len(r.transLines)
 
 	lineVisSize := int((uint64(numTransLines-1)*uint64(numTransLines)/2 + 7) / 8)
@@ -777,7 +789,7 @@ func (r *FastRejectWork) finishLineSetup() {
 		r.lineVisDone[i] = 0
 	}
 
-	if r.PedanticFailMode == PEDANTIC_FAIL_REPORTED {
+	if rsetup.PedanticFailMode == PEDANTIC_FAIL_REPORTED {
 		Log.Error("RMB's accuracy is going to be decreased, because I failed to be pedantic about self-referencing sector effects.\n")
 	}
 
@@ -823,7 +835,7 @@ func (r *FastRejectWork) rejectTableIJ(i, j int) *uint8 {
 	return &(r.rejectTable[i*r.numSectors+j])
 }
 
-func (r *FastRejectWork) eliminateTrivialCases() {
+func (r *FastRejectWork) eliminateTrivialCases(rsetup *RejectInternalSetup) {
 
 	if r.groupShareVis {
 
@@ -845,7 +857,7 @@ func (r *FastRejectWork) eliminateTrivialCases() {
 		*(r.rejectTableIJ(i, i)) = VIS_VISIBLE
 
 		if r.sectors[i].numLines == 0 {
-			sly, _ := r.slyLinesInSector[uint16(i)]
+			sly, _ := rsetup.slyLinesInSector[uint16(i)]
 			if !sly {
 				for j := 0; j < r.numSectors; j++ {
 					r.markVisibilitySector(i, j, VIS_HIDDEN)
@@ -859,7 +871,7 @@ func (r *FastRejectWork) eliminateTrivialCases() {
 			}
 		} else {
 
-			sly, _ := r.slyLinesInSector[uint16(i)]
+			sly, _ := rsetup.slyLinesInSector[uint16(i)]
 			if sly {
 				Log.Verbose(1, "REJECT: HACK Sector %d marked as visible to all (type: 2).\n", i)
 				for j := 0; j < r.numSectors; j++ {
@@ -1048,11 +1060,6 @@ func (r *FastRejectWork) forceVisibility(i, j int, visibility uint8) {
 			*(r.rejectTableIJ(i2, j2)) = visibility
 		}
 	}
-}
-
-func (r *FastRejectWork) NoProcess_TryLoad() bool {
-
-	return false
 }
 
 func FastgetRejectWorkIntf() RejectWorkIntf {
@@ -1556,63 +1563,6 @@ func (r *FastRejectWork) reportGetWriter() io.Writer {
 
 	r.printfln(wri, "# %s %s", PROG_CAPIT_NAME, VERSION)
 	return wri
-}
-
-func (r *FastRejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
-	if r.lineEffects == nil {
-		return false
-	}
-	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
-}
-
-func (r *FastRejectWork) RMBLoadLineEffects() {
-	r.lineEffects = make(map[uint16]uint8)
-	did := r.loadLineEffectsForFrame(r.rmbFrame)
-	if !did {
-		r.lineEffects = nil
-	}
-}
-
-func (r *FastRejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
-	if rmbFrame == nil {
-		return false
-	}
-	ret := r.loadLineEffectsForFrame(rmbFrame.Parent)
-
-	for _, cmd := range rmbFrame.Commands {
-		switch cmd.Type {
-		case RMB_LEFT:
-			{
-				idx := uint16(cmd.Data[0])
-				oldEffect := r.lineEffects[idx]
-				if oldEffect == LINE_EFFECT_NONE {
-					r.lineEffects[idx] = LINE_EFFECT_LEFT
-				} else if oldEffect == LINE_EFFECT_RIGHT {
-
-					r.lineEffects[idx] = LINE_EFFECT_SOLID
-				}
-				ret = true
-			}
-		case RMB_RIGHT:
-			{
-				idx := uint16(cmd.Data[0])
-				oldEffect := r.lineEffects[idx]
-				if oldEffect == LINE_EFFECT_NONE {
-					r.lineEffects[idx] = LINE_EFFECT_RIGHT
-				} else if oldEffect == LINE_EFFECT_LEFT {
-
-					r.lineEffects[idx] = LINE_EFFECT_SOLID
-				}
-				ret = true
-			}
-		case RMB_LINE:
-			{
-				r.lineEffects[uint16(cmd.Data[0])] = LINE_EFFECT_SOLID
-				ret = true
-			}
-		}
-	}
-	return ret
 }
 
 func (fr *RMBFrame) FastprocessSimpleBlindSafeOptions(r *FastRejectWork, sectors []SectorRMB) {

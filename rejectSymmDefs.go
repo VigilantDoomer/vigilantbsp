@@ -98,7 +98,7 @@ func (r *RejectWork) rejectTableIJSymm(i, j int) *uint8 {
 }
 
 func (r *RejectWork) getResultSymm() []byte {
-	rejectSize := int((r.numSectors*r.numSectors)+7) / 8
+	rejectSize := rejectLumpSize_nonUDMF(r.numSectors)
 	result := make([]byte, rejectSize, rejectSize)
 	//tbIdx := 0
 	i := 0

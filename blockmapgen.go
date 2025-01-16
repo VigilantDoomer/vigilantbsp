@@ -84,7 +84,7 @@ type OffsetSieve struct {
 
 // This is goroutine used to produce BLOCKMAP lump data and give it back
 // to the thing that run it
-func BlockmapGenerator(input *BlockmapInput, where chan<- []byte,
+func BlockmapGenerator(input BlockmapInput, where chan<- []byte,
 	levelFormat int, sectors []Sector, sidedefs []Sidedef) {
 	var offsetXMax int16 // not inclusive, i.e. use < rather than <=
 	var offsetYMax int16 // not inclusive, i.e. use < rather than <=
@@ -122,7 +122,7 @@ func BlockmapGenerator(input *BlockmapInput, where chan<- []byte,
 	var subsetMode int
 	if mode != BM_OFFSET_FIXED {
 		// all "try multiple offsets" modes should pass through offset (0,0)
-		subsetMode, data = DetermineSubsetMode(input, 0, 0)
+		subsetMode, data = DetermineSubsetMode(&input, 0, 0)
 		if data != nil {
 			// if user enabled early return and conditional blockmap reduction, a
 			// fitting blockmap might have already been found
@@ -134,14 +134,14 @@ func BlockmapGenerator(input *BlockmapInput, where chan<- []byte,
 	switch mode {
 	case BM_OFFSET_THIRTYSIX:
 		{ // Builds 36 blockmaps - (40,40) is the final offset for blockmap to be generated
-			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, input, where,
+			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, &input, where,
 				0, start, subsetMode)
 		}
 	case BM_OFFSET_BRUTEFORCE:
 		{ // Careful what you wish for (Best of all 65536 offset combinations)
 			// blockmaps are built for every value in 0-127 range inclusive
 			// alongside both axises
-			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, input, where,
+			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, &input, where,
 				0, start, subsetMode)
 		}
 	case BM_OFFSET_HEURISTIC:
@@ -158,7 +158,7 @@ func BlockmapGenerator(input *BlockmapInput, where chan<- []byte,
 			} else {
 				bailout = (xblocks + 1) * (yblocks + 1)
 			}
-			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, input, where,
+			BlockmapQueen(offsetXMax, offsetYMax, offsetStep, &input, where,
 				bailout, start, subsetMode)
 		}
 	default:
@@ -172,13 +172,13 @@ func BlockmapGenerator(input *BlockmapInput, where chan<- []byte,
 				input.XOffset = 0
 				input.YOffset = 0
 			}
-			subsetMode, data = DetermineSubsetMode(input, input.XOffset,
+			subsetMode, data = DetermineSubsetMode(&input, input.XOffset,
 				input.YOffset)
 			if data != nil {
 				Blockmap_ReportTime(start, subsetMode)
 				where <- data
 			}
-			bm := CreateBlockmap(input)
+			bm := CreateBlockmap(&input)
 			if subsetMode != BSUBSET_NOCOMPRESSION {
 				data = bm.GetBytesArcane(subsetMode)
 			} else {

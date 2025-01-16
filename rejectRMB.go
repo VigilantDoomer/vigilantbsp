@@ -903,14 +903,14 @@ func (r *RejectWork) reportGetWriter() io.Writer {
 // If it is, such lines are treated as if they were solid instead of transient
 // Can work on self-referencing sector borders as well
 // This shipped with v0.82a release.
-func (r *RejectWork) HasRMBEffectLINE(lineIdx uint16) bool {
+func (r *RejectInternalSetup) HasRMBEffectLINE(lineIdx uint16) bool {
 	if r.lineEffects == nil {
 		return false
 	}
 	return r.lineEffects[lineIdx] == LINE_EFFECT_SOLID
 }
 
-func (r *RejectWork) RMBLoadLineEffects() {
+func (r *RejectInternalSetup) RMBLoadLineEffects() {
 	r.lineEffects = make(map[uint16]uint8)
 	did := r.loadLineEffectsForFrame(r.rmbFrame)
 	if !did {
@@ -918,7 +918,7 @@ func (r *RejectWork) RMBLoadLineEffects() {
 	}
 }
 
-func (r *RejectWork) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
+func (r *RejectInternalSetup) loadLineEffectsForFrame(rmbFrame *RMBFrame) bool {
 	if rmbFrame == nil {
 		return false
 	}
@@ -1050,11 +1050,77 @@ func (fr *RMBFrame) hasSimpleBlindSafe() bool {
 
 // Returns if NOPROCESS is not just present, it is also in effect (not
 // cancelled by other options)
-// TODO currently blocking: I can't actually get RMB to recognise the damn
-// NOPROCESS option in RMB options file! It complains of syntax error as if
-// this command just doesn't exist!
-func (fr *RMBFrame) IsNOPROCESSInEffect() bool {
-	return false // TODO not implemented yet, see note above
+// TODO I can't actually get RMB to recognise the damn NOPROCESS option in RMB options
+// file! It complains of syntax error as if this command just doesn't exist!
+// Ok, no longer care. Will implement arguments as stated in documentation.
+func (fr *RMBFrame) IsNOPROCESSInEffect(def bool) bool {
+	if fr == nil {
+		return def
+	}
+	// According to simple rule: NOPROCESS can override nothing. Regular PROCESS is
+	// not implemented yet, it would be a third case: not cancelling NOPROCESS, but
+	// having to do some physical LOS calculations (though not all). Will see into
+	// it later, for now keep simple
+	hasNOPROCESS := def
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_NOPROCESS:
+			hasNOPROCESS = true
+		case RMB_PERFECT:
+			return false
+		case RMB_PREPROCESS:
+			return false
+		}
+	}
+	return fr.Parent.IsNOPROCESSInEffect(hasNOPROCESS)
+}
+
+// Dumb check. Checks that there all commands are either NOPROCESS, or nothing else.
+// Is allowed to error on one side: return false, if it is true, BUT shall never
+// return true, if it is false. Because the first case is recovered -- this function
+// is only attempt to bypass reject-making if one can stream it from source directly,
+// and no operations are applied afterwards
+func (fr *RMBFrame) ThereIsONLY_NOPROCESS() bool {
+	if fr == nil {
+		return false
+	}
+	hasNOPROCESS := false
+	for _, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_NOPROCESS:
+			hasNOPROCESS = true
+		default:
+			return false
+		}
+	}
+	return hasNOPROCESS && (fr.Parent == nil || len(fr.Parent.Commands) == 0 ||
+		fr.Parent.ThereIsONLY_NOPROCESS())
+}
+
+func (fr *RMBFrame) SetNaggerFromActiveNOPROCESS(nagger *RejectNagger) bool {
+	if fr == nil {
+		return false
+	}
+	lastI := -1
+	for i, cmd := range fr.Commands {
+		switch cmd.Type {
+		case RMB_NOPROCESS:
+			lastI = i
+		}
+	}
+	if lastI == -1 {
+		return fr.Parent.SetNaggerFromActiveNOPROCESS(nagger)
+	}
+	cmd := &(fr.Commands[lastI])
+	if cmd.WadFileName != nil {
+		nagger.wadToLoad = string(cmd.WadFileName)
+	} else {
+		nagger.currentWadAndMap = true
+	}
+	if cmd.MapLumpName != nil {
+		nagger.mapToLoad = string(cmd.MapLumpName)
+	}
+	return true
 }
 
 func (fr *RMBFrame) processSimpleBlindSafeOptions(r *RejectWork,
@@ -1168,6 +1234,9 @@ func (fr *RMBFrame) CompatibleWithSymmetry() bool {
 	if fr == nil {
 		return true
 	}
+
+	nop := false
+	tainted := false
 	for _, cmd := range fr.Commands {
 		switch cmd.Type {
 		case RMB_BLIND, RMB_SAFE, RMB_SIMPLE_BLIND, RMB_SIMPLE_SAFE,
@@ -1175,7 +1244,26 @@ func (fr *RMBFrame) CompatibleWithSymmetry() bool {
 			{
 				return false
 			}
+		case RMB_NOPROCESS:
+			// NOPROCESS can load asymmetric REJECT, and when other operations are
+			// done afterwards, they are written with assumption that full N*N REJECT
+			// table is allocated. But if NOPROCESS is the only kind of RMB option
+			// present, REJECT is either copied raw (bypassing all reject machinery
+			// and with no postprocessing) or discarded (triggering usual reject
+			// machinery without any RMB options remaining to take effect), so it is
+			// then irrelevant
+			if tainted {
+				return false
+			}
+			nop = true
+		default:
+			tainted = true // something other than NOPROCESS definitely
 		}
+	}
+	if nop {
+		// effectively, we do fr.ThereIsONLY_NOPROCESS, except one stage can
+		// already be inferred
+		return !tainted && fr.Parent.ThereIsONLY_NOPROCESS()
 	}
 	return fr.Parent.CompatibleWithSymmetry()
 }

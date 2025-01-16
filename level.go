@@ -50,11 +50,16 @@ type Level struct {
 	LinedefsLumpIdx     int
 	wriBus              *WriteBusControl
 	newLines            WriteableLines
-	RejectChan          chan []byte
+	RejectChan          chan RejectResponse
 	NodesChan           chan NodesResult
 	BlockmapLumpChannel chan []byte
+	WroteRejectAlready  bool
+	le                  []LumpEntry
+	f                   *os.File // input file descriptor, is not always loaded into this structure
 }
 
+// DoLevel is executed once per level, but Level struct is allocated once and is
+// reused for all levels, hence it must do reinitialization of all fields
 func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	troll *Troll, action *ScheduledLump, rejectStart uint32, f *os.File,
 	wriBus *WriteBusControl, fileControl *FileControl) {
@@ -83,6 +88,9 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	l.VerticesLumpIdx = 0
 	l.LinedefsLumpIdx = 0
 	l.wriBus = wriBus
+	l.le = nil
+	l.f = nil
+	l.WroteRejectAlready = false
 	mapName := string(ByteSliceBeforeTerm(le[action.DirIndex].Name[:]))
 	loadedThings := false
 	loadedLinedefsAndVertices := false
@@ -109,6 +117,11 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				private_offset := troll.PopOffset(calcrejectsize)
 				le[idx].FilePos = rejectStart + private_offset
 				Log.Printf("Lump number %d (%s) has its size set to %d bytes.\n", idx, "REJECT", le[idx].Size)
+			} else {
+				// for handleRejectNagging possibility (otherwise prefer to keep
+				// less initialized pointers)
+				l.le = le
+				l.f = f
 			}
 		} else if bytes.Equal(bname, []byte("BLOCKMAP")) && config.RebuildBlockmap {
 			l.BlockmapLumpIdx = idx
@@ -126,7 +139,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 					// TODO for format doom, support zokumbsp's scrolling lines
 					// for format Hexen need not supported as of yet (different
 					// action sets and action field size). However, disable it
-					// if nodes building is disabled, as only we only write
+					// if nodes building is disabled, as we only write
 					// lines, etc. when building nodes.
 					cntLinedefs := le[idx].Size / DOOM_LINEDEF_SIZE
 					linedefs = make([]Linedef, cntLinedefs, cntLinedefs)
@@ -238,8 +251,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			// These are for "solid lines"-only blockmap which is used internally
 			// by reject or nodes builder. This blockmap is not the one written
 			// to lump
-			bcontrol = make(chan BconRequest)
-			bgenerator = make(chan BgenRequest)
+			bcontrol = make(chan BconRequest, 4)
+			bgenerator = make(chan BgenRequest, 4)
 			go SolidBlocks_Control(SolidBlocks_Input{
 				lines:         solidLines,
 				bounds:        bounds,
@@ -255,7 +268,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			// And this actually generates BLOCKMAP lump
 			Log.Printf("Generating BLOCKMAP...\n")
 			l.BlockmapLumpChannel = make(chan []byte)
-			go BlockmapGenerator(&BlockmapInput{
+			go BlockmapGenerator(BlockmapInput{
 				lines:           l.newLines,
 				bounds:          bounds,
 				XOffset:         config.BlockmapXOffset,
@@ -280,7 +293,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 		// uses solid-only blockmap
 		if !rejectDone && loadedLinedefsAndVertices && len(sidedefs) > 0 && len(sectors) > 0 {
 			rejectDone = true // don't trigger twice
-			l.RejectChan = make(chan []byte)
+			l.RejectChan = make(chan RejectResponse)
 			go RejectGenerator(RejectInput{
 				lines:         absLines,
 				bounds:        bounds,
@@ -302,7 +315,9 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			loadedLinedefsAndVertices && len(sidedefs) > 0 &&
 			len(sectors) > 0 && (action.LevelFormat != FORMAT_HEXEN ||
 			loadedThings) {
-			l.NodesChan = make(chan NodesResult)
+			// buffered channel -- allow the sender to move on, because we may be
+			// delayed by reject business
+			l.NodesChan = make(chan NodesResult, 1)
 			// diagonality - global config
 			diagonalPenalty := config.DiagonalPenalty
 			applyDiagonalPenalty := config.PenalizeDiagonality == PENALIZE_DIAGONALITY_ALWAYS
@@ -407,92 +422,103 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 // This will receive results of work from other threads via channels, then write
 // them. If deterministic, lump data is written in strict order. Otherwise it is
 // written in the order it was received
-// TODO it seems that non-deterministic mode didn't provide enough speed-up,
-// if any. Ok, let's make non-level lumps being written in parallel to level
-// processing... ah, wait, must have read bus then as well. Oops.
+// TODO In non-deterministic mode, it would be good to write non-level lumps in
+// parallel to level processing, but must have read bus then as well. Not yet done.
 func (l *Level) WaitForAndWriteData() {
-	if config.Deterministic {
-		// Sequential wait
+	// Parallel wait, even in deterministic mode -- I have refactored code to
+	// deduplicate it. So determinism now is only about writing order
+	deterministic := config.Deterministic
+	NA := reflect.Value{}
+	branches := make([]reflect.SelectCase, 0)
+	meaning := make([]int, 0)
+	if l.NodesChan != nil {
+		branches = append(branches, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(l.NodesChan),
+			Send: NA,
+		})
+		meaning = append(meaning, BRANCH_NODES)
+	}
 
-		// Wait for nodes builder to complete its work, then write results
-		if l.NodesChan != nil {
-			nodesResult := <-l.NodesChan
-			// NOTE newLines.GetLinedefs() can't happen until nodes builder goroutine
-			// finishes its job, just like with everything else here
-			l.WriteNodes(nodesResult)
-		}
+	if l.RejectChan != nil {
+		branches = append(branches, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(l.RejectChan),
+			Send: NA,
+		})
+		meaning = append(meaning, BRANCH_REJECT)
+	}
 
-		// Wait for reject builder to complete its work, then write results
-		if l.RejectChan != nil {
-			rejectData := <-l.RejectChan
-			l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT", "")
-		}
+	if l.BlockmapLumpChannel != nil {
+		branches = append(branches, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(l.BlockmapLumpChannel),
+			Send: NA,
+		})
+		meaning = append(meaning, BRANCH_BLOCKMAP)
+	}
 
-		// Wait for blockmap builder to complete its work, then write results
-		if l.BlockmapLumpChannel != nil {
-			bmdata := <-l.BlockmapLumpChannel
-			l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
-		}
-	} else {
-		// Parallel wait
-		NA := reflect.Value{}
-		branches := make([]reflect.SelectCase, 0)
-		meaning := make([]int, 0)
-		if l.NodesChan != nil {
-			branches = append(branches, reflect.SelectCase{
-				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(l.NodesChan),
-				Send: NA,
-			})
-			meaning = append(meaning, BRANCH_NODES)
-		}
+	var nodesResult NodesResult
+	var rejectResp *RejectResponse
+	var bmdata []byte
 
-		if l.RejectChan != nil {
-			branches = append(branches, reflect.SelectCase{
-				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(l.RejectChan),
-				Send: NA,
-			})
-			meaning = append(meaning, BRANCH_REJECT)
-		}
-
-		if l.BlockmapLumpChannel != nil {
-			branches = append(branches, reflect.SelectCase{
-				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(l.BlockmapLumpChannel),
-				Send: NA,
-			})
-			meaning = append(meaning, BRANCH_BLOCKMAP)
-		}
-
-		for len(branches) > 0 {
-			chi, recv, recvOk := reflect.Select(branches)
-			if recvOk {
-				cur := meaning[chi]
-				switch cur {
-				case BRANCH_NODES:
-					{
-						nodesResult := (recv.Interface()).(NodesResult)
+	for len(branches) > 0 {
+		chi, recv, recvOk := reflect.Select(branches)
+		canDelete := true
+		if recvOk {
+			cur := meaning[chi]
+			switch cur {
+			case BRANCH_NODES:
+				{
+					nodesResult = (recv.Interface()).(NodesResult)
+					if !deterministic {
 						l.WriteNodes(nodesResult)
 					}
-				case BRANCH_REJECT:
-					{
-						rejectData := (recv.Interface()).([]byte)
-						l.wriBus.SendRawLump(rejectData, l.RejectLumpIdx, "REJECT", "")
+				}
+			case BRANCH_REJECT:
+				{
+					tmpResp := (recv.Interface()).(RejectResponse)
+					if tmpResp.nagger != nil {
+						// damn, it brought not results but a request for a lump
+						// because NOPROCESS
+						canDelete = false // keep, will have to wait for completion
+						data := l.handleRejectNagging(tmpResp.nagger)
+						if data != nil {
+							rejectResp = &RejectResponse{
+								data: data, // we copy directly
+							}
+						}
+					} else {
+						if !l.WroteRejectAlready {
+							rejectResp = &RejectResponse{}
+							*rejectResp = tmpResp
+						}
+						// canDelete == true
 					}
-				case BRANCH_BLOCKMAP:
-					{
-						bmdata := (recv.Interface()).([]byte)
-						l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
-					}
-				default:
-					{
-						Log.Error("What? Unknown branch %d.\n", cur)
+					if !l.WroteRejectAlready && rejectResp != nil {
+						// don't override rejectResp with future tmpResp
+						l.WroteRejectAlready = true
+						if !deterministic {
+							l.wriBus.SendRawLump(rejectResp.data, l.RejectLumpIdx, "REJECT", "")
+						}
 					}
 				}
-			} // else "channel closed" event happened. Code shouldn't allow it anyway
+			case BRANCH_BLOCKMAP:
+				{
+					bmdata = (recv.Interface()).([]byte)
+					if !deterministic {
+						l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
+					}
+				}
+			default:
+				{
+					Log.Error("What? Unknown branch %d.\n", cur)
+				}
+			}
+		} // else "channel closed" event happened. Code shouldn't allow it anyway
 
-			// Now delete this branch
+		// Now delete this branch
+		if canDelete {
 			if chi < len(branches)-1 {
 				copy(branches[chi:], branches[chi+1:])
 				copy(meaning[chi:], meaning[chi+1:])
@@ -501,6 +527,85 @@ func (l *Level) WaitForAndWriteData() {
 			meaning = meaning[:len(meaning)-1]
 		}
 	}
+
+	if deterministic {
+		if l.NodesChan != nil {
+			l.WriteNodes(nodesResult)
+		}
+
+		if l.RejectChan != nil {
+			l.wriBus.SendRawLump(rejectResp.data, l.RejectLumpIdx, "REJECT", "")
+		}
+
+		if l.BlockmapLumpChannel != nil {
+			l.wriBus.SendRawLump(bmdata, l.BlockmapLumpIdx, "BLOCKMAP", "")
+		}
+	}
+}
+
+// handleRejectNagging returns non-nil value only if copies directly, otherwise must
+// return nil
+func (l *Level) handleRejectNagging(nagger *RejectNagger) []byte {
+	// shall set l.WroteRejectAlready if copied reject itself
+	if nagger.replyTo == nil {
+		Log.Panic("Level machinery was requested to load an existing reject, but reply address was not set. (programmer error)\n")
+	}
+	// Whether to check the number of sectors in origin because off by 1 means grossly
+	// wrong reject data, even if size of reject is the same.
+	// Doesn't seem to be needed for any non-toy maps (>4 sectors on a map):
+	// 9x9=81/8=11, and for any N>8 reject for N^2 grows more than 1 byte a time
+	// 8x8=64/8=8
+	// 7x7=49/8=7
+	// 6x6=36/8=5
+	// 5x5=25/8=4
+	// 4x4=16/8=2
+	// 3x3=9/8=2
+	// 2x2=4/8=1
+	// 1x1=1/8=1
+	// So will pretend those four last cases don't exist, and not check anything at
+	// source wad but lump size of requested REJECT.
+
+	// First, where are we loading from
+	if nagger.currentWadAndMap {
+		if l.RejectLumpIdx == 0 || l.le[l.RejectLumpIdx].Size == 0 {
+			// 0 as a pos means it was just created to be written in output
+			Log.Error("The original reject lump is empty or non-existent\n")
+			goto bailout
+		}
+		if int(l.le[l.RejectLumpIdx].Size) != rejectLumpSize_nonUDMF(nagger.numSectors) {
+			Log.Error("Original reject lump is incorrect size, must have had different number of sectors\n")
+			goto bailout
+		}
+		rejLump := make([]byte, l.le[l.RejectLumpIdx].Size)
+		n, err := l.f.ReadAt(rejLump, int64(l.le[l.RejectLumpIdx].FilePos))
+		if err != nil || n < int(l.le[l.RejectLumpIdx].Size) {
+			Log.Error("Failed to read original reject lump\n")
+			goto bailout
+		}
+
+		fromWhere := " previous build of current map"
+
+		if nagger.mustDirectlyCopy {
+			Log.Printf("Reject will be copied from%s\n", fromWhere)
+			nagger.replyTo <- LevelSaysToNagging{
+				copied: true,
+			}
+			return rejLump // wriBus will write it
+		} else {
+			Log.Printf("Reject will be based of%s\n", fromWhere)
+			// there will be (probably) more processing by RMB
+			nagger.replyTo <- LevelSaysToNagging{
+				rejectData: rejLump,
+			}
+			return nil
+		}
+	}
+
+bailout:
+	nagger.replyTo <- LevelSaysToNagging{
+		goToHell: true,
+	}
+	return nil
 }
 
 func (l *Level) WriteNodes(nodesResult NodesResult) {
