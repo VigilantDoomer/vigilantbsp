@@ -371,6 +371,7 @@ func (r *RejectWork) main(input RejectInput, hasGroups bool, groupShareVis bool,
 		// had been NOPROCESS, and not even simple RMB commands + reject sourced
 		// successfully
 		r.NoNeedSolidBlockmap()
+		Log.Printf("Further reject processing is unneeded -- no options other than NOPROCESS were specified in RMB file.\n")
 		return nil // this is ok -- level will ditch the data in this response
 	}
 
@@ -1853,7 +1854,16 @@ func NoProcess_TryLoad(numSectors int, rsetup *RejectInternalSetup, dest []byte)
 	suc, data := rejectNOPROCESSLoad(rsetup.rejectChan, false, rmbFrame, numSectors)
 	if suc { // loaded ok
 		setRejectTableFromSource(data, numSectors, dest)
-	} else {
+		assertOk, assertExists := rmbFrame.CheckASSERTions(dest, numSectors) // ASSERT option in RMB file
+		if !assertOk {
+			Log.Printf("Sourced reject didn't satisfy assertions specified in RMB file and will be discarded\n")
+			suc = false
+			resetRejectTable(dest)
+		} else if assertExists {
+			Log.Printf("Loaded reject successfully passed ALL assertions in .rej file!\n")
+		}
+	}
+	if !suc {
 		Log.Printf("Reject source load aborted. Will proceed to standard operation then\n")
 	}
 	return suc
@@ -1937,6 +1947,14 @@ func setRejectTableFromSource(src []byte, numSectors int, dest []byte) {
 			bit = 0
 			bte++
 		}
+	}
+}
+
+func resetRejectTable(dest []byte) {
+	dest[0] = VIS_UNKNOWN
+	destLen := len(dest)
+	for j := 1; j < destLen; j = j << 1 {
+		copy(dest[j:], dest[:j])
 	}
 }
 

@@ -94,6 +94,7 @@ func (r *FastRejectWork) main(input RejectInput, hasGroups bool, groupShareVis b
 	if ShortcutIfNOPROCESSAlone(r.numSectors, rsetup) {
 
 		r.NoNeedSolidBlockmap()
+		Log.Printf("Further reject processing is unneeded -- no options other than NOPROCESS were specified in RMB file.\n")
 		return nil
 	}
 
@@ -1215,14 +1216,6 @@ func (r *FastRejectWork) rmbGetGroup(sectors []SectorRMB, num int, command RMBCo
 	return r.groups[num].sectors
 }
 
-func (r *FastRejectWork) rmbCheckSectorInRange(i int, command RMBCommand) bool {
-	if i >= r.numSectors || i < 0 {
-		command.Error("specified sector number out of range: %d\n", i)
-		return false
-	}
-	return true
-}
-
 func (r *FastRejectWork) applyBlind(sector SectorRMB, i int) {
 	if sector.Blind == 3 {
 		if sector.BlindLo > sector.BlindHi {
@@ -1297,11 +1290,11 @@ func (fr *RMBFrame) FastprocessINCLUDEs(r *FastRejectWork) {
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_INCLUDE {
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				for _, j := range cmd.List[1] {
-					if !r.rmbCheckSectorInRange(j, cmd) {
+					if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 						continue
 					}
 
@@ -1321,11 +1314,11 @@ func (fr *RMBFrame) FastprocessEXCLUDEs(r *FastRejectWork) {
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_EXCLUDE {
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				for _, j := range cmd.List[1] {
-					if !r.rmbCheckSectorInRange(j, cmd) {
+					if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 						continue
 					}
 
@@ -1670,11 +1663,11 @@ func (fr *RMBFrame) FastvortexesFirstStage(r *FastRejectWork) {
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_VORTEX {
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				for _, j := range cmd.List[1] {
-					if !r.rmbCheckSectorInRange(j, cmd) {
+					if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 						continue
 					}
 
@@ -1739,13 +1732,13 @@ func (fr *RMBFrame) FastgetAllVortexes(allVortexes *[][]int, r *FastRejectWork) 
 			list0 := make([]int, 0)
 			list1 := make([]int, 0)
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				list0 = append(list0, i)
 			}
 			for _, j := range cmd.List[1] {
-				if !r.rmbCheckSectorInRange(j, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 					continue
 				}
 				list1 = append(list1, j)
@@ -1766,13 +1759,13 @@ func (fr *RMBFrame) FastvortexesThirdStage(r *FastRejectWork) {
 			list0 := make([]int, 0)
 			list1 := make([]int, 0)
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				list0 = append(list0, i)
 			}
 			for _, j := range cmd.List[1] {
-				if !r.rmbCheckSectorInRange(j, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 					continue
 				}
 				list1 = append(list1, j)

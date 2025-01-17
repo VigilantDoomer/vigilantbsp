@@ -80,6 +80,7 @@ const RMB_ERROR_THRESHOLD = 5
 // RMB *.rej file is unique or not
 // Credit also goes to Zennode for how to implement this
 var RMB_PARSE_TABLE = []ParseDef{
+	{[]byte("ASSERT"), []byte("LLN"), RMB_ASSERT, ParseGeneric, true},
 	{[]byte("BAND"), []byte("NNL"), RMB_BAND, ParseBAND, true},
 	{[]byte("BLIND"), []byte("NL"), RMB_BLIND, ParseGeneric, true},
 	{[]byte("BLOCK"), []byte("NN"), RMB_BLOCK, ParseGeneric, false},

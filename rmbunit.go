@@ -27,6 +27,7 @@ const ( // RMB option/command types
 	RMB_UNKNOWN = iota
 	RMB_EXMY_MAP
 	RMB_MAPXY_MAP
+	RMB_ASSERT
 	RMB_BAND
 	RMB_BLIND
 	RMB_BLOCK
@@ -142,6 +143,11 @@ func (l *LoadedRMB) LookupRMBFrameForMapMarker(marker []byte) *RMBFrame {
 func (l *RMBCommand) Error(s string, a ...interface{}) {
 	fmtS := fmt.Sprintf("RMB %s%d error: %s", l.getFile(), l.SrcLine, s)
 	Log.Error(fmtS, a...)
+}
+
+func (l *RMBCommand) Info(s string, a ...interface{}) {
+	fmtS := fmt.Sprintf("RMB %s%d message: %s", l.getFile(), l.SrcLine, s)
+	Log.Printf(fmtS, a...)
 }
 
 // returns filename with a colon appended at the end, or empty string if

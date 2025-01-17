@@ -1342,7 +1342,6 @@ func (gcs *BlockmapGCShield) getUnusedSlot() byte {
 		}
 	}
 	panic("No unused slots in lump pool.")
-	return 100 // out of range of course (shouldn't happen)
 }
 
 // Called when lump data from current slot is selected as best blockmap, so

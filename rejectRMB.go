@@ -417,8 +417,8 @@ func rmbGetSector(sectors []SectorRMB, i int, command RMBCommand) *SectorRMB {
 	return &(sectors[i])
 }
 
-func (r *RejectWork) rmbCheckSectorInRange(i int, command RMBCommand) bool {
-	if i >= r.numSectors || i < 0 {
+func rmbCheckSectorInRange(numSectors, i int, command RMBCommand) bool {
+	if i >= numSectors || i < 0 {
 		command.Error("specified sector number out of range: %d\n", i)
 		return false
 	}
@@ -513,11 +513,11 @@ func (fr *RMBFrame) processINCLUDEs(r *RejectWork) {
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_INCLUDE {
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				for _, j := range cmd.List[1] {
-					if !r.rmbCheckSectorInRange(j, cmd) {
+					if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 						continue
 					}
 					// in case no groups are used, equivalent to
@@ -553,11 +553,11 @@ func (fr *RMBFrame) processEXCLUDEs(r *RejectWork) {
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_EXCLUDE {
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				for _, j := range cmd.List[1] {
-					if !r.rmbCheckSectorInRange(j, cmd) {
+					if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 						continue
 					}
 					// Yes, overwrite with VIS_HIDDEN - intentional
@@ -1289,11 +1289,11 @@ func (fr *RMBFrame) vortexesFirstStage(r *RejectWork) {
 	for _, cmd := range fr.Commands {
 		if cmd.Type == RMB_VORTEX {
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				for _, j := range cmd.List[1] {
-					if !r.rmbCheckSectorInRange(j, cmd) {
+					if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 						continue
 					}
 					// there should not be i=j generally, although no harm will
@@ -1372,8 +1372,6 @@ func otherVortexList(i int) int {
 }
 
 // appends 2 lists per each vortex option to allVortexes
-// TODO get rid of rmbCheckSectorInRange and hence r parameter -- this shall be done
-// somewhere else
 func (fr *RMBFrame) getAllVortexes(allVortexes *[][]int, r *RejectWork) {
 	if fr == nil {
 		return
@@ -1384,13 +1382,13 @@ func (fr *RMBFrame) getAllVortexes(allVortexes *[][]int, r *RejectWork) {
 			list0 := make([]int, 0)
 			list1 := make([]int, 0)
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				list0 = append(list0, i)
 			}
 			for _, j := range cmd.List[1] {
-				if !r.rmbCheckSectorInRange(j, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 					continue
 				}
 				list1 = append(list1, j)
@@ -1416,13 +1414,13 @@ func (fr *RMBFrame) vortexesThirdStage(r *RejectWork) {
 			list0 := make([]int, 0)
 			list1 := make([]int, 0)
 			for _, i := range cmd.List[0] {
-				if !r.rmbCheckSectorInRange(i, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, i, cmd) {
 					continue
 				}
 				list0 = append(list0, i)
 			}
 			for _, j := range cmd.List[1] {
-				if !r.rmbCheckSectorInRange(j, cmd) {
+				if !rmbCheckSectorInRange(r.numSectors, j, cmd) {
 					continue
 				}
 				list1 = append(list1, j)
@@ -1487,4 +1485,70 @@ func (fr *RMBFrame) vortexesThirdStage(r *RejectWork) {
 			}
 		}
 	}
+}
+
+// CheckASSERTions -- for RMB option ASSERT
+// fullRejectTable means asymmetric, no symmetric packed shit
+func (fr *RMBFrame) CheckASSERTions(fullRejectTable []byte, numSectors int) (passed bool,
+	checksPresent bool) {
+	if fr == nil {
+		return true, false
+	}
+	// we must check all assertions in order, regardless of how early we fail
+	good, checksPresent := fr.Parent.CheckASSERTions(fullRejectTable, numSectors)
+	for _, cmd := range fr.Commands {
+		if cmd.Type == RMB_ASSERT {
+			checksPresent = true
+			val := VIS_UNKNOWN
+			failMode := "wtf"
+			switch cmd.Data[0] {
+			case 0:
+				val = VIS_VISIBLE
+				failMode = "doesn't see"
+			case 1:
+				val = VIS_HIDDEN
+				failMode = "can see"
+			}
+			if val == VIS_UNKNOWN { // cmd.Data[0] == wtf
+				cmd.Info("assertion failed because value is not 0 (visible) or 1 (hidden)\n")
+				good = false
+				continue
+			}
+
+			// ASSERT works on sectors, not groups (indices in lists are specific
+			// sectors)
+			for _, i := range cmd.List[0] {
+				if !rmbCheckSectorInRange(numSectors, i, cmd) {
+					cmd.Info("assertion failed because sector %d does not exist on the map\n", i)
+					good = false
+					continue
+				}
+				for _, j := range cmd.List[1] {
+					if !rmbCheckSectorInRange(numSectors, j, cmd) {
+						cmd.Info("assertion failed because sector %d does not exist on the map\n", j)
+						good = false
+						continue
+					}
+					// should have used r.rejectTable[i,j] after all
+					if fullRejectTable[i*numSectors+j] != val {
+						cmd.Info("assertion failed because sector %d %s sector %d: reject has %d expected value %d \n",
+							i, failMode, j,
+							rejectTableAsOrd(fullRejectTable[i*numSectors+j]),
+							cmd.Data[0])
+						good = false
+						continue
+					}
+				}
+			}
+		}
+	}
+
+	return good, checksPresent
+}
+
+func rejectTableAsOrd(i uint8) uint8 {
+	if isHidden(i) {
+		return 1
+	}
+	return 0
 }
