@@ -372,6 +372,7 @@ type ZdoomNode_VertexHeader struct {
 	NumExtendedVertices    uint32 // how many vertices follow this
 }
 
+// Zdoom nodes format offers increased precision for vertices
 type ZdoomNode_Vertex struct {
 	X int32 // fixed-point 16.16 signed int
 	Y int32 // fixed-point 16.16 signed int
@@ -381,10 +382,10 @@ type ZdoomNode_Vertex struct {
 // subsectors, and each subsector defines only number of segs in current sector
 
 // Zdoom seg information - number of segs, followed by repetition of the below
-// struct. The struct is castrated - it does not include angle and offset
-// information, which means some special effects (like horizon) can not be
-// supported. This makes extended nodes practically inferior to deep nodes,
-// despite the extra precision of vertices
+// struct. Unlike DeeP segs, this seg extension omits angle and offset information,
+// which means some special effects (like horizon) that can be supported in vanilla
+// and DeeP nodes format are not supported by Zdoom non-GL extended/compressed nodes
+// format.
 type ZdoomNode_Seg struct {
 	StartVertex uint32
 	EndVertex   uint32
