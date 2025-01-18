@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // RMB parser is responsible for parsing text that defines RMB options,
@@ -459,29 +460,19 @@ func ParseINVERT(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 
 func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 	// The only option with two optional parameters: filename and map name
+	// don't use context.wordScanner anywhere in this function. It just won't work.
+	// use context.ReadStringArg()
 
 	// Since this has optional parameters, needs a way to signal their absence
 	cmd.WadFileName = nil
 	cmd.Data[0] = -1
 	cmd.Data[1] = -1
 
-	if !context.wordScanner.Scan() {
+	fname := context.ReadStringArg()
+
+	if len(fname) == 0 {
 		// No optional parameters where specified
 		return true
-	}
-
-	fname := context.wordScanner.Bytes()
-	if len(fname) == 0 || fname[0] == '#' {
-		return true
-	}
-	if fname[0] == '"' {
-		// Name is specified in double quotes, can contain spaces
-		// Damn, this can't be solved with this cursed scanner!
-		// FIXME actually fix this, was promised in "next release" in previous
-		// message redaction, but I bet a release already happened without it
-		// being fixed... ah wait this whole function is not yet supported xD
-		context.LogError("filename in quotes is not supported yet.")
-		return false
 	}
 
 	// Nah. If editors start supporting copying rmb files alongside a map wad into
@@ -505,14 +496,8 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 
 	cmd.WadFileName = fname
 
-	// FIXME to read from scanner here might be incorrect when quotes will be
-	// supported
-	if !context.wordScanner.Scan() {
-		return true
-	}
-
-	rawMapName := context.wordScanner.Bytes()
-	if len(rawMapName) == 0 || rawMapName[0] == '#' {
+	rawMapName := context.ReadStringArg()
+	if len(rawMapName) == 0 {
 		return true
 	}
 	mapName := bytes.ToUpper(rawMapName)
@@ -551,12 +536,9 @@ func ParseNOPROCESS(context *ParseContext, tblIdx int, cmd *RMBCommand) bool {
 			string(rawMapName), string(mapName))
 	}
 
-	if context.wordScanner.Scan() {
-		wtf := context.wordScanner.Bytes()
-		if len(wtf) > 0 && wtf[0] != '#' {
-			context.LogError("NOPROCESS supports 2 arguments at most, but more were found\n")
-			return false
-		}
+	if str := context.ReadStringArg(); str != nil {
+		context.LogError("NOPROCESS supports 2 arguments at most, but more were found\n")
+		return false
 	}
 
 	return true
@@ -787,8 +769,9 @@ func (c *ParseContext) parseRMBLine(line []byte, fromInvert bool) bool {
 			}
 			c.command = command
 			c.wordScanner = sc
-			if entry.Type == RMB_INVERT {
-				// pass entire line without INVERT prefix as a command
+			switch entry.Type { // some commands are special
+			case RMB_INVERT, RMB_NOPROCESS:
+				// pass entire line without current command prefix as a command
 				cl := len(command)
 				c.command = line[cl:]
 			}
@@ -879,6 +862,61 @@ func (c *ParseContext) switchToMapFrame(frameId RMBFrameId) {
 		c.idToFrame[frameId] = frame
 	}
 	c.activeFrame = frame
+}
+
+// ReadStringArg is a KISS way to read a string on current line: no escape characters
+// are supported, the string is read as is, unquoted if quoted, for the origins of
+// RMB are in DOS and I'm not going to make Windows paths difficult to write for all
+// in order to support conventional escape sequences for some esoteric wad file names
+// and map marker names.
+// After you call ReadStringArg, don't ever call context.wordScanner directly while
+// on the same line. ReadStringArg is all you allowed to call until the line switch
+func (c *ParseContext) ReadStringArg() []byte {
+	c.command = bytes.TrimSpace(c.command)
+	if len(c.command) == 0 {
+		return nil
+	}
+	rs := []rune(string(c.command)) // Go handling of unicode drives me nuts
+	firstSpace := 0
+	for i := 0; i < len(rs); i++ {
+		if unicode.IsSpace(rs[i]) {
+			break
+		}
+		firstSpace = i + 1
+	}
+	if rs[0] != rune('"') {
+		if rs[0] == rune('#') { // it is a comment (RMB comment starts with #)
+			c.command = c.command[:0] //  empty remainder -- nothing more to read
+			return nil
+		}
+		c.command = []byte(string(rs[firstSpace:])) // trim is gonna cut space anyway
+		return []byte(string(rs[:firstSpace]))
+	}
+
+	// if we are here, we have a quoted string
+	nextQuot := -1
+	commentStart := -1
+	for i := 1; i < len(rs); i++ {
+		if rs[i] == rune('"') && ((i == len(rs)-1) || unicode.IsSpace(rs[i+1])) {
+			// only interested in quote followed by whitespace or end of string
+			nextQuot = i
+			break
+		}
+		if (commentStart == -1) && (rs[i] == rune('#')) {
+			commentStart = i // will be used if nextQuot stays -1
+		}
+	}
+	if commentStart == -1 {
+		commentStart = len(rs)
+	}
+
+	if nextQuot == -1 { // broken string -- starts with quote but never ends with quote
+		c.command = c.command[:0] // nothing more to read
+		return []byte(string(rs[0:commentStart]))
+	}
+
+	c.command = []byte(string(rs[nextQuot+1:]))
+	return []byte(string(rs[1:nextQuot])) // omit quotes
 }
 
 // Composes error string to return when INVERT prefix is invoked with unsupported

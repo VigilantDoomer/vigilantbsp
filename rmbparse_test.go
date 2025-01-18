@@ -107,6 +107,32 @@ func TestEasyRMB(t *testing.T) {
 	}
 }
 
+func TestReadStringArg(t *testing.T) {
+	c := ParseContext{
+		command: []byte("SCREW THIS"),
+	}
+	if string(c.ReadStringArg()) != "SCREW" || string(c.ReadStringArg()) != "THIS" {
+		t.Fatalf("error\n")
+	}
+	c.command = []byte(`"SCREW" "THIS"`)
+
+	if string(c.ReadStringArg()) != "SCREW" || string(c.ReadStringArg()) != "THIS" {
+		t.Fatalf("error\n")
+	}
+
+	c.command = []byte(`"SCREW THIS HARD"`)
+
+	if string(c.ReadStringArg()) != "SCREW THIS HARD" {
+		t.Fatalf("error\n")
+	}
+
+	c.command = []byte(`ZERO "FREAKING CHANCE"  `)
+
+	if string(c.ReadStringArg()) != "ZERO" || string(c.ReadStringArg()) != "FREAKING CHANCE" {
+		t.Fatalf("error\n")
+	}
+}
+
 func TestNoProcessRMB(t *testing.T) {
 	rmb := strings.Builder{}
 	rmb.WriteString("# NOPROCESS can have no arguments\n")
@@ -117,12 +143,36 @@ func TestNoProcessRMB(t *testing.T) {
 	rmb.WriteString("E1M2\n")
 	rmb.WriteString("# or two\n")
 	rmb.WriteString("NOPROCESS mahothermap.wad E1M2\n")
+	rmb.WriteString("MAP UDMFWTF\n")
+	rmb.WriteString("# or two\n")
+	rmb.WriteString(`NOPROCESS "C:\Documents and Settings\Mah  User\Desktop\the most doomy gum.wad" UDMFFTW # yeah` +
+		"\n")
+	rmb.WriteString(`NOPROCESS testForRemainder.wad ` +
+		"\n")
 	suc, ld := LoadRMB([]byte(rmb.String()), "test_noprocessrmb.rej")
 	if !suc {
 		t.Fatalf("Failure in NOPROCESS variations test\n")
 	}
 	if ld == nil || ld.globalFrame == nil {
-		t.Fatalf("Failed to acknowledge RMB's global frame!")
+		t.Fatalf("Failed to acknowledge RMB's global frame!\n")
+	}
+	frm := ld.LookupRMBFrameForMap(RMBFrameId{
+		Type: RMB_FRAME_MAPXY,
+		Name: "UDMFWTF",
+	})
+	if frm == nil {
+		t.Fatalf("Failed to acknowledge frame for UDMFWTF map!\n")
+	}
+	if frm.Commands[0].Type != RMB_NOPROCESS || string(frm.Commands[0].WadFileName) !=
+		`C:\Documents and Settings\Mah  User\Desktop\the most doomy gum.wad` ||
+		string(frm.Commands[0].MapLumpName) != `UDMFFTW` {
+		t.Fatalf("Wrong NOPROCESS command in UDMFWTF frame! Got: %s %s\n",
+			string(frm.Commands[0].WadFileName), string(frm.Commands[0].MapLumpName))
+	}
+	if frm.Commands[1].Type != RMB_NOPROCESS || string(frm.Commands[1].WadFileName) !=
+		"testForRemainder.wad" || frm.Commands[1].MapLumpName != nil {
+		t.Fatalf("Wrong NOPROCESS command in UDMFWTF frame! Got: %s %s\n",
+			string(frm.Commands[1].WadFileName), string(frm.Commands[1].MapLumpName))
 	}
 	// I don't bother checking the rest
 }
