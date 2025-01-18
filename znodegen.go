@@ -29,12 +29,13 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 type ZExt_PickNodeFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock) *ZExt_NodeSeg
 
 type ZExt_CreateNodeSSFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock) *NodeInProcess
-type ZExt_StkCreateNodeSSFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock, *ZExt_StkQueue) *NodeInProcess
+type ZExt_StkCreateNodeSSFunc func(*ZExt_NodesWork, *ZExt_NodeSeg, *NodeBounds, *ZExt_Superblock, *ZExt_StkQueue) *StkNode
 
 type ZExt_SingleSectorDivisorFunc func(w *ZExt_NodesWork, ts *ZExt_NodeSeg, rs **ZExt_NodeSeg, ls **ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock, rightsSuper,
 	leftsSuper **ZExt_Superblock, partsegs *[]PartSeg)
@@ -95,7 +96,7 @@ type ZExt_NodesWork struct {
 
 	vertexSink []int
 
-	stkExtra map[*NodeInProcess]StkNodeExtraData
+	stkBestPick *StkNode
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -385,11 +386,13 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 
 	var rootNode *NodeInProcess
+	var stkRoot *StkNode
 	treeCount := 0
 	if input.multiTreeMode == MULTITREE_NOTUSED {
 		if input.stkNode {
 
-			rootNode = ZExt_StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			stkRoot = ZExt_StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			rootNode = getNodeInProcess(stkRoot)
 		} else {
 			if cloneEarly {
 
@@ -450,6 +453,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		}
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
+
 	}
 
 	Log.Merge(workData.mlog, "Merging buffered output (if any) from the chosen tree.\n")
@@ -484,22 +488,30 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
+	if input.stkNode {
+
+		if uintptr(unsafe.Pointer(stkRoot)) != uintptr(unsafe.Pointer(rootNode)) {
+			Log.Panic("Invalid root: stkRoot != rootNode (programmer error)")
+		}
+		AssertStkNodeIntegrity(stkRoot)
+	}
+
 	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
 
-		if workData.stkExtra == nil {
+		if stkRoot == nil {
 
-			Log.Printf("Impossible to do rearrangement -- workData.stkExtra not kept (programmer error)\n")
+			Log.Printf("Impossible to do rearrangement -- StkNode data not established (programmer error)\n")
 			Log.Printf("Rearrangement step skipped, program will proceed fine\n")
 		} else {
 			if workData.nodeType == NODETYPE_VANILLA {
 
-				workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
+				workData.RearrangeBSPVanilla(stkRoot, pristineVertexCache,
 					pristineVertexMap)
 			} else if workData.nodeType == NODETYPE_DEEP {
-				workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
+				workData.RearrangeBSPDeep(stkRoot, pristineVertexCache,
 					pristineVertexMap)
 			} else {
-				workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
+				workData.RearrangeBSPExtended(stkRoot, pristineVertexCache,
 					pristineVertexMap)
 			}
 		}
@@ -1677,7 +1689,7 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	}
 
 	newW.qallocSupers = nil
-	newW.stkExtra = nil
+	newW.stkBestPick = nil
 
 	if w.parts != nil {
 		newW.parts = make([]*ZExt_NodeSeg, 0)
@@ -6572,7 +6584,7 @@ type ZExt_RearrangeTracker struct {
 	vertexMap          *ZExt_VertexMap
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
+func (w *ZExt_NodesWork) RearrangeBSPVanilla(rootNode *StkNode,
 	pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *ZExt_VertexMap) {
 
@@ -6594,9 +6606,9 @@ func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
 		track.firstSegs[i] = firstSeg
 		firstSeg += int(w.subsectors[i].SegCount)
 	}
-	w.rearrangeVertices(node, track)
+	w.rearrangeVertices(rootNode, track)
 
-	w.rearrangeVanilla(node, track)
+	w.rearrangeVanilla(rootNode, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
 		track.cntVerts != w.lines.GetVerticesCount() {
@@ -6612,16 +6624,16 @@ func (w *ZExt_NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
 	Log.Printf("RearrangeBSP: done\n")
 }
 
-func (w *ZExt_NodesWork) rearrangeVanilla(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+func (w *ZExt_NodesWork) rearrangeVanilla(node *StkNode, track *ZExt_RearrangeTracker) {
 	if node.nextL != nil {
-		w.rearrangeVanilla(node.nextL, track)
+		w.rearrangeVanilla(node.nextStkL, track)
 	} else {
 		ssidx := node.LChild & ^SSECTOR_DEEP_MASK
 		ssector := &(w.subsectors[ssidx])
 		node.LChild = w.putSubsector(ssector, track, ssidx) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
-		w.rearrangeVanilla(node.nextR, track)
+		w.rearrangeVanilla(node.nextStkR, track)
 	} else {
 		ssidx := node.RChild & ^SSECTOR_DEEP_MASK
 		ssector := &(w.subsectors[ssidx])
@@ -6629,12 +6641,8 @@ func (w *ZExt_NodesWork) rearrangeVanilla(node *NodeInProcess, track *ZExt_Rearr
 	}
 }
 
-func (w *ZExt_NodesWork) rearrangeVertices(node *NodeInProcess, track *ZExt_RearrangeTracker) {
-	ex, ok := w.stkExtra[node]
-	if !ok {
-		Log.Panic("rearrangeVertices: failed to retrieve extra information on node-in-process structure.\n")
-	}
-	for i := ex.vstart; i < ex.vend; i++ {
+func (w *ZExt_NodesWork) rearrangeVertices(node *StkNode, track *ZExt_RearrangeTracker) {
+	for i := node.vstart; i < node.vend; i++ {
 		v := w.vertexSink[i]
 		if track.verticeRenumbering[v] >= 0 {
 			continue
@@ -6656,10 +6664,10 @@ func (w *ZExt_NodesWork) rearrangeVertices(node *NodeInProcess, track *ZExt_Rear
 	}
 
 	if node.nextL != nil {
-		w.rearrangeVertices(node.nextL, track)
+		w.rearrangeVertices(node.nextStkL, track)
 	}
 	if node.nextR != nil {
-		w.rearrangeVertices(node.nextR, track)
+		w.rearrangeVertices(node.nextStkR, track)
 	}
 }
 
@@ -6745,7 +6753,7 @@ func (w *ZExt_NodesWork) identifyLinedefVertices(track *ZExt_RearrangeTracker) b
 	return true
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPDeep(node *NodeInProcess,
+func (w *ZExt_NodesWork) RearrangeBSPDeep(node *StkNode,
 	pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *ZExt_VertexMap) {
 
@@ -6778,15 +6786,15 @@ func (w *ZExt_NodesWork) RearrangeBSPDeep(node *NodeInProcess,
 	Log.Printf("RearrangeBSP: done\n")
 }
 
-func (w *ZExt_NodesWork) rearrangeDeep(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+func (w *ZExt_NodesWork) rearrangeDeep(node *StkNode, track *ZExt_RearrangeTracker) {
 	if node.nextL != nil {
-		w.rearrangeDeep(node.nextL, track)
+		w.rearrangeDeep(node.nextStkL, track)
 	} else {
 		ssector := &(w.deepSubsectors[node.LChild & ^SSECTOR_DEEP_MASK])
 		node.LChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
-		w.rearrangeDeep(node.nextR, track)
+		w.rearrangeDeep(node.nextStkR, track)
 	} else {
 		ssector := &(w.deepSubsectors[node.RChild & ^SSECTOR_DEEP_MASK])
 		node.RChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
@@ -6829,7 +6837,7 @@ func (w *ZExt_NodesWork) renumberDeepSegVertices(seg *DeepSeg,
 	seg.EndVertex = uint32(track.verticeRenumbering[e])
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPExtended(node *NodeInProcess,
+func (w *ZExt_NodesWork) RearrangeBSPExtended(node *StkNode,
 	pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *ZExt_VertexMap) {
 
@@ -6858,15 +6866,15 @@ func (w *ZExt_NodesWork) RearrangeBSPExtended(node *NodeInProcess,
 	Log.Printf("RearrangeBSP: done\n")
 }
 
-func (w *ZExt_NodesWork) rearrangeExtended(node *NodeInProcess, track *ZExt_RearrangeTracker) {
+func (w *ZExt_NodesWork) rearrangeExtended(node *StkNode, track *ZExt_RearrangeTracker) {
 	if node.nextL != nil {
-		w.rearrangeExtended(node.nextL, track)
+		w.rearrangeExtended(node.nextStkL, track)
 	} else {
 		ssector := node.LChild & ^SSECTOR_DEEP_MASK
 		node.LChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
-		w.rearrangeExtended(node.nextR, track)
+		w.rearrangeExtended(node.nextStkR, track)
 	} else {
 		ssector := node.RChild & ^SSECTOR_DEEP_MASK
 		node.RChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
@@ -6932,14 +6940,10 @@ func (w *ZExt_NodesWork) initTranslateVectorForExtended(track *ZExt_RearrangeTra
 
 }
 
-func (w *ZExt_NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
+func (w *ZExt_NodesWork) rearrangeExtendedVertices(node *StkNode,
 	track *ZExt_RearrangeTracker) {
-	ex, ok := w.stkExtra[node]
-	if !ok {
-		Log.Panic("rearrangeExtendedVertices: failed to retrieve extra information on node-in-process structure.\n")
-	}
 
-	for i := ex.vstart; i < ex.vend; i++ {
+	for i := node.vstart; i < node.vend; i++ {
 		v := w.vertexSink[i]
 		vv := w.vertices[v]
 
@@ -6960,10 +6964,10 @@ func (w *ZExt_NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
 	}
 
 	if node.nextL != nil {
-		w.rearrangeExtendedVertices(node.nextL, track)
+		w.rearrangeExtendedVertices(node.nextStkL, track)
 	}
 	if node.nextR != nil {
-		w.rearrangeExtendedVertices(node.nextR, track)
+		w.rearrangeExtendedVertices(node.nextStkR, track)
 	}
 }
 
@@ -7008,19 +7012,18 @@ type ZExt_StkQueueTask struct {
 	node         *NodeInProcess
 }
 
-func ZExt_StkTestEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
+func ZExt_StkTestEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *StkNode {
 	pqueue := new(*ZExt_StkQueue)
 	ZExt_StkInitOrReinit(w, pqueue)
 	queue := *pqueue
 
-	queue.DepthLimit = 7
+	queue.DepthLimit = config.TreeReach
 	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
 
 	return ZExt_StkCreateNode(w, ts, bbox, super, queue)
 }
 
 func ZExt_StkInitOrReinit(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
-	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
 	w.parts = make([]*ZExt_NodeSeg, 0)
 	w.vertexSink = make([]int, 0, cap(w.vertices))
 
@@ -7034,7 +7037,6 @@ func ZExt_StkInitOrReinit(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
 }
 
 func ZExt_StkFree(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
-	w.stkExtra = nil
 	w.parts = nil
 	w.vertexSink = nil
 	if pqueue != nil && *pqueue != nil {
@@ -7043,9 +7045,9 @@ func ZExt_StkFree(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
 }
 
 func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
-	super *ZExt_Superblock, queue *ZExt_StkQueue) *NodeInProcess {
+	super *ZExt_Superblock, queue *ZExt_StkQueue) *StkNode {
 	b := true
-	var firstRes *NodeInProcess
+	var firstRes *StkNode
 	task := queue.Dequeue()
 	for b {
 		singleSectorMode := false
@@ -7057,7 +7059,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		} else {
 			b = false
 		}
-		res := new(NodeInProcess)
+		res := AllocStkNode()
 		if firstRes == nil {
 			firstRes = res
 		}
@@ -7084,15 +7086,11 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		res.Y = int16(w.nodeY)
 		res.Dx = int16(w.nodeDx)
 		res.Dy = int16(w.nodeDy)
-
-		w.stkExtra[res] = StkNodeExtraData{
-			vstart: vstart,
-			vend:   vend,
-			parts:  partsegs,
-		}
-
+		res.vstart = vstart
+		res.vend = vend
+		res.parts = partsegs
 		if task != nil {
-			queue.SetResult(res, partsegs)
+			queue.SetResult(getNodeInProcess(res), partsegs)
 		}
 
 		leftBox := ZExt_FindLimits(lefts)
@@ -7102,14 +7100,14 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 		state := w.isItConvex(lefts)
 		if state == CONVEX_SUBSECTOR {
-			res.nextL = nil
+			res.nextStkL = nil
 			res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(leftsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.LChild = 0
 			if !b || !queue.Enqueue(STK_QUEUE_SINGLE_NONCONVEX, lefts, leftBox,
 				leftsSuper, false) {
-				res.nextL = w.stkCreateNodeSS(w, lefts, leftBox, leftsSuper, nil)
+				res.nextStkL = w.stkCreateNodeSS(w, lefts, leftBox, leftsSuper, nil)
 			}
 		} else {
 			res.LChild = 0
@@ -7118,10 +7116,11 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 			}
 			if !b || !queue.Enqueue(STK_QUEUE_REGULARNODE, lefts, leftBox,
 				leftsSuper, false) {
-				res.nextL = ZExt_StkCreateNode(w, lefts, leftBox, leftsSuper, nil)
+				res.nextStkL = ZExt_StkCreateNode(w, lefts, leftBox, leftsSuper, nil)
 			}
 		}
 		leftsSuper = nil
+		res.nextL = getNodeInProcess(res.nextStkL)
 
 		rightBox := ZExt_FindLimits(rights)
 		res.Rbox[BB_TOP] = int16(rightBox.Ymax)
@@ -7130,14 +7129,14 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 		state = w.isItConvex(rights)
 		if state == CONVEX_SUBSECTOR {
-			res.nextR = nil
+			res.nextStkR = nil
 			res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(rightsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.RChild = 0
 			if !b || !queue.Enqueue(STK_QUEUE_SINGLE_NONCONVEX, rights, rightBox,
 				rightsSuper, true) {
-				res.nextR = w.stkCreateNodeSS(w, rights, rightBox, rightsSuper, nil)
+				res.nextStkR = w.stkCreateNodeSS(w, rights, rightBox, rightsSuper, nil)
 			}
 		} else {
 			res.RChild = 0
@@ -7146,10 +7145,12 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 			}
 			if !b || !queue.Enqueue(STK_QUEUE_REGULARNODE, rights, rightBox,
 				rightsSuper, true) {
-				res.nextR = ZExt_StkCreateNode(w, rights, rightBox, rightsSuper, nil)
+				res.nextStkR = ZExt_StkCreateNode(w, rights, rightBox, rightsSuper, nil)
 			}
 		}
 		rightsSuper = nil
+		res.nextR = getNodeInProcess(res.nextStkR)
+
 		task = queue.Dequeue()
 		b = task != nil
 	}
@@ -7157,8 +7158,8 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 }
 
 func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
-	super *ZExt_Superblock, queue *ZExt_StkQueue) *NodeInProcess {
-	res := new(NodeInProcess)
+	super *ZExt_Superblock, queue *ZExt_StkQueue) *StkNode {
+	res := AllocStkNode()
 	var rights *ZExt_NodeSeg
 	var lefts *ZExt_NodeSeg
 	var rightsSuper *ZExt_Superblock
@@ -7175,11 +7176,9 @@ func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
 	res.Dy = int16(w.nodeDy)
-	w.stkExtra[res] = StkNodeExtraData{
-		vstart: vstart,
-		vend:   vend,
-		parts:  partsegs,
-	}
+	res.vstart = vstart
+	res.vend = vend
+	res.parts = partsegs
 
 	leftBox := ZExt_FindLimits(lefts)
 	res.Lbox[BB_TOP] = int16(leftBox.Ymax)
@@ -7187,13 +7186,14 @@ func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox
 	res.Lbox[BB_LEFT] = int16(leftBox.Xmin)
 	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
-		res.nextL = nil
+		res.nextStkL = nil
 		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else {
-		res.nextL = ZExt_StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
+		res.nextStkL = ZExt_StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
 		res.LChild = 0
 	}
+	res.nextL = getNodeInProcess(res.nextStkL)
 
 	rightBox := ZExt_FindLimits(rights)
 	res.Rbox[BB_TOP] = int16(rightBox.Ymax)
@@ -7201,13 +7201,14 @@ func ZExt_StkCreateNodeForSingleSector(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox
 	res.Rbox[BB_LEFT] = int16(rightBox.Xmin)
 	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
-		res.nextR = nil
+		res.nextStkR = nil
 		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else {
-		res.nextR = ZExt_StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)
+		res.nextStkR = ZExt_StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)
 		res.RChild = 0
 	}
+	res.nextR = getNodeInProcess(res.nextStkR)
 
 	return res
 }

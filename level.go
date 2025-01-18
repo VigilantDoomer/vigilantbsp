@@ -23,6 +23,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
 	"reflect"
@@ -56,6 +57,8 @@ type Level struct {
 	WroteRejectAlready  bool
 	le                  []LumpEntry
 	f                   *os.File // input file descriptor, is not always loaded into this structure
+	fc                  *FileControl
+	mapName             string
 }
 
 // DoLevel is executed once per level, but Level struct is allocated once and is
@@ -91,15 +94,14 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	l.le = nil
 	l.f = nil
 	l.WroteRejectAlready = false
-	mapName := string(ByteSliceBeforeTerm(le[action.DirIndex].Name[:]))
+	l.mapName = GetLumpName(le, action)
 	loadedThings := false
 	loadedLinedefsAndVertices := false
 	blockmapNeedsSectors := config.RemoveNonCollideable
 	rejectSkip := config.Reject == REJECT_ZEROFILLED || config.Reject == REJECT_DONTTOUCH
 	rejectDone := rejectSkip
 	blockmapDone := !config.RebuildBlockmap
-	bname := ByteSliceBeforeTerm(le[idx].Name[:])
-	Log.Printf("Processing level %s:\n", bname)
+	Log.Printf("Processing level %s:\n", l.mapName)
 	if action.LevelFormat == FORMAT_HEXEN {
 		Log.Printf("Level is in Hexen format.\n")
 	}
@@ -122,6 +124,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				// less initialized pointers)
 				l.le = le
 				l.f = f
+				l.fc = fileControl
 			}
 		} else if bytes.Equal(bname, []byte("BLOCKMAP")) && config.RebuildBlockmap {
 			l.BlockmapLumpIdx = idx
@@ -305,7 +308,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 				linesToIgnore: linesToIgnore,
 				rmbFrame:      action.RMBOptions,
 				fileControl:   fileControl,
-				mapName:       mapName,
+				mapName:       l.mapName,
 			})
 		}
 
@@ -565,43 +568,92 @@ func (l *Level) handleRejectNagging(nagger *RejectNagger) []byte {
 	// So will pretend those four last cases don't exist, and not check anything at
 	// source wad but lump size of requested REJECT.
 
-	// First, where are we loading from
+	// not previous build of current map, but something else
+	// it may be the input wad also, but PinExternalWad will take care of it and
+	// return structure for input wad, too. It can't be, however, output wad.
+	var dir []LumpEntry
+	var rej *LumpEntry
+	var fromWhere string
+	var exWad *PinnedWad
+
 	if nagger.currentWadAndMap {
+		dir = l.le
 		if l.RejectLumpIdx == 0 || l.le[l.RejectLumpIdx].Size == 0 {
 			// 0 as a pos means it was just created to be written in output
 			Log.Error("The original reject lump is empty or non-existent\n")
-			goto bailout
+			return declineRejectNagging(nagger)
 		}
-		if int(l.le[l.RejectLumpIdx].Size) != rejectLumpSize_nonUDMF(nagger.numSectors) {
-			Log.Error("Original reject lump is incorrect size, must have had different number of sectors\n")
-			goto bailout
+		rej = &(dir[l.RejectLumpIdx])
+		fromWhere = "previous build of current map"
+	} else {
+		wadToLoad := l.fc.ResolveFilepath(nagger.wadToLoad)
+		exWad = l.fc.PinExternalWad(wadToLoad)
+		if exWad == nil {
+			Log.Error("Couldn't load wad \"%s\" for NOPROCESS\n", wadToLoad)
+			return declineRejectNagging(nagger)
 		}
-		rejLump := make([]byte, l.le[l.RejectLumpIdx].Size)
-		n, err := l.f.ReadAt(rejLump, int64(l.le[l.RejectLumpIdx].FilePos))
-		if err != nil || n < int(l.le[l.RejectLumpIdx].Size) {
+		mapToLoad := nagger.mapToLoad
+		if mapToLoad == "" {
+			// in a different wad, lookup level with the same name as the name of
+			// current map being built
+			mapToLoad = l.mapName
+		}
+		exLvl := exWad.LookupLevel(mapToLoad)
+		if exLvl == nil {
+			Log.Error("Couldn't find level \"%s\" in wad \"%s\" for NOPROCESS\n",
+				mapToLoad, wadToLoad)
+			return declineRejectNagging(nagger)
+		}
+		rejSch := exWad.LookupLumpInLevel(exLvl, "REJECT")
+		if rejSch == nil {
+			Log.Error("REJECT lump does not exist in level \"%s\" in wad \"%s\" (requested by NOPROCESS)\n",
+				mapToLoad, wadToLoad)
+			return declineRejectNagging(nagger)
+		}
+		dir = exWad.le
+		rej = &(dir[rejSch.DirIndex])
+		fromWhere = fmt.Sprintf("wad \"%s\" map \"%s\"", wadToLoad, mapToLoad)
+	}
+
+	// First, where are we loading from
+	if int(rej.Size) != rejectLumpSize_nonUDMF(nagger.numSectors) {
+		Log.Error("Original reject lump is incorrect size, must have had different number of sectors\n")
+		return declineRejectNagging(nagger)
+	}
+	rejBytes := make([]byte, rej.Size)
+	atPos := int64(rej.FilePos)
+	if nagger.currentWadAndMap {
+		n, err := l.f.ReadAt(rejBytes, atPos)
+		if err != nil || n < int(rej.Size) {
 			Log.Error("Failed to read original reject lump\n")
-			goto bailout
+			return declineRejectNagging(nagger)
 		}
-
-		fromWhere := " previous build of current map"
-
-		if nagger.mustDirectlyCopy {
-			Log.Printf("Reject will be copied from%s\n", fromWhere)
-			nagger.replyTo <- LevelSaysToNagging{
-				copied: true,
-			}
-			return rejLump // wriBus will write it
-		} else {
-			Log.Printf("Reject will be based of%s\n", fromWhere)
-			// there will be (probably) more processing by RMB
-			nagger.replyTo <- LevelSaysToNagging{
-				rejectData: rejLump,
-			}
-			return nil
+	} else {
+		n, err := exWad.readerAt.ReadAt(rejBytes, atPos)
+		if err != nil || n < int(rej.Size) {
+			Log.Error("Failed to read original reject lump\n")
+			return declineRejectNagging(nagger)
 		}
 	}
 
-bailout:
+	Log.Printf("Sourcing reject from %s\n", fromWhere)
+	if nagger.mustDirectlyCopy {
+		nagger.replyTo <- LevelSaysToNagging{
+			copied: true,
+		}
+		return rejBytes // wriBus will write it
+	} else {
+		// there will be (probably) more processing by RMB
+		nagger.replyTo <- LevelSaysToNagging{
+			rejectData: rejBytes,
+		}
+		return nil
+	}
+
+	// return declineRejectNagging(nagger) // go vet says this is unreachable
+}
+
+func declineRejectNagging(nagger *RejectNagger) []byte {
 	nagger.replyTo <- LevelSaysToNagging{
 		goToHell: true,
 	}

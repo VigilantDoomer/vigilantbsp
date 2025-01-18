@@ -185,6 +185,8 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					// match it and hence may not fulfill performance benefits
 					// See https://www.doomworld.com/forum/topic/74354-stupid-bsp-tricks/?do=findComment&comment=1524479
 					c.StraightNodes = true
+				} else if bytes.Equal([]byte(arg), []byte("--disableudmf")) {
+					c.DisableUDMF = true // hopefully no one will need to use it
 				} else if bytes.HasPrefix([]byte(arg), []byte("--detailnodes")) {
 					// Parameter to control whether use more accurate
 					// doLinesIntersect check. Does not affect extended nodes

@@ -16,41 +16,59 @@
 // along with VigilantBSP.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
+import (
+	"unsafe"
+)
+
 // This unit contains algorithm to build BSP tree breadth-first (or in mixed
 // manner) rather than depth-first, to make efficient (=done early) workload
 // distribution possible for hard multi-tree. This, however, results in
 // subsectors, segs and vertices being placed in different order (a
 // different unit - node_rearrange.go - has provision to reorder the results to
 // match results of tree built depth-first).
+// It is not necessary, though, that hard multi-tree will utilize breadth-first and
+// early rep functionality -- the first implementation is planned to use single
+// thread for multi-tree, where it is pointless.
 
 // Stk stands for "stUck", as in being stuck to give a name to it. It is also a
 // reference to how difficult it was to conceptualize this
 
-// Multi-tree hard needs to evaluate partition candidates at the top of the
+// So the original conception, for *optimized* (multi-threaded) hard multi-tree,
+// is that it needs to evaluate partition candidates at the top of the
 // tree as early as possible, to give other threads material to work on
 // different branches of the tree as early as possible. This can be made
 // possible if breadth-first traversal is implemented for top levels of the
 // tree, until a certain depth is reached, before switching to depth-first
-// algorithm
+// algorithm.
+//
+// However, I decided not to stick to this conception and instead brainstorm any
+// implementation of hard multi-tree at all.
 
-// Via debug parameters, this can be used on single-tree also. This option
+// Via debug parameter --stknode, this can be used on single-tree also. This option
 // is useful to verify new algorithm's correctness by byte-to-byte comparison
 // against single-tree built normally with depth-first algorithm. But since the
 // order of building a tree does influence the order of all rendering
 // primitives, an explicit reordering pass must be applied to the resulting tree
 // so that it would actually match the order produced by depth-first algorithm.
-// This is not always easily done (see node_rearrange.go, RearrangeBSPVanilla)
+// This is not easily done (see node_rearrange.go, RearrangeBSPVanilla), and for
+// Zdoom extended/compressed nodes target, might not be always possible due to how
+// it lookups existing vertices when contemplating whether to add new or reuse. This
+// might mean that deterministic hard multi-tree for these targets may only ever be
+// single-threaded (and non-deterministic should not attempt rearrangement at all)...
 
-// StkNodeExtraData contains information associated with NodeInProcess struct,
-// but held separately so that classic node creation algorithm does not allocate
-// memory for what it does not need.
-// However, it is not easy to glue the two together in memory-efficient manner,
-// which means this is additional source of increased memory consumption for
-// multi-tree (as of time of this writing, the glue is map indexed by pointer
-// keys, that is *NodeInProcess keys, and StkNodeExtraData values. Maps consume
-// noticably more memory than array, so need to figure out another way at some
-// point)
-type StkNodeExtraData struct {
+// STK_NODE_SENTINEL delimits NodeInProcess fields from extra fields of StkNode and
+// tries to detect memory corruption cases or misuse (neglect) of stknode-specific
+// internal API
+const STK_NODE_SENTINEL = uint32(0x1337FEED) // "leet feed", yes
+
+// StkNode embeds NodeInProcess and adds new fields that are used only for hard
+// multi-tree or --stknode, and don't burden normal BSP production (the one outside
+// of these non-conventional modes). The name implies _stuck_ (because
+// over-engineering things), in case you missed the self-conscious memo above.
+type StkNode struct {
+	NodeInProcess // embedded struct shit
+	// our glorious canary
+	sentinel uint32
 	// [vstart:vend), vstart inclusive, vend NOT, denote range of vertices
 	// created at DivideSegs on this node directly (child nodes are not
 	// counted). There is at least one vertex if vend > vstart, zero otherwise
@@ -59,6 +77,9 @@ type StkNodeExtraData struct {
 	// for this node (instead of the one actually used) - only relevant to
 	// multi-tree
 	parts []PartSeg
+	// mirror nextL, nextR values to avoid unsafe casts from lesser struct to greater
+	// must be the same pointers as nextL, nextR correspondingly
+	nextStkL, nextStkR *StkNode
 }
 
 // StkQueue grows when new things enqueued, but doesn't remove values when
@@ -109,7 +130,7 @@ const ( // enumeration for StkQueueTask.action - notably, ready convex sectors a
 // StkEntryPoint is where the node tree building starts for --stknode
 // multi-tree hard should rather use StkInitOrReinit and StkCreateNode directly,
 // filling up queue in between
-func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess {
+func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *StkNode {
 	pqueue := new(*StkQueue)
 	StkInitOrReinit(w, pqueue)
 	queue := *pqueue
@@ -119,7 +140,7 @@ func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Super
 	// -1 means unbounded
 	// value above 0 are specific
 	// values below -1 are undefined or panics
-	queue.DepthLimit = 7
+	queue.DepthLimit = config.TreeReach // reference to global: config
 	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
 
 	return StkCreateNode(w, ts, bbox, super, queue)
@@ -127,7 +148,6 @@ func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Super
 
 // multi-tree hard will setup this first
 func StkInitOrReinit(w *NodesWork, pqueue **StkQueue) {
-	w.stkExtra = make(map[*NodeInProcess]StkNodeExtraData, 0)
 	w.parts = make([]*NodeSeg, 0)
 	w.vertexSink = make([]int, 0, cap(w.vertices))
 
@@ -147,7 +167,6 @@ func StkInitOrReinit(w *NodesWork, pqueue **StkQueue) {
 // would be used by it (such as stkExtra, vertexSink in NodesWork)
 // Operation should allow to be repeatable
 func StkFree(w *NodesWork, pqueue **StkQueue) {
-	w.stkExtra = nil
 	w.parts = nil
 	w.vertexSink = nil
 	if pqueue != nil && *pqueue != nil {
@@ -159,9 +178,9 @@ func StkFree(w *NodesWork, pqueue **StkQueue) {
 // accepts any more things, then it switches to classic recursion depth first
 // If passed empty queue, depth first is used
 func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
-	super *Superblock, queue *StkQueue) *NodeInProcess {
+	super *Superblock, queue *StkQueue) *StkNode {
 	b := true
-	var firstRes *NodeInProcess
+	var firstRes *StkNode
 	task := queue.Dequeue()
 	for b {
 		singleSectorMode := false
@@ -173,7 +192,7 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		} else {
 			b = false
 		}
-		res := new(NodeInProcess)
+		res := AllocStkNode()
 		if firstRes == nil {
 			firstRes = res
 		}
@@ -200,33 +219,11 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.Y = int16(w.nodeY)
 		res.Dx = int16(w.nodeDx)
 		res.Dy = int16(w.nodeDy)
-		// TODO instead of map, these extra data should be represented as
-		// "binary tree stored as an array". Then, when working NodeInProcess
-		// tree in DFS-order, these should be traversed simultaneously, a
-		// corresponding mapping obtained.
-		// The only problem with such approach would arise when linguortals have
-		// to be supported - although extra data for those can be stored in the
-		// description of linguortal injections that would contain corresponding
-		// NodeInProcess'es (of linguortals)
-		w.stkExtra[res] = StkNodeExtraData{
-			vstart: vstart,
-			vend:   vend,
-			parts:  partsegs,
-		}
-		/* Can't work here correctly now - width cap defaults to 2
-		if len(partsegs) > 1 && config.VerbosityLevel >= 1 { // reference to global: config
-			// todo also beware of ps.Occurence == -1 red flag, where Linedef
-			// field is not valid and set to 0. Although len(partsegs) will be
-			// 1 in this case, meaning this path is not reached, but something
-			// to keep in mind when refactoring
-			s := ""
-			for _, ps := range partsegs {
-				s += "," + strconv.Itoa(int(ps.Linedef))
-			}
-			w.mlog.Verbose(1, "maxwidth = %d (%s)\n", len(partsegs), s)
-		}*/
+		res.vstart = vstart
+		res.vend = vend
+		res.parts = partsegs
 		if task != nil {
-			queue.SetResult(res, partsegs)
+			queue.SetResult(getNodeInProcess(res), partsegs)
 		}
 
 		// These will form the left box
@@ -237,14 +234,14 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 		state := w.isItConvex(lefts)
 		if state == CONVEX_SUBSECTOR {
-			res.nextL = nil
+			res.nextStkL = nil
 			res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(leftsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.LChild = 0
 			if !b || !queue.Enqueue(STK_QUEUE_SINGLE_NONCONVEX, lefts, leftBox,
 				leftsSuper, false) {
-				res.nextL = w.stkCreateNodeSS(w, lefts, leftBox, leftsSuper, nil)
+				res.nextStkL = w.stkCreateNodeSS(w, lefts, leftBox, leftsSuper, nil)
 			}
 		} else {
 			res.LChild = 0
@@ -253,10 +250,11 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			}
 			if !b || !queue.Enqueue(STK_QUEUE_REGULARNODE, lefts, leftBox,
 				leftsSuper, false) {
-				res.nextL = StkCreateNode(w, lefts, leftBox, leftsSuper, nil)
+				res.nextStkL = StkCreateNode(w, lefts, leftBox, leftsSuper, nil)
 			}
 		}
 		leftsSuper = nil
+		res.nextL = getNodeInProcess(res.nextStkL)
 
 		// These will form the right box
 		rightBox := FindLimits(rights)
@@ -266,14 +264,14 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 		state = w.isItConvex(rights)
 		if state == CONVEX_SUBSECTOR {
-			res.nextR = nil
+			res.nextStkR = nil
 			res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 			w.returnSuperblockToPool(rightsSuper)
 		} else if state == NONCONVEX_ONESECTOR {
 			res.RChild = 0
 			if !b || !queue.Enqueue(STK_QUEUE_SINGLE_NONCONVEX, rights, rightBox,
 				rightsSuper, true) {
-				res.nextR = w.stkCreateNodeSS(w, rights, rightBox, rightsSuper, nil)
+				res.nextStkR = w.stkCreateNodeSS(w, rights, rightBox, rightsSuper, nil)
 			}
 		} else {
 			res.RChild = 0
@@ -282,10 +280,12 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 			}
 			if !b || !queue.Enqueue(STK_QUEUE_REGULARNODE, rights, rightBox,
 				rightsSuper, true) {
-				res.nextR = StkCreateNode(w, rights, rightBox, rightsSuper, nil)
+				res.nextStkR = StkCreateNode(w, rights, rightBox, rightsSuper, nil)
 			}
 		}
 		rightsSuper = nil
+		res.nextR = getNodeInProcess(res.nextStkR)
+
 		task = queue.Dequeue()
 		b = task != nil
 	}
@@ -298,8 +298,8 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 // StkCreateNode anyway so both are assignable to a single callback of
 // StkCreateNodeSSFunc type
 func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
-	super *Superblock, queue *StkQueue) *NodeInProcess {
-	res := new(NodeInProcess)
+	super *Superblock, queue *StkQueue) *StkNode {
+	res := AllocStkNode()
 	var rights *NodeSeg
 	var lefts *NodeSeg
 	var rightsSuper *Superblock
@@ -316,11 +316,9 @@ func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Y = int16(w.nodeY)
 	res.Dx = int16(w.nodeDx)
 	res.Dy = int16(w.nodeDy)
-	w.stkExtra[res] = StkNodeExtraData{
-		vstart: vstart,
-		vend:   vend,
-		parts:  partsegs,
-	}
+	res.vstart = vstart
+	res.vend = vend
+	res.parts = partsegs
 
 	// These will form the left box
 	leftBox := FindLimits(lefts)
@@ -329,13 +327,14 @@ func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Lbox[BB_LEFT] = int16(leftBox.Xmin)
 	res.Lbox[BB_RIGHT] = int16(leftBox.Xmax)
 	if w.isItConvex(lefts) == CONVEX_SUBSECTOR {
-		res.nextL = nil
+		res.nextStkL = nil
 		res.LChild = w.CreateSSector(lefts) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(leftsSuper)
 	} else { // only NONCONVEX_ONESECTOR can be here
-		res.nextL = StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
+		res.nextStkL = StkCreateNodeForSingleSector(w, lefts, leftBox, leftsSuper, queue)
 		res.LChild = 0
 	}
+	res.nextL = getNodeInProcess(res.nextStkL)
 
 	// These will form the right box
 	rightBox := FindLimits(rights)
@@ -344,13 +343,14 @@ func StkCreateNodeForSingleSector(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	res.Rbox[BB_LEFT] = int16(rightBox.Xmin)
 	res.Rbox[BB_RIGHT] = int16(rightBox.Xmax)
 	if w.isItConvex(rights) == CONVEX_SUBSECTOR {
-		res.nextR = nil
+		res.nextStkR = nil
 		res.RChild = w.CreateSSector(rights) | SSECTOR_DEEP_MASK
 		w.returnSuperblockToPool(rightsSuper)
 	} else { // only NONCONVEX_ONESECTOR can be here
-		res.nextR = StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)
+		res.nextStkR = StkCreateNodeForSingleSector(w, rights, rightBox, rightsSuper, queue)
 		res.RChild = 0
 	}
+	res.nextR = getNodeInProcess(res.nextStkR)
 
 	return res
 }
@@ -487,4 +487,38 @@ func (q *StkQueue) SetResult(node *NodeInProcess, parts []PartSeg) {
 	}
 	// TODO when no more things enqueued, might need to send something still?
 	de.parts = parts
+}
+
+func AllocStkNode() *StkNode {
+	return &StkNode{
+		sentinel: STK_NODE_SENTINEL,
+	}
+}
+
+func getNodeInProcess(stkNode *StkNode) *NodeInProcess {
+	// now using go vet in Makefile to ensure there are only valid uses
+	// of unsafe.Pointer in VigilantBSP
+	if stkNode == nil {
+		return nil
+	}
+	return (*NodeInProcess)(unsafe.Pointer(stkNode))
+}
+
+// AssertStkNodeIntegrity is about checking whether --stknode internal API is used
+// the correct way
+func AssertStkNodeIntegrity(stkNode *StkNode) {
+	if stkNode == nil {
+		return
+	}
+	if stkNode.sentinel != STK_NODE_SENTINEL {
+		Log.Panic("Invalid StkNode: sentinel value is corrupt or this was not allocated as a StkNode (programmer error)\n")
+	}
+	if uintptr(unsafe.Pointer(stkNode.nextL)) != uintptr(unsafe.Pointer(stkNode.nextStkL)) {
+		Log.Panic("Invalid StkNode: left pointers are not consistent (programmer error)\n")
+	}
+	if uintptr(unsafe.Pointer(stkNode.nextR)) != uintptr(unsafe.Pointer(stkNode.nextStkR)) {
+		Log.Panic("Invalid StkNode: right pointers are not consistent (programmer error)\n")
+	}
+	AssertStkNodeIntegrity(stkNode.nextStkL)
+	AssertStkNodeIntegrity(stkNode.nextStkR)
 }

@@ -1991,6 +1991,7 @@ it applies only unless -rs=3 has been set.
 The support is currently work in progress and as such
 should be considered experimental. Only some options
 are implemented as of yet, notably:
+ASSERT *
 BAND
 BLIND
 DISTANCE
@@ -2000,15 +2001,30 @@ INCLUDE
 INVERT
 LENGTH
 LINE
+NOPROCESS
 REPORT
 SAFE
 VORTEX *
-* VORTEX is not part of original RMB! It originates in
-VigilantBSP v0.91
 
 map markers and comments. All other options are ignored
 as of yet. Future versions of VigilantBSP intend to 
 support more options.
+
+* ASSERT and VORTEX are not part of original RMB! They
+originate in VigilantBSP v0.91
+
+ASSERT is VigilantBSP invention to put additional checks
+on NOPROCESS (beyond the usual "sourced reject contains
+the same number of sectors as the map has now"). It has
+three arguments: sector list1, sector list2, and a number
+specifying expected value in reject table for
+(each sector in sector list1) -> (each sector in sector list2).
+It is one-way check. If reject table sourced by NOPROCESS
+contains a different value, then NOPROCESS doesn't succeed,
+and a full reject rebuild from scratch takes place.
+
+No options other than NOPROCESS are affected by ASSERT nor
+do other options force it to check in any way.
 
 VORTEX was not part of original RMB program and in many
 ways, its work is directly opposite of concept behind RMB:
@@ -2206,6 +2222,20 @@ on inner lines you will only succeeded in blocking
 visibility between sectors other than the one LINE 
 is (if that line is wide enough to block sight 
 anywhere), but not inside the sector. 
+
+NOTE Although VigilantBSP implements NOPROCESS
+starting with 0.91, I couldn't get original RMB
+program to recognize it (surprise), so I
+implemented it according to the manual, with one
+decision made about what manual doesn't specify:
+which map is REJECT lump sourced from, if a file
+argument is given to NOPROCESS, but a map argument
+isn't. I chose to make it so it loads REJECT from
+map with the same name as VigilantBSP is
+currently building. If such map doesn't exist,
+VigilantBSP aborts the attempt to source reject
+from wad and proceeds to build reject normally --
+it doesn't try to source if from any other map.
 
 Section 09: Option -m: Rebuild only specific maps
 =================================================

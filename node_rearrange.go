@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2023, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -59,7 +59,7 @@ type RearrangeTracker struct {
 // so that the wad output matches what the traditional method (recursion) would
 // produce. Only for levels within vanilla seg and subsector count limits,
 // though
-func (w *NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
+func (w *NodesWork) RearrangeBSPVanilla(rootNode *StkNode,
 	pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *VertexMap) {
 
@@ -81,12 +81,12 @@ func (w *NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
 		track.firstSegs[i] = firstSeg
 		firstSeg += int(w.subsectors[i].SegCount)
 	}
-	w.rearrangeVertices(node, track)
+	w.rearrangeVertices(rootNode, track)
 	// Recursively arrange subsectors, segs and vertices created specifically
 	// for segs according to node tree traversal order, which should match how
 	// these structures would be arranged by default CreateNode function
 	// originating from BSP v5.2
-	w.rearrangeVanilla(node, track)
+	w.rearrangeVanilla(rootNode, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
 		track.cntVerts != w.lines.GetVerticesCount() {
@@ -102,16 +102,16 @@ func (w *NodesWork) RearrangeBSPVanilla(node *NodeInProcess,
 	Log.Printf("RearrangeBSP: done\n")
 }
 
-func (w *NodesWork) rearrangeVanilla(node *NodeInProcess, track *RearrangeTracker) {
+func (w *NodesWork) rearrangeVanilla(node *StkNode, track *RearrangeTracker) {
 	if node.nextL != nil {
-		w.rearrangeVanilla(node.nextL, track)
+		w.rearrangeVanilla(node.nextStkL, track)
 	} else {
 		ssidx := node.LChild & ^SSECTOR_DEEP_MASK
 		ssector := &(w.subsectors[ssidx])
 		node.LChild = w.putSubsector(ssector, track, ssidx) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
-		w.rearrangeVanilla(node.nextR, track)
+		w.rearrangeVanilla(node.nextStkR, track)
 	} else {
 		ssidx := node.RChild & ^SSECTOR_DEEP_MASK
 		ssector := &(w.subsectors[ssidx])
@@ -119,12 +119,8 @@ func (w *NodesWork) rearrangeVanilla(node *NodeInProcess, track *RearrangeTracke
 	}
 }
 
-func (w *NodesWork) rearrangeVertices(node *NodeInProcess, track *RearrangeTracker) {
-	ex, ok := w.stkExtra[node]
-	if !ok {
-		Log.Panic("rearrangeVertices: failed to retrieve extra information on node-in-process structure.\n")
-	}
-	for i := ex.vstart; i < ex.vend; i++ {
+func (w *NodesWork) rearrangeVertices(node *StkNode, track *RearrangeTracker) {
+	for i := node.vstart; i < node.vend; i++ {
 		v := w.vertexSink[i]
 		if track.verticeRenumbering[v] >= 0 {
 			continue
@@ -146,10 +142,10 @@ func (w *NodesWork) rearrangeVertices(node *NodeInProcess, track *RearrangeTrack
 	}
 
 	if node.nextL != nil {
-		w.rearrangeVertices(node.nextL, track)
+		w.rearrangeVertices(node.nextStkL, track)
 	}
 	if node.nextR != nil {
-		w.rearrangeVertices(node.nextR, track)
+		w.rearrangeVertices(node.nextStkR, track)
 	}
 }
 
@@ -242,7 +238,7 @@ func (w *NodesWork) identifyLinedefVertices(track *RearrangeTracker) bool {
 }
 
 // RearrangeBSPDeep - see RearrangeBSPVanilla's description
-func (w *NodesWork) RearrangeBSPDeep(node *NodeInProcess,
+func (w *NodesWork) RearrangeBSPDeep(node *StkNode,
 	pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *VertexMap) {
 	// FIXME Mixing uint32 and int for indexing vertices
@@ -278,15 +274,15 @@ func (w *NodesWork) RearrangeBSPDeep(node *NodeInProcess,
 	Log.Printf("RearrangeBSP: done\n")
 }
 
-func (w *NodesWork) rearrangeDeep(node *NodeInProcess, track *RearrangeTracker) {
+func (w *NodesWork) rearrangeDeep(node *StkNode, track *RearrangeTracker) {
 	if node.nextL != nil {
-		w.rearrangeDeep(node.nextL, track)
+		w.rearrangeDeep(node.nextStkL, track)
 	} else {
 		ssector := &(w.deepSubsectors[node.LChild & ^SSECTOR_DEEP_MASK])
 		node.LChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
-		w.rearrangeDeep(node.nextR, track)
+		w.rearrangeDeep(node.nextStkR, track)
 	} else {
 		ssector := &(w.deepSubsectors[node.RChild & ^SSECTOR_DEEP_MASK])
 		node.RChild = w.putDeepSubsector(ssector, track) | SSECTOR_DEEP_MASK
@@ -335,7 +331,7 @@ func (w *NodesWork) renumberDeepSegVertices(seg *DeepSeg,
 // value, but zdoomVertexHeader.NumExtendedVertices does not (is set to zero
 // instead) and is only set *much* later, when extended nodes are about to get
 // written
-func (w *NodesWork) RearrangeBSPExtended(node *NodeInProcess,
+func (w *NodesWork) RearrangeBSPExtended(node *StkNode,
 	pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *VertexMap) {
 	// FIXME Mixing uint32 and int for indexing vertices
@@ -367,15 +363,15 @@ func (w *NodesWork) RearrangeBSPExtended(node *NodeInProcess,
 	Log.Printf("RearrangeBSP: done\n")
 }
 
-func (w *NodesWork) rearrangeExtended(node *NodeInProcess, track *RearrangeTracker) {
+func (w *NodesWork) rearrangeExtended(node *StkNode, track *RearrangeTracker) {
 	if node.nextL != nil {
-		w.rearrangeExtended(node.nextL, track)
+		w.rearrangeExtended(node.nextStkL, track)
 	} else {
 		ssector := node.LChild & ^SSECTOR_DEEP_MASK
 		node.LChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
 	}
 	if node.nextR != nil {
-		w.rearrangeExtended(node.nextR, track)
+		w.rearrangeExtended(node.nextStkR, track)
 	} else {
 		ssector := node.RChild & ^SSECTOR_DEEP_MASK
 		node.RChild = w.putExtendedSubsector(ssector, track) | SSECTOR_DEEP_MASK
@@ -441,14 +437,10 @@ func (w *NodesWork) initTranslateVectorForExtended(track *RearrangeTracker) {
 
 }
 
-func (w *NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
+func (w *NodesWork) rearrangeExtendedVertices(node *StkNode,
 	track *RearrangeTracker) {
-	ex, ok := w.stkExtra[node]
-	if !ok {
-		Log.Panic("rearrangeExtendedVertices: failed to retrieve extra information on node-in-process structure.\n")
-	}
 
-	for i := ex.vstart; i < ex.vend; i++ {
+	for i := node.vstart; i < node.vend; i++ {
 		v := w.vertexSink[i]
 		vv := w.vertices[v]
 		// definitely not SelectVertexClose, that stuff fails to even have
@@ -473,10 +465,10 @@ func (w *NodesWork) rearrangeExtendedVertices(node *NodeInProcess,
 	}
 
 	if node.nextL != nil {
-		w.rearrangeExtendedVertices(node.nextL, track)
+		w.rearrangeExtendedVertices(node.nextStkL, track)
 	}
 	if node.nextR != nil {
-		w.rearrangeExtendedVertices(node.nextR, track)
+		w.rearrangeExtendedVertices(node.nextStkR, track)
 	}
 }
 

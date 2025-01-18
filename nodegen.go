@@ -23,6 +23,7 @@ import (
 	"math"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 // Nodes Generator, ooh yes
@@ -107,7 +108,7 @@ type PickNodeFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeSeg
 // CreateNodeSSFunc exists.
 // SS stands for "single sector". In case you worried.
 type CreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock) *NodeInProcess
-type StkCreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock, *StkQueue) *NodeInProcess
+type StkCreateNodeSSFunc func(*NodesWork, *NodeSeg, *NodeBounds, *Superblock, *StkQueue) *StkNode
 
 // For stknode.go, so that StkCreateNode BFS part can also execute special
 // non-convex single-sector partitioner
@@ -207,14 +208,16 @@ type NodesWork struct {
 	vertexExists     int
 	sidenessCache    *SidenessCache
 	zenScores        []DepthScoreBundle
-	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP ideato decrease allocations
+	qallocSupers     *Superblock // quick alloc supers - also AJ-BSP idea to decrease allocations
 	upgradableToDeep bool        // whether, when building vanilla nodes, can upgrade to DeeP format on overflow
+	// Stuff related to hard multi-tree
 	// vertexSink is used to track all AddVertex requests by returned indices
-	// (even when vertex was not added). stknode installs this for
-	// node_rearrange
+	// (even when vertex was not added). stknode installs this for node_rearrange.go
 	vertexSink []int
-
-	stkExtra map[*NodeInProcess]StkNodeExtraData // TODO make a better implementation: map with a pointer key is not really a good thing
+	// stkBestPick is only assigned at the end of hard multi-tree, so nil for most
+	// NodesWork instances, as there is only 1 winner, and only it will have this
+	// set
+	stkBestPick *StkNode
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -618,6 +621,7 @@ func NodesGenerator(input *NodesInput) {
 
 	// The main act
 	var rootNode *NodeInProcess
+	var stkRoot *StkNode
 	treeCount := 0
 	if input.multiTreeMode == MULTITREE_NOTUSED { // This is a most commonly used single-tree mode
 		if input.stkNode {
@@ -626,7 +630,8 @@ func NodesGenerator(input *NodesInput) {
 			// only and is only available for single-tree to make it easier
 			// compare results in deterministic mode and ensure they are
 			// identical)
-			rootNode = StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			stkRoot = StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			rootNode = getNodeInProcess(stkRoot)
 		} else {
 			if cloneEarly {
 				// vanilla_or_zdoom* nodes format -- contrived operation here
@@ -702,6 +707,11 @@ func NodesGenerator(input *NodesInput) {
 		}
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
+		// TODO for hard multi-tree, don't forget this
+		// stkRoot = w.stkBestPick (must be non-nil, else panic)
+		// rootNode will be returned conventionally. Doing otherwise is not possible
+		// to support mega-trees without either much code duplication or degradation
+		// of performance for plain multi-tree
 	}
 	// NOTE rootBox, rootSeg, initialSuper must NOT be used past this point!
 
@@ -746,6 +756,15 @@ func NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
+	if input.stkNode {
+		// check against memory corruption or incorrect use of pointers within
+		// StkNode. Won't allow to proceed (panics) if anything is off
+		if uintptr(unsafe.Pointer(stkRoot)) != uintptr(unsafe.Pointer(rootNode)) {
+			Log.Panic("Invalid root: stkRoot != rootNode (programmer error)")
+		}
+		AssertStkNodeIntegrity(stkRoot)
+	}
+
 	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
 		// If stknode mode was enabled through debug parameter, do perform
 		// rearrangement, so that can compare resulting wad with non-stknode build
@@ -765,11 +784,11 @@ func NodesGenerator(input *NodesInput) {
 		// 4) I have another idea, it is a spoiler but it will get around the lack
 		// of multi-threading for initial brainstormed implementation of hard
 		// multi-tree
-		if workData.stkExtra == nil {
+		if stkRoot == nil {
 			// if rearrangement is used with multi-tree again, this catches changes
 			// programmer forgot to implement, such as NOT calling StkFree anymore,
 			// which deletes this data exactly
-			Log.Printf("Impossible to do rearrangement -- workData.stkExtra not kept (programmer error)\n")
+			Log.Printf("Impossible to do rearrangement -- StkNode data not established (programmer error)\n")
 			Log.Printf("Rearrangement step skipped, program will proceed fine\n")
 		} else {
 			if workData.nodeType == NODETYPE_VANILLA {
@@ -779,13 +798,13 @@ func NodesGenerator(input *NodesInput) {
 				// might have been integer overflow in FirstSeg)
 				// NOTE call to tooManySegsCantFix(_true_) is ok, because it doesn't
 				// modify stuff. Just don't mess with seg arrangement
-				workData.RearrangeBSPVanilla(rootNode, pristineVertexCache,
+				workData.RearrangeBSPVanilla(stkRoot, pristineVertexCache,
 					pristineVertexMap)
 			} else if workData.nodeType == NODETYPE_DEEP {
-				workData.RearrangeBSPDeep(rootNode, pristineVertexCache,
+				workData.RearrangeBSPDeep(stkRoot, pristineVertexCache,
 					pristineVertexMap)
 			} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
-				workData.RearrangeBSPExtended(rootNode, pristineVertexCache,
+				workData.RearrangeBSPExtended(stkRoot, pristineVertexCache,
 					pristineVertexMap)
 			}
 		}

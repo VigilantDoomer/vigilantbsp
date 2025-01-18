@@ -1460,7 +1460,12 @@ func (fr *RMBFrame) vortexesThirdStage(r *RejectWork) {
 				}
 			}
 			// I think can bypass handling of GROUPs here and use rejectTableIJ
-			// directly, instead of forceVisibility
+			// directly, instead of forceVisibility -- because previous stages
+			// (vortexesFirstStage, vortexesSecondStage) took care of groups
+			// (applied visibility to every sector within group). So
+			// now conditions "everything that sees" "everything that is seen by",
+			// evaluated by sector, capture all that has been updated in previous
+			// stages
 			for i := range seesList0 {
 				if !seesList0[i] {
 					continue

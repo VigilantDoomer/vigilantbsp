@@ -19,7 +19,10 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
+	"math"
 	"os"
 )
 
@@ -37,6 +40,7 @@ type ScheduledLump struct {
 	Level       []*ScheduledLump
 	RMBOptions  *RMBFrame
 	Drop        bool
+	id          int
 }
 
 type LevelValidity struct {
@@ -44,6 +48,18 @@ type LevelValidity struct {
 	currentOrder  []int
 	requisites    []int
 	creatable     []int
+}
+
+type PinnedWad struct {
+	le           []LumpEntry
+	scheduleRoot *ScheduledLump
+	readerAt     io.ReaderAt
+}
+
+type WadDir struct {
+	scheduleRoot *ScheduledLump
+	validities   []LevelValidity
+	lvls         int
 }
 
 // ByteSliceBeforeTerm returns a part of the original bytes
@@ -161,7 +177,7 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 	curOut := 0 // cursor
 	curLevel := 0
 	leOut := make([]LumpEntry, nSize)
-	scheduleEntry := scheduleRoot
+	scheduleEntry := cloneSchedule(scheduleRoot)
 	deltaCur := 0 // so as to update schedule to lump entry referencies for lumps not inside a level
 	for scheduleEntry != nil {
 		if scheduleEntry.Drop {
@@ -177,7 +193,7 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 			// The marker needs to be copied
 			leOut[curOut] = le[oldMainEntryIdx]
 			curOut++
-			if validities[curLevel].scheduleEntry != scheduleEntry {
+			if validities[curLevel].scheduleEntry.id != scheduleEntry.id {
 				Log.Error("Sanity check failure when computing the new directory.\n")
 				os.Exit(1)
 			}
@@ -278,4 +294,267 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 	}
 	leOut = leOut[:nSize]
 	return leOut
+}
+
+// NOTE level.go doesn't use validities. They are for UpdateDirectoryAndSchedule
+// use. Names can be parsed out of le[action.DirIndex].Name[:], where action
+// corresponds to scheduleLump with Level != nil
+// For isInputWad == true, initializes InputWad global variable. Loading input wad
+// is only valid once, next call with isInputWad==true will bomb out
+func LoadWadDirectory(isInputWad bool, le []LumpEntry, rejectsize map[int]uint32,
+	troll *Troll, eject bool, RMB *LoadedRMB) *WadDir {
+
+	ScheduleRoot := new(ScheduledLump)
+	action := ScheduleRoot
+	action.Next = nil
+	action.Level = nil
+	action.DirIndex = -1
+	lvls := 0
+	sectorStructSize := uint32(binary.Size(new(Sector)))
+
+	validities := make([]LevelValidity, 0)
+	var validity *LevelValidity
+	idgen := 0
+	// Now identify levels
+	canCheckLevel := true // UDMF imposes constraints -- ENDMAP must exist
+	for i, entry := range le {
+		// exclude zero byte and all that follows it from string for pattern
+		// matching to work correctly
+		bname := ByteSliceBeforeTerm(entry.Name[:])
+		isFollowedByTextmap := !config.DisableUDMF && (i < len(le)-1) &&
+			bytes.Equal(ByteSliceBeforeTerm(le[i+1].Name[:]), []byte("TEXTMAP"))
+
+		newAction := new(ScheduledLump)
+
+		moveToNew := true      // becomes false if processing lump that belongs to a level
+		newAction.Drop = eject // default to removal if Eject == true
+		newAction.id = idgen
+		idgen++
+		udmf := false // becomes true INSIDE udmf (through canCheckLevel == false detection)
+		if canCheckLevel && (isFollowedByTextmap || IsALevel(bname)) {
+			// Check to see if I should rebuild this level, or just copy it
+			if !isInputWad || CanRebuildThisLevel(bname) {
+				// Ok, rebuild
+				newAction.DirIndex = i
+				newAction.Level = make([]*ScheduledLump, 0, 12)
+				newAction.LevelFormat = FORMAT_DOOM
+				if isFollowedByTextmap {
+					newAction.LevelFormat = FORMAT_UDMF
+					canCheckLevel = false // must find ENDMAP first
+				}
+				newAction.Next = nil // for now
+				// FIXME what to do with UDMF????
+				validity = &LevelValidity{
+					scheduleEntry: newAction,
+					currentOrder:  make([]int, len(LUMP_SORT_ORDER)),
+					requisites:    make([]int, len(LUMP_MUSTEXIST)),
+					creatable:     make([]int, len(LUMP_CREATE)),
+				}
+				for j, _ := range validity.currentOrder {
+					validity.currentOrder[j] = -1
+				}
+				for j, _ := range validity.requisites {
+					validity.requisites[j] = 0
+				}
+				for j, _ := range validity.creatable {
+					validity.creatable[j] = 0
+				}
+				validities = append(validities, *validity)
+				validity = &validities[len(validities)-1]
+				newAction.RMBOptions = RMB.LookupRMBFrameForMapMarker(bname)
+				newAction.Drop = false
+			} else {
+				// Just copy
+				Log.Verbose(1, "will not rebuild level %s\n", string(bname))
+				newAction.DirIndex = i
+				newAction.Level = nil
+				newAction.Next = nil
+				if isFollowedByTextmap {
+					canCheckLevel = false // must find ENDMAP first
+				}
+			}
+		} else {
+			udmf = !canCheckLevel
+			if udmf && bytes.Equal(bname, []byte("ENDMAP")) {
+				// ENDMAP found, can look for next level from the next lump onwards
+				canCheckLevel = true
+			}
+			if udmf && (isFollowedByTextmap || IsALevel(bname)) {
+				Log.Error("Possible error in a wad: current lump seems to be a marker for a map \"%s\" yet ENDMAP of the previous UDMF level \"%s\" has not been encountered yet\n",
+					string(bname), GetLumpName(le, action))
+			}
+			newAction.DirIndex = i
+			newAction.Level = nil
+			newAction.Next = nil
+			if action.Level != nil {
+				// we are inside a level, check if it is a lump that is supposed
+				// to exist in it
+				// this path is not followed if a level is not being rebuilt but
+				// copied instead
+				isHexenSpec := bytes.Equal([]byte("BEHAVIOR"), bname)
+				isLevelSpec := udmf || isHexenSpec ||
+					bytes.Equal([]byte("SEGS"), bname) ||
+					bytes.Equal([]byte("SSECTORS"), bname) ||
+					bytes.Equal([]byte("NODES"), bname) ||
+					bytes.Equal([]byte("BLOCKMAP"), bname) ||
+					bytes.Equal([]byte("SCRIPTS"), bname) || // source code for BEHAVIOR lump
+					bytes.Equal([]byte("REJECT"), bname) ||
+					bytes.Equal([]byte("THINGS"), bname) ||
+					bytes.Equal([]byte("LINEDEFS"), bname) ||
+					bytes.Equal([]byte("SIDEDEFS"), bname) ||
+					bytes.Equal([]byte("VERTEXES"), bname) ||
+					bytes.Equal([]byte("SECTORS"), bname)
+				if isLevelSpec {
+					if isHexenSpec && (action.LevelFormat == FORMAT_DOOM) {
+						action.LevelFormat = FORMAT_HEXEN
+					}
+					action.Level = append(action.Level, newAction)
+					moveToNew = false // We are collecting lumps for a level
+					// Now match lumps against predefined names to determine
+					// whether they are in incorrect order, missing, and whether
+					// this is recoverable. This information will be processed
+					// later
+					sname := string(bname)
+					SetValiditySocket(sname, LUMP_SORT_ORDER,
+						&(validity.currentOrder), i, false)
+					SetValiditySocket(sname, LUMP_MUSTEXIST,
+						&(validity.requisites), 1, true)
+					SetValiditySocket(sname, LUMP_CREATE,
+						&(validity.creatable), 1, true)
+					newAction.Drop = false
+				}
+			}
+		}
+		if moveToNew {
+			action.Next = newAction
+			action = newAction
+		}
+		// zero-filled reject is never built for udmf, and we don't rebuild wads we
+		// pinned as external (these wads are loaded for the sake of reject sourcing
+		// for NOPROCESS, not for rebuilding them)
+		if isInputWad && !udmf && !moveToNew && bytes.Equal(bname, []byte("SECTORS")) {
+			numSectors := entry.Size / sectorStructSize
+			fracBytes := float64(numSectors) * float64(numSectors) / 8.0
+			numRejectSize := uint32(math.Ceil(fracBytes))
+			troll.AddSize(numRejectSize)
+			rejectsize[action.DirIndex] = numRejectSize
+		}
+	}
+
+	if !canCheckLevel {
+		lvlName := GetLumpName(le, action)
+		Log.Error("The last UDMF level \"%s\" parsed was absent ENDMAP marker (reached end of wad directory without finding ENDMAP).\n",
+			lvlName)
+		Log.Error("It is thus invalid UDMF level and won't be rebuilt\n")
+		// unroll it
+		prev := action
+		for _, subaction := range action.Level {
+			prev.Next = subaction
+		}
+		action.Level = nil
+		validities = validities[:len(validities)-1]
+	}
+
+	// first meaningful lump
+	ScheduleRoot = ScheduleRoot.Next
+
+	return &WadDir{
+		scheduleRoot: ScheduleRoot,
+		validities:   validities,
+		lvls:         lvls,
+	}
+}
+
+// LookupLevel returns the first level matching a specified marker
+func (pw *PinnedWad) LookupLevel(lumpName string) *ScheduledLump {
+	if pw.scheduleRoot == nil {
+		return nil
+	}
+	schedule := pw.scheduleRoot
+	for {
+		if schedule.Level != nil {
+			if GetLumpName(pw.le, schedule) == lumpName {
+				return schedule
+			}
+		}
+
+		schedule = schedule.Next
+		if schedule == nil {
+			return nil
+		}
+	}
+	// return nil // go vet says this is unreachable code
+}
+
+func (pw *PinnedWad) LookupLumpInLevel(levelOwnLump *ScheduledLump,
+	lumpName string) *ScheduledLump {
+	if levelOwnLump.Level == nil {
+		return nil
+	}
+	for i, _ := range levelOwnLump.Level {
+		if GetLumpName(pw.le, levelOwnLump.Level[i]) == lumpName {
+			return levelOwnLump.Level[i]
+		}
+	}
+	return nil
+}
+
+func GetLumpName(le []LumpEntry, lump *ScheduledLump) string {
+	return string(ByteSliceBeforeTerm(le[lump.DirIndex].Name[:]))
+}
+
+func cloneSchedule(scheduleRoot *ScheduledLump) *ScheduledLump {
+	sch := scheduleRoot
+	newSch := &ScheduledLump{}
+	rootSch := newSch
+	for sch != nil {
+		*newSch = *sch
+		if sch.Next != nil {
+			newSch.Next = &ScheduledLump{}
+			newSch = newSch.Next
+		}
+		sch = sch.Next
+	}
+	return rootSch
+}
+
+func TryReadWadDirectory(isInputFile bool, f *os.File,
+	wh *WadHeader) ([]LumpEntry, error) {
+	*wh = WadHeader{}
+	err := binary.Read(f, binary.LittleEndian, wh)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Couldn't read file header %s\n", err.Error()))
+	}
+	if wh.MagicSig == IWAD_MAGIC_SIG {
+		if isInputFile {
+			Log.Printf("The file is an IWAD")
+		}
+	} else if wh.MagicSig == PWAD_MAGIC_SIG {
+		if isInputFile {
+			Log.Printf("The file is a PWAD")
+		}
+	} else {
+		return nil, errors.New("The file is NOT a wad")
+	}
+	if isInputFile {
+		Log.Verbose(1, "The directory contains %d lumps and starts at %d byte offset",
+			wh.LumpCount, wh.DirectoryStart)
+	}
+
+	if wh.LumpCount == 0 {
+		return nil, errors.New("Unable to find any valid levels")
+	}
+
+	_, err = f.Seek(int64(wh.DirectoryStart), 0)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Couldn't move to wad's directory structure (%d offset): %s", wh.DirectoryStart, err.Error()))
+	}
+
+	// Read in whole directory at once
+	le := make([]LumpEntry, wh.LumpCount, wh.LumpCount)
+	err = binary.Read(f, binary.LittleEndian, le)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Failed to read lump info from a wad's directory: %s", err.Error()))
+	}
+	return le, nil
 }

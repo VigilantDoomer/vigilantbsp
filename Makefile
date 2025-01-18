@@ -21,6 +21,9 @@ clean:
 generate:
 	go generate
 
-$(PLATFORMS): generate
+vet:
+	go vet
+
+$(PLATFORMS): generate vet
 	CGO_ENABLED=0 GOOS=$(os) GOARCH=$(arch) go build -ldflags="-s -w -buildid=" -trimpath -o 'vigilantbsp$(suffix)'
 

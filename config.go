@@ -288,6 +288,7 @@ type ProgramConfig struct {
 	EffectiveSecondary int  // derivative value of SecondaryPriority that never has AUTO value
 	StkNode            bool // whether to use stknode in conjuction MULTITREE_NOTUSED (multi-trees ignore this parameter)
 	TreeWidth          int  // width of hard tree
+	TreeReach          int  // how far does hard tree branch
 	SpeedTree          bool // accelerate multitree at the cost of memory usage
 	SpeedTreeExplicit  bool // whether the user explicitly passed --speedtree on/off
 	Eject              bool // whether to only put rebuilt maps into output file and no other lumps
@@ -296,8 +297,10 @@ type ProgramConfig struct {
 	Roots              int  // how many (max) best roots to pick for plain multi-tree, default 0, which means try every linedef that satisfies SpecialRootMode
 	RootsReadPending   bool // if need to set roots from width
 	//
-	BlockmapTryConditionally int  // options to try conditionally when blockmap doesn't fit with non-conditional options
-	NoSymm                   bool // disable symm reject interface
+	BlockmapTryConditionally int // options to try conditionally when blockmap doesn't fit with non-conditional options
+	//
+	NoSymm      bool // disable symm reject interface
+	DisableUDMF bool // don't recognize udmf maps
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -356,7 +359,8 @@ func init() {
 		SecondaryPriority:        SECONDARY_PRIORITY_AUTO,
 		EffectiveSecondary:       SECONDARY_PRIORITY_BALANCE, // will be overridden in config.FromCommandLine
 		StkNode:                  false,
-		TreeWidth:                0, // auto
+		TreeWidth:                0,  // auto
+		TreeReach:                10, // default depth of branching for hard multi-tree
 		FilterProhibitsLevels:    false,
 		SpeedTree:                false, // overridden dependent on other parameters if SpeedTreeExplicit == false
 		SpeedTreeExplicit:        false,
@@ -365,6 +369,7 @@ func init() {
 		Ableist:                  false,
 		BlockmapTryConditionally: BM_TRYCOND_NONE,
 		NoSymm:                   false,
+		DisableUDMF:              true, //false, // not ready yet
 	})
 }
 

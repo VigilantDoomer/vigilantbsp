@@ -31,16 +31,20 @@ import (
 // and we were to replace the input, either replaces that input file (on success)
 // or is deleted (on failure)
 type FileControl struct {
-	success        bool
-	tmp            bool
-	fin            *os.File
-	fout           *os.File
-	frmb           *os.File
-	freport        *os.File
-	inputFileName  string
-	outputFileName string
-	rmbFileName    string
-	reportFileName string
+	success           bool
+	tmp               bool
+	fin               *os.File
+	fout              *os.File
+	frmb              *os.File
+	freport           *os.File
+	fpin              *os.File
+	inputFileName     string
+	outputFileName    string
+	rmbFileName       string
+	reportFileName    string
+	pinnedFileName    string // for pinnedExternalWad
+	inputWad          *PinnedWad
+	pinnedExternalWad *PinnedWad // for RMB option NOPROCESS
 }
 
 func (fc *FileControl) UsingTmp() bool {
@@ -214,6 +218,11 @@ func (fc *FileControl) Shutdown() {
 		errFout = fc.fout.Close()
 	}
 
+	var errFpin error
+	if fc.fpin != nil {
+		errFpin = fc.fpin.Close()
+	}
+
 	if errFrmb != nil {
 		Log.Error("Couldn't close RMB file '%s': %s\n", fc.rmbFileName, errFrmb.Error())
 	}
@@ -224,6 +233,10 @@ func (fc *FileControl) Shutdown() {
 
 	if errFout != nil {
 		Log.Error("Couldn't close output file '%s': %s\n", fc.outputFileName, errFout.Error())
+	}
+
+	if errFpin != nil {
+		Log.Error("Couldn't close sourced file '%s': %s\n", fc.pinnedFileName, errFpin.Error())
 	}
 
 	fc.CloseReportFile(false)
@@ -355,4 +368,101 @@ func appendCRLF(CRLF bool, s string) string {
 	} else {
 		return s + "\n"
 	}
+}
+
+func (fc *FileControl) OpenExternalFile(externalFileName string) (*os.File, error) {
+	if fc.fpin != nil {
+		fc.fpin.Close()
+		fc.fpin = nil
+		fc.pinnedFileName = ""
+	}
+
+	fin, err := os.Open(externalFileName)
+	if err == nil {
+		fc.fpin = fin
+		fc.pinnedFileName = externalFileName
+		return fin, nil
+	}
+	return nil, err
+}
+
+// PinExternalWad is a non-thread-safe func that loads and pins wad directory in
+// global variable
+func (fc *FileControl) PinExternalWad(wadFileName string) *PinnedWad {
+	// 1. if the same file is already pinned, return it
+	// 2. if input file, return OLD schedule (need to keep copy of it
+	// before UpdateDirectoryAndSchedule). It should not require pinning nor should
+	// it overwrite/be overwritten by any other pinned file
+	// 3. check it is not the same as output file -- don't allow output file
+	if wadFileName == fc.inputFileName {
+		return fc.inputWad
+	}
+	if len(wadFileName) == 0 {
+		return nil
+	}
+	f1, err1 := os.Stat(fc.inputFileName)
+	f2, err2 := os.Stat(fc.outputFileName)
+	f3, err3 := os.Stat(wadFileName)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return nil
+	}
+	if os.SameFile(f2, f3) {
+		Log.Error("Cannot load file %s for sourcing lump from it -- it is the output file and is still being written.\n",
+			wadFileName)
+		return nil
+	}
+	if os.SameFile(f1, f3) {
+		return fc.inputWad
+	}
+
+	// Above either returned input wad or aborted, here check if it is the same wad
+	// as already pinned
+	if fc.pinnedFileName != "" && fc.pinnedExternalWad != nil {
+		if fc.pinnedFileName == wadFileName { // shortcut
+			return fc.pinnedExternalWad
+		}
+		f4, err4 := os.Stat(fc.pinnedFileName)
+		if err4 != nil {
+			return nil
+		}
+		if os.SameFile(f4, f3) {
+			return fc.pinnedExternalWad
+		}
+	}
+
+	// no, it is a new one
+	f, err := fc.OpenExternalFile(wadFileName)
+	if err != nil {
+		Log.Error("An error has occured while trying to open %s: %s\n",
+			wadFileName, err)
+		os.Exit(1)
+	}
+
+	wh := new(WadHeader)
+	le, err5 := TryReadWadDirectory(false, f, wh)
+	if err5 != nil {
+		Log.Error("Couldn't read wad directory from %s: %s\n",
+			wadFileName, err5.Error())
+	}
+	wadDir := LoadWadDirectory(false, le, nil, nil, false, nil)
+	if wadDir == nil {
+		Log.Error("Couldn't read lump list from %s: no lumps?\n", wadFileName)
+	}
+	fc.pinnedExternalWad = &PinnedWad{
+		le:           le,
+		scheduleRoot: wadDir.scheduleRoot,
+		readerAt:     f,
+	}
+
+	return fc.pinnedExternalWad
+}
+
+// ResolveFilepath resolves fname relative to inputFileName. inputFileName since
+// guaranteed to be a file and not a directory, so its directory is used for
+// resolution
+func (fc *FileControl) ResolveFilepath(fname string) string {
+	if !filepath.IsAbs(fname) {
+		return filepath.Join(filepath.Dir(fc.inputFileName), fname)
+	}
+	return fname
 }
