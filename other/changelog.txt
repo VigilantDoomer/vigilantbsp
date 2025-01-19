@@ -4,7 +4,7 @@ v0.91 (in development)
 - New feature: allow user to enable blockmap subset compression variants conditionally by placing a question mark after respective options.
 - Change: among working blockmaps with EQUAL sizes, when dummy linedef is enabled yet allowed to be non-zero (default), prefer blockmap with zero dummy linedef unless its too long.
 - Bug fix: subset compression (both variants) used to miss some significant blockmap size savings, which has now been corrected, resulting in smaller blockmap sizes
-- Bug fix: recognize MBF21 linedef flags "Block land monsters" and "Block players" and do not remove such linedefs from BLOCKMAP
+- Bug fix: linedefs with MBF21 flags "Block land monsters" and "Block players" are no longer removed from BLOCKMAP when non-default setting "Remove non-collideable" is turned on
 - New feature: can now specify RMB map marker using "MAP <lumpname>" in RMB options file -- I am working towards future UDMF support
 - New feature: implemented RMB option NOPROCESS, which can source a reject lump from another map or a previous build. Supports double-quoted strings
 - New feature: invented RMB option named ASSERT, which specifies sector visibility rules, against which reject loaded by NOPROCESS is checked
