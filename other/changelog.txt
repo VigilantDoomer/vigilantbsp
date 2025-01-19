@@ -14,17 +14,14 @@ v0.91 (in development)
 - Enhancement: minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
 - Enhancement: plain multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
-- Enhancement: new selectable option for "nodes format compatibility": "Vanilla, but multi-tree is comfortable with unsigned trees"
-	Turns off a subset of previous enhancement. When not using multi-tree, is fully identical to "v" (default).
+- Enhancement: new selectable option for "nodes format compatibility": "Vanilla, but multi-tree is comfortable with unsigned trees" (turns off a subset of previous enhancement)
 - Added --ableist parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
-	See "Debug and other hidden parameters". Generally the likelihood of best tree not being vanilla is very low, but such case is conceivable.
 - Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user. See "Debug and other hidden parameters"
 - Bug fix: can now build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
 - This release is no longer marked "alpha" -- VigilantBSP has been de facto stable for a while (above bugs didn't result in output corruption and so don't refute this statement)
 - The RMB manual that is bundled with VigilantBSP has been modified to include the new VORTEX and ASSERT options.
 - Updated configuration file (packaged with VigilantBSP) for GzdoomBuilder-Bugfix/Ultimate Doom Builder/Doom Builder family of editors
 	Although VigilantBSP has many useful options, only a tiny subset of combinations is put into configuration file, because cluttering nodebuilder selection in level editor is undesirable.
-	Run vigilantbsp.exe (or ./vigilantbsp on GNU/Linux) without any parameters from console/shell to see the full list of options.
 - (Relevant to programmers) Makefile no longer produces executables for 3rd microarchitecture level, was a failed experiment in previous version. These files were never released
 - (Relevant to programmers) Added "go vet" to Makefile to check for incorrect use of package "unsafe"
 
