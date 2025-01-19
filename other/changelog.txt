@@ -39,6 +39,7 @@ v0.91 (in development)
 	Although VigilantBSP has many useful options, only a tiny subset of combinations is put into configuration file, because cluttering nodebuilder selection in level editor is undesirable.
 	Run vigilantbsp.exe (or ./vigilantbsp on GNU/Linux) without any parameters from console/shell to see the full list of options.
 - (Relevant to programmers) Makefile no longer produces executables for 3rd microarchitecture level, was a failed experiment in previous version. These files were never released
+- (Relevant to programmers) Added "go vet" to Makefile to check for incorrect use of package "unsafe"
 
 v0.86a
 - New feature: allow user to set zlib compression level for compressed Zdoom nodes compatibility format, e.g. via -nc=z9 instead of -nc=z.

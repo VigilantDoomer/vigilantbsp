@@ -579,7 +579,6 @@ func (l *Level) handleRejectNagging(nagger *RejectNagger) []byte {
 	if nagger.currentWadAndMap {
 		dir = l.le
 		if l.RejectLumpIdx == 0 || l.le[l.RejectLumpIdx].Size == 0 {
-			// 0 as a pos means it was just created to be written in output
 			Log.Error("The original reject lump is empty or non-existent\n")
 			return declineRejectNagging(nagger)
 		}
