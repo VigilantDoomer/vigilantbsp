@@ -114,7 +114,7 @@ type StkQueueTask struct {
 	leftChild    int
 	rightChild   int
 	parts        []PartSeg // which partitions multi-tree scheduler can choose for this node
-	node         *NodeInProcess
+	node         *StkNode
 }
 
 type PartSeg struct {
@@ -223,7 +223,7 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		res.vend = vend
 		res.parts = partsegs
 		if task != nil {
-			queue.SetResult(getNodeInProcess(res), partsegs)
+			queue.SetResult(res, partsegs)
 		}
 
 		// These will form the left box
@@ -475,14 +475,16 @@ func (q *StkQueue) Dequeue() *StkQueueTask {
 	return q.tmp
 }
 
-func (q *StkQueue) SetResult(node *NodeInProcess, parts []PartSeg) {
+func (q *StkQueue) SetResult(node *StkNode, parts []PartSeg) {
 	de := q.lastDequeued()
 	de.node = node
 	if de.parentNum >= 0 {
 		if de.isRightChild {
-			q.tasks[de.parentNum].node.nextR = node
+			q.tasks[de.parentNum].node.nextStkR = node
+			q.tasks[de.parentNum].node.nextR = getNodeInProcess(node)
 		} else {
-			q.tasks[de.parentNum].node.nextL = node
+			q.tasks[de.parentNum].node.nextStkL = node
+			q.tasks[de.parentNum].node.nextL = getNodeInProcess(node)
 		}
 	}
 	// TODO when no more things enqueued, might need to send something still?

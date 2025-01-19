@@ -7009,7 +7009,7 @@ type ZExt_StkQueueTask struct {
 	leftChild    int
 	rightChild   int
 	parts        []PartSeg
-	node         *NodeInProcess
+	node         *StkNode
 }
 
 func ZExt_StkTestEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *StkNode {
@@ -7090,7 +7090,7 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		res.vend = vend
 		res.parts = partsegs
 		if task != nil {
-			queue.SetResult(getNodeInProcess(res), partsegs)
+			queue.SetResult(res, partsegs)
 		}
 
 		leftBox := ZExt_FindLimits(lefts)
@@ -7311,14 +7311,16 @@ func (q *ZExt_StkQueue) Dequeue() *ZExt_StkQueueTask {
 	return q.tmp
 }
 
-func (q *ZExt_StkQueue) SetResult(node *NodeInProcess, parts []PartSeg) {
+func (q *ZExt_StkQueue) SetResult(node *StkNode, parts []PartSeg) {
 	de := q.lastDequeued()
 	de.node = node
 	if de.parentNum >= 0 {
 		if de.isRightChild {
-			q.tasks[de.parentNum].node.nextR = node
+			q.tasks[de.parentNum].node.nextStkR = node
+			q.tasks[de.parentNum].node.nextR = getNodeInProcess(node)
 		} else {
-			q.tasks[de.parentNum].node.nextL = node
+			q.tasks[de.parentNum].node.nextStkL = node
+			q.tasks[de.parentNum].node.nextL = getNodeInProcess(node)
 		}
 	}
 
