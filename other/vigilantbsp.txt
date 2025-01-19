@@ -175,7 +175,8 @@ a working blockmap can't be produced otherwise.
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
 			or zN where N is a digit between 1 and 9
-		V Vanilla, but multi-tree is comfortable with unsigned trees
+		V Vanilla+ (remove multi-tree bias against unsigned trees)
+			identical to "v" when not in multi-tree mode
 		D Prefer vanilla, switch to Deep nodes on overflow
 		X Prefer vanilla, switch to Zdoom extended nodes on overflow
 		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow
@@ -1580,7 +1581,7 @@ my tests). At the time of this writing, 0 meant no compression
 compression which is 6, -2 is "Huffman encoding only (disable
 Lempel-Ziv match searching)".
 
-c=V - Vanilla, but multi-tree is comfortable with unsigned trees
+c=V - Vanilla+ (remove multi-tree bias against unsigned trees)
 	Introduced in VigilantBSP v0.91
 
 This option only alters behavior of multi-tree and is otherwise

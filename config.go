@@ -81,7 +81,8 @@ const VERSION = "0.91"
 		x Zdoom extended nodes format
 		z Zdoom compressed nodes format
 			or zN where N is a single digit between 1 and 9
-		V Vanilla, but multi-tree is comfortable with unsigned trees
+		V Vanilla+ (remove multi-tree bias against unsigned trees)
+			identical to "v" when not in multi-tree mode
 		D Prefer vanilla, switch to Deep nodes on overflow
 		X Prefer vanilla, switch to Zdoom extended nodes on overflow
 		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow
@@ -461,7 +462,8 @@ func PrintHelp() {
 	Log.Printf("		x Zdoom extended nodes format\n")
 	Log.Printf("		z Zdoom compressed nodes format \n")
 	Log.Printf("		  or zN where N is a single digit between 1 and 9\n")
-	Log.Printf("		V Vanilla, but multi-tree is comfortable with unsigned trees\n")
+	Log.Printf("		V Vanilla+ (remove multi-tree bias against unsigned trees)\n")
+	Log.Printf("		   identical to \"v\" when not in multi-tree mode\n")
 	Log.Printf("		D Prefer vanilla, switch to Deep nodes on overflow\n")
 	Log.Printf("		X Prefer vanilla, switch to Zdoom extended nodes on overflow\n")
 	Log.Printf("		Z Prefer vanilla, switch to Zdoom compressed nodes on overflow\n")

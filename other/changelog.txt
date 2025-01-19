@@ -14,7 +14,7 @@ v0.91 (in development)
 - Enhancement: minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
 - Enhancement: plain multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
-- Enhancement: new selectable option for "nodes format compatibility": "Vanilla, but multi-tree is comfortable with unsigned trees" (turns off a subset of previous enhancement)
+- Enhancement: new selectable option for "nodes format compatibility": "Vanilla+ (remove multi-tree bias against unsigned trees)" (turns off a subset of previous enhancement)
 - Added --ableist parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
 - Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user. See "Debug and other hidden parameters"
 - Bug fix: can now build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
