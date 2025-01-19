@@ -1,26 +1,16 @@
 Changelog for VigilantBSP
 
 v0.91 (in development)
-- New feature: can now specify RMB map marker using "MAP <lumpname>" in RMB options file -- for support of irregularly named (UDMF) maps
-	UDMF support itself is not implemented yet. Coming soon...
-- New feature: implemented RMB option NOPROCESS, which can source a reject lump from another map or a previous build
-	For arguments, NOPROCESS supports double-quoted strings as well as plain strings. No escape characters are implemented,
-		nor they will be implemented -- I'm not going to make typical Windows paths difficult to write.
-- New feature: invented RMB option named ASSERT, which specifies sector visibility rules, against which reject loaded by NOPROCESS is checked
-	If sector potential visibility (or lack thereof) deviates from values defined by user in ASSERT, then NOPROCESS is 'cancelled', that is sourced
-		reject is ignored and rebuild from scratch takes place. Such rebuild never uses rejectSYMM optimization, because when reject is loaded
-		by NOPROCESS in order to check it, it is not guaranteed to have property of symmetry, and the internal table is thus initialized for
-		asymmetric reject.
-- New feature: invented RMB option named VORTEX to conduit positive visibility "through" sectors. Accepts two sector lists as an argument
-	Sectors in one list will see every sector in the other list and vice versa + anything that *sees* any sector in one sector list will *see*
-	  anything that can be *seen from* any sector in the other sector list. This is not part of original RMB, and can be used to support
-	  portals, or manually fix self-referencing sectors operation in reject.
 - New feature: allow user to enable blockmap subset compression variants conditionally by placing a question mark after respective options.
 - Change: among working blockmaps with EQUAL sizes, when dummy linedef is enabled yet allowed to be non-zero (default), prefer blockmap with zero dummy linedef unless its too long.
-	This can decrease load times in Gzdoom by preventing it from discarding a working BLOCKMAP.
+- Bug fix: subset compression (both variants) used to miss some significant blockmap size savings, which has now been corrected, resulting in smaller blockmap sizes
+- Bug fix: recognize MBF21 linedef flags "Block land monsters" and "Block players" and do not remove such linedefs from BLOCKMAP
+- New feature: can now specify RMB map marker using "MAP <lumpname>" in RMB options file -- I am working towards future UDMF support
+- New feature: implemented RMB option NOPROCESS, which can source a reject lump from another map or a previous build. Supports double-quoted strings
+- New feature: invented RMB option named ASSERT, which specifies sector visibility rules, against which reject loaded by NOPROCESS is checked
+- New feature: invented RMB option named VORTEX to conduit positive visibility "through" sectors. Accepts two sector lists as an argument
 - New feature: --roots=N parameter, where N is a positive number, to run plain multi-tree only for N best roots. See "Debug and other hidden parameters".
-- New feature: added non-default option to disable automatic discovery of self-referencing sectors when building reject
-	You can then use RMB options file with VigilantBSP-specific option VORTEX to render specific self-referencing sectors capable of seeing to/from again.
+- New feature: added non-default option to disable automatic discovery of self-referencing sectors when building reject (you can use VORTEX to manually make them visible again)
 - Enhancement: minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
 - Enhancement: plain multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
@@ -30,9 +20,6 @@ v0.91 (in development)
 	See "Debug and other hidden parameters". Generally the likelihood of best tree not being vanilla is very low, but such case is conceivable.
 - Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user. See "Debug and other hidden parameters"
 - Bug fix: can now build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
-- Bug fix: subset compression (both variants) used to miss some significant blockmap size savings, which has now been corrected, resulting in smaller blockmap sizes
-- Bug fix: recognize MBF21 linedef flags "Block land monsters" and "Block players" and do not remove such linedefs from BLOCKMAP
-	Removal of linedefs from blockmap is a opt-in procedure in VigilantBSP, represented by "remove non-collideable lines from blockmap" option which in general is not recommended.
 - This release is no longer marked "alpha" -- VigilantBSP has been de facto stable for a while (above bugs didn't result in output corruption and so don't refute this statement)
 - The RMB manual that is bundled with VigilantBSP has been modified to include the new VORTEX and ASSERT options.
 - Updated configuration file (packaged with VigilantBSP) for GzdoomBuilder-Bugfix/Ultimate Doom Builder/Doom Builder family of editors

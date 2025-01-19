@@ -28,8 +28,8 @@
 // invention, longest list placed last position idea is from Doomwiki article on
 // Block Rocking Bytes
 // 2. Nodes: port of BSP v5.2, heavily modified, ideas borrowed from Zennode,
-// Zokumbsp and AJ-BSP, possibly some ZDBSP as well; I also implemented some
-// ideas from Lee Killough which he considered hard at the time
+// Zokumbsp and AJ-BSP, ZDBSP as well (for extended nodes); I also implemented some
+// ideas proposed by Lee Killough that he considered hard at the time
 // 3. Reject: port of Zennode's reject code, bugfixes from Zokumbsp, further
 // optimization and self-referencing sector support is mine etc.
 package main
