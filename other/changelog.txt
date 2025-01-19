@@ -8,7 +8,7 @@ v0.91 (in development)
 - New feature: can now specify RMB map marker using "MAP <lumpname>" in RMB options file -- I am working towards future UDMF support
 - New feature: implemented RMB option NOPROCESS, which can source a reject lump from another map or a previous build. Supports double-quoted strings
 - New feature: invented RMB option named ASSERT, which specifies sector visibility rules, against which reject loaded by NOPROCESS is checked
-- New feature: invented RMB option named VORTEX to conduit positive visibility "through" sectors. Accepts two sector lists as an argument
+- New feature: invented RMB option named VORTEX to conduit positive visibility "through" sectors, it allows mapper to manually fix self-referencing sectors and portals visibility in REJECT
 - New feature: --roots=N parameter, where N is a positive number, to run plain multi-tree only for N best roots. See "Debug and other hidden parameters".
 - New feature: added non-default option to disable automatic discovery of self-referencing sectors when building reject (you can use VORTEX to manually make them visible again)
 - Enhancement: minor speed improvements when building reject for large maps where rejectSYMM optimization can be used (on by default, disabled by certain RMB effects)
