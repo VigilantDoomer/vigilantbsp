@@ -15,8 +15,10 @@ v0.91 (in development)
 - Enhancement: plain multi-tree now explicitly favors trees that can be represented in vanilla format, when targeting "vanilla" or "prefer vanilla" node formats.
 	For default "Vanilla format which all software ports recognise" setting, it will also favor a tree under signed limits of original game over any trees that require unsigned limits.
 - Enhancement: new selectable option for "nodes format compatibility": "Vanilla+ (remove multi-tree bias against unsigned trees)" (turns off a subset of previous enhancement)
-- Added --ableist parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
-- Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user. See "Debug and other hidden parameters"
+- Added --ableist debug parameter that restores behavior of previous version for multi-tree of just selecting the best tree, even if it won't fit vanilla and vanilla trees exist.
+- Added --nosymm debug parameter for disabling rejectSYMM optimization. Used for regression testing, has no benefits for end user.
+- Added --hashlump debug parameter. Used to help spot which lump contents are different for pre-release regression testing
+- The effect of --stknode debug parameter is no longer disabled for plain multi-tree nor node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
 - Bug fix: can now build vanilla trees in multi-tree when selecting node format "Prefer vanilla, switch to Zdoom (extended, compressed) nodes on overflow"
 - This release is no longer marked "alpha" -- VigilantBSP has been de facto stable for a while (above bugs didn't result in output corruption and so don't refute this statement)
 - The RMB manual that is bundled with VigilantBSP has been modified to include the new VORTEX and ASSERT options.

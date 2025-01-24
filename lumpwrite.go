@@ -19,7 +19,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"os"
 )
 
@@ -34,8 +37,12 @@ func WriteSliceLump(data []byte, curPos *uint32, fout *os.File, le []LumpEntry,
 	le[lumpIdx].FilePos = *curPos
 	le[lumpIdx].Size = uint32(len(data))
 	if len(s) > 0 {
-		Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.\n", lumpIdx,
-			s, postfix, le[lumpIdx].Size)
+		hashSuffix := ""
+		if config.HashLumps {
+			hashSuffix = fmt.Sprintf(" (HASH: %s)", Hash(data))
+		}
+		Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.%s\n", lumpIdx,
+			s, postfix, le[lumpIdx].Size, hashSuffix)
 	}
 	*curPos = *curPos + uint32(len(data))
 }
@@ -44,23 +51,47 @@ func WriteSliceLump(data []byte, curPos *uint32, fout *os.File, le []LumpEntry,
 // conversion before going to file
 func ConvertAndWriteGenericLump(data interface{}, curPos *uint32, fout *os.File,
 	le []LumpEntry, lumpIdx int, s string, postfix string) {
+	hashSuffix := ""
 	binary.Write(fout, binary.LittleEndian, data)
+	if config.HashLumps {
+		hashSuffix = fmt.Sprintf(" (HASH: %s)", HashIntf(data))
+	}
 	dataLen := binary.Size(data)
 	le[lumpIdx].FilePos = *curPos
 	le[lumpIdx].Size = uint32(dataLen)
-	Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.\n", lumpIdx, s,
-		postfix, le[lumpIdx].Size)
+	Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.%s\n", lumpIdx, s,
+		postfix, le[lumpIdx].Size, hashSuffix)
 	*curPos = *curPos + uint32(dataLen)
 }
 
 func ConvertAndWriteDeepNodes(data []DeepNode, curPos *uint32, fout *os.File,
 	le []LumpEntry, lumpIdx int, s string, postfix string) {
+	hashSuffix := ""
 	sigCnt, _ := fout.Write(DEEPNODES_SIG[:])
 	binary.Write(fout, binary.LittleEndian, data)
+	if config.HashLumps {
+		hashSuffix = fmt.Sprintf(" (HASH: %s)", HashIntf(data))
+	}
 	dataLen := binary.Size(data)
 	le[lumpIdx].FilePos = *curPos
 	le[lumpIdx].Size = uint32(dataLen + sigCnt)
-	Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.\n", lumpIdx, s,
-		postfix, le[lumpIdx].Size)
+	Log.Printf("Lump #%d (%s)%s has its size set to %d bytes.%s\n", lumpIdx, s,
+		postfix, le[lumpIdx].Size, hashSuffix)
 	*curPos = *curPos + uint32(dataLen+sigCnt)
+}
+
+// non-threadsafe encode of cryptographic hash, I assume
+func Hash(data []byte) string {
+	hsh := sha256.New()
+	hsh.Write(data)
+	su := hsh.Sum(nil)
+	return base64.StdEncoding.EncodeToString(su)
+}
+
+// same as Hash, but for arbitrary data instead of slice of bytes
+func HashIntf(data interface{}) string {
+	hsh := sha256.New()
+	binary.Write(hsh, binary.LittleEndian, data)
+	su := hsh.Sum(nil)
+	return base64.StdEncoding.EncodeToString(su)
 }

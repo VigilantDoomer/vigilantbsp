@@ -20,11 +20,14 @@ import (
 	"time"
 )
 
+type CreateNodeFunc func(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess
+
 type MultiformatPassthrough struct {
 	linesForZdoom WriteableLines
 	start         time.Time
 	input         *NodesInput
 	solidMap      *Blockmap
+	createNode    CreateNodeFunc
 }
 
 func VanillaOrZdoomFormat_Create(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
@@ -48,7 +51,7 @@ func VanillaOrZdoomFormat_Create(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	if config.NodeThreads == 1 { // reference to global: config
 		// sequential mode
 		Log.Printf("Running vanilla nodes format first (sequential run)\n")
-		rootNode = CreateNode(w, ts, bbox, super)
+		rootNode = passthrough.createNode(w, ts, bbox, super)
 		if w.isUnsignedOverflow() {
 			// Limits exceeded, must upgrade
 			Log.Printf("Vanilla nodes format overflowed, switching to Zdoom nodes format (sequential run)\n")
@@ -64,7 +67,7 @@ func VanillaOrZdoomFormat_Create(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 
 		Log.Printf("Running vanilla and zdoom generators in parallel to each other (concurrent run)")
 		go ZNodesGenerator(input2)
-		rootNode = CreateNode(w, ts, bbox, super)
+		rootNode = passthrough.createNode(w, ts, bbox, super)
 		useZdoom := false
 		if w.isUnsignedOverflow() {
 			// Limits exceeded, must upgrade

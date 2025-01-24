@@ -52,7 +52,21 @@ func (l *UDMF_Level) DoLevel(le []LumpEntry, idx int, action *ScheduledLump,
 	// TODO implement TEXTMAP parser
 	// parser should ideally be scheduled concurrently with writing to the bus
 	// when TEXTMAP parser failed (or doesn't exist lol), merely copy everything
+	// but, uh, the first implementation doesn't have to be this effecient
 	parseFail := true
+	if config.Reject == REJECT_NORMAL {
+		// currently no-op, but do check RMB
+		if !action.RMBOptions.isEmpty() {
+			Log.Printf("Not actually building REJECT, but acknowledging that a non-empty RMB frame exists:\n")
+			inherited := action.RMBOptions.Parent == nil ||
+				len(action.RMBOptions.Commands) == 0
+			inheritedStr := "yes"
+			if !inherited {
+				inheritedStr = "no"
+			}
+			Log.Printf("  level RMB frame is inherited from global RMB frame: " + inheritedStr + "\n")
+		}
+	}
 	if len(action.Level) > 1 { // supposed to be, normally, unless ENDMAP is missing
 		for _, subaction := range action.Level[1:] {
 			idx = subaction.DirIndex

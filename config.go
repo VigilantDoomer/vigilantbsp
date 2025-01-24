@@ -302,6 +302,7 @@ type ProgramConfig struct {
 	//
 	NoSymm      bool // disable symm reject interface
 	DisableUDMF bool // don't recognize udmf maps
+	HashLumps   bool // whether to calculate and print lump hash to standard output for level lumps
 }
 
 // PickNode values: PickNode_traditional, PickNode_visplaneKillough, PickNode_visplaneVigilant
@@ -371,6 +372,7 @@ func init() {
 		BlockmapTryConditionally: BM_TRYCOND_NONE,
 		NoSymm:                   false,
 		DisableUDMF:              true, //false, // not ready yet
+		HashLumps:                false,
 	})
 }
 

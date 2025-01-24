@@ -654,7 +654,7 @@ func (w *NodesWork) GetInitialStateClone() *NodesWork {
 	}
 
 	newW.qallocSupers = nil // never share between threads!
-	newW.stkBestPick = nil  // but this should be nil anyway
+	newW.stkRoot = nil      // reset, just in case
 
 	if w.parts != nil {
 		newW.parts = make([]*NodeSeg, 0)

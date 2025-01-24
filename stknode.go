@@ -100,6 +100,9 @@ type StkQueue struct {
 	// Past the "early report" phase, uplink receives data only at the very end,
 	// which will be done outside of Queue (although it might need to peruse
 	// Queue's data on what was sent)
+
+	// TODO some other way to do this -- currently a hack for plain multi-tree
+	pickSegIdx int
 }
 
 type StkQueueTask struct {
@@ -130,7 +133,12 @@ const ( // enumeration for StkQueueTask.action - notably, ready convex sectors a
 // StkEntryPoint is where the node tree building starts for --stknode
 // multi-tree hard should rather use StkInitOrReinit and StkCreateNode directly,
 // filling up queue in between
-func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *StkNode {
+func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock) *NodeInProcess {
+	return StkGenAll(w, ts, bbox, super, -1)
+}
+
+func StkGenAll(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Superblock,
+	pickSegIdx int) *NodeInProcess {
 	pqueue := new(*StkQueue)
 	StkInitOrReinit(w, pqueue)
 	queue := *pqueue
@@ -141,9 +149,12 @@ func StkTestEntryPoint(w *NodesWork, ts *NodeSeg, bbox *NodeBounds, super *Super
 	// value above 0 are specific
 	// values below -1 are undefined or panics
 	queue.DepthLimit = config.TreeReach // reference to global: config
+	queue.pickSegIdx = pickSegIdx
 	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
 
-	return StkCreateNode(w, ts, bbox, super, queue)
+	node := StkCreateNode(w, ts, bbox, super, queue)
+	w.stkRoot = node              // <-- full result returned here
+	return getNodeInProcess(node) // abridged result as conventional NodeInProcess
 }
 
 // multi-tree hard will setup this first
@@ -182,6 +193,11 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	b := true
 	var firstRes *StkNode
 	task := queue.Dequeue()
+	pickSegIdx := -1
+	if queue != nil && queue.pickSegIdx >= 0 {
+		pickSegIdx = queue.pickSegIdx
+		queue.pickSegIdx = -1
+	}
 	for b {
 		singleSectorMode := false
 		if task != nil {
@@ -209,6 +225,13 @@ func StkCreateNode(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 		if singleSectorMode {
 			w.stkDivisorSS(w, ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)
+		} else if pickSegIdx >= 0 {
+			// should only be executed for root node (multi-tree plain with --stknode),
+			// mega-trees will use a different mechanism altogether
+			partsegs = append(partsegs, getPartSeg(ts, w.allSegs[pickSegIdx]))
+			w.MTP_DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
+				&leftsSuper, w.allSegs[pickSegIdx])
+			pickSegIdx = -1
 		} else {
 			w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)

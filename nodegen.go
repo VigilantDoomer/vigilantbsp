@@ -214,10 +214,10 @@ type NodesWork struct {
 	// vertexSink is used to track all AddVertex requests by returned indices
 	// (even when vertex was not added). stknode installs this for node_rearrange.go
 	vertexSink []int
-	// stkBestPick is only assigned at the end of hard multi-tree, so nil for most
-	// NodesWork instances, as there is only 1 winner, and only it will have this
-	// set
-	stkBestPick *StkNode
+	// stkRoot is the return result of hard multi-tree (for best tree) and --stknode
+	// modes. It is passed through NodesWork structure rather than as a variable in
+	// order to better integrate with plain multi-tree and mega-tree
+	stkRoot *StkNode
 	// Stuff related to zdoom nodes, with exception to deepNodes, which is above
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -364,18 +364,7 @@ func NodesGenerator(input *NodesInput) {
 			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
 		}
 	}
-	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED &&
-		(input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
-			input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
-		// stknode doesn't support vanilla_or_zdoom format mode -- yet.
-		// ok, disabled node_rearrange for multi-tree, so vanilla_or_zdoom can work
-		// properly with (future) hard multi-tree
-		// TODO implement support for stknode to build vanilla but fallback on zdoom format
-		input.stkNode = false
-		if !isZDoomNodes() { // so that message is printed only once
-			Log.Error("Building in --stknode mode is not supported for \"vanilla with Zdoom nodes fallback\", disabling stknode.\n")
-		}
-	}
+
 	if config.Ableist && // reference to global: config
 		input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
 		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
@@ -621,38 +610,41 @@ func NodesGenerator(input *NodesInput) {
 
 	// The main act
 	var rootNode *NodeInProcess
-	var stkRoot *StkNode
 	treeCount := 0
 	if input.multiTreeMode == MULTITREE_NOTUSED { // This is a most commonly used single-tree mode
-		if input.stkNode {
-			// breadth-first node creation (for debug purposes, debug parameter
-			// --stknode, this variant is normally used for HARD multi-tree
-			// only and is only available for single-tree to make it easier
-			// compare results in deterministic mode and ensure they are
-			// identical)
-			stkRoot = StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
-			rootNode = getNodeInProcess(stkRoot)
-		} else {
-			if cloneEarly {
-				// vanilla_or_zdoom* nodes format -- contrived operation here
-				// keep in mind that Zdoom generator branch won't reach here, this
-				// is dispatch that runs in non-Zdoom generator
-				passthrough := &MultiformatPassthrough{
-					input:         input,
-					solidMap:      solidMap,
-					linesForZdoom: linesForZdoom,
-					start:         start,
-				}
-				rootNode = VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
-					initialSuper, oldNodeType, passthrough)
-				if rootNode == nil {
-					return // message was sent from Zdoom generator spawned from dispatch
-				}
+		if cloneEarly {
+			// vanilla_or_zdoom* nodes format -- contrived operation here
+			// keep in mind that Zdoom generator branch won't reach here, this
+			// is dispatch that runs in non-Zdoom generator
+			passthrough := &MultiformatPassthrough{
+				input:         input,
+				solidMap:      solidMap,
+				linesForZdoom: linesForZdoom,
+				start:         start,
+			}
+			if input.stkNode {
+				passthrough.createNode = StkTestEntryPoint
 			} else {
-				// classic recursive node creation (the default)
+				passthrough.createNode = CreateNode
+			}
+			rootNode = VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
+				initialSuper, oldNodeType, passthrough)
+			if rootNode == nil {
+				return // message was sent from Zdoom generator spawned from dispatch
+			}
+		} else {
+			if input.stkNode {
+				// breadth-first node creation (for debug purposes, debug parameter
+				// --stknode, this variant is normally used for HARD multi-tree
+				// only and is only available for single-tree to make it easier
+				// compare results in deterministic mode and ensure they are
+				// identical)
+				rootNode = StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			} else { // classic recursive node creation (the default)
 				rootNode = CreateNode(&workData, rootSeg, rootBox, initialSuper)
 			}
 		}
+
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
 		// Create multiple trees - bruteforce ROOT node among all (one-sided,
 		// two-sided, or every - depending on input.specialRootMode), the REST
@@ -700,6 +692,15 @@ func NodesGenerator(input *NodesInput) {
 			}
 		}
 
+		if input.stkNode {
+			if foreign == nil {
+				foreign = &MTPForeignInput{
+					Action: MTP_FOREIGN_EXTRADATA,
+				}
+			}
+			foreign.rootFunc = StkGenAll
+		}
+
 		rootNode, treeCount = MTPSentinel_MakeBestBSPTree(&workData, rootBox,
 			initialSuper, input.specialRootMode, oldNodeType, foreign)
 		if rootNode == nil {
@@ -708,7 +709,7 @@ func NodesGenerator(input *NodesInput) {
 	} else {
 		Log.Panic("Multi-tree variant not implemented.\n")
 		// TODO for hard multi-tree, don't forget this
-		// stkRoot = w.stkBestPick (must be non-nil, else panic)
+		// stkRoot = workData.stkRoot (must be non-nil, else panic)
 		// rootNode will be returned conventionally. Doing otherwise is not possible
 		// to support mega-trees without either much code duplication or degradation
 		// of performance for plain multi-tree
@@ -756,22 +757,23 @@ func NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
-	if input.stkNode {
+	if input.stkNode && workData.stkRoot != nil {
 		// check against memory corruption or incorrect use of pointers within
 		// StkNode. Won't allow to proceed (panics) if anything is off
-		if uintptr(unsafe.Pointer(stkRoot)) != uintptr(unsafe.Pointer(rootNode)) {
+		if uintptr(unsafe.Pointer(workData.stkRoot)) != uintptr(unsafe.Pointer(rootNode)) {
 			Log.Panic("Invalid root: stkRoot != rootNode (programmer error)")
 		}
-		AssertStkNodeIntegrity(stkRoot)
+		AssertStkNodeIntegrity(workData.stkRoot)
 	}
 
-	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
+	if input.stkNode && (input.multiTreeMode == MULTITREE_NOTUSED ||
+		input.multiTreeMode == MULTITREE_ROOT_ONLY) {
 		// If stknode mode was enabled through debug parameter, do perform
 		// rearrangement, so that can compare resulting wad with non-stknode build
 		// for identity and confirm validity that way. This, of course, implies both
 		// stknode and non-stknode builds of the wad are done with deterministism
 		// (-d parameter).
-		// But, won't do this for multi-tree anymore, because:
+		// But, won't intend this for hard multi-tree anymore, because:
 		// 1) if hard multi-tree gets implemented (work is underway as of January 2025),
 		// it will be in single-threaded mode, and multi-threaded mode will still
 		// require a lot of work
@@ -781,10 +783,9 @@ func NodesGenerator(input *NodesInput) {
 		// backtracking in later version
 		// 3) for single-threaded, is unnecessary, and creates additional point of
 		// failure at the end of length process of crunching millions of trees
-		// 4) I have another idea, it is a spoiler but it will get around the lack
-		// of multi-threading for initial brainstormed implementation of hard
-		// multi-tree
-		if stkRoot == nil {
+		// 4) mega-trees will support multi-threading anyway, although the feedback
+		// (as in progress report) may be lacking...
+		if workData.stkRoot == nil {
 			// if rearrangement is used with multi-tree again, this catches changes
 			// programmer forgot to implement, such as NOT calling StkFree anymore,
 			// which deletes this data exactly
@@ -798,14 +799,11 @@ func NodesGenerator(input *NodesInput) {
 				// might have been integer overflow in FirstSeg)
 				// NOTE call to tooManySegsCantFix(_true_) is ok, because it doesn't
 				// modify stuff. Just don't mess with seg arrangement
-				workData.RearrangeBSPVanilla(stkRoot, pristineVertexCache,
-					pristineVertexMap)
+				workData.RearrangeBSPVanilla(pristineVertexCache, pristineVertexMap)
 			} else if workData.nodeType == NODETYPE_DEEP {
-				workData.RearrangeBSPDeep(stkRoot, pristineVertexCache,
-					pristineVertexMap)
+				workData.RearrangeBSPDeep(pristineVertexCache, pristineVertexMap)
 			} else { // NODETYPE_EXTENDED / NODETYPE_COMPRESSED
-				workData.RearrangeBSPExtended(stkRoot, pristineVertexCache,
-					pristineVertexMap)
+				workData.RearrangeBSPExtended(pristineVertexCache, pristineVertexMap)
 			}
 		}
 	}

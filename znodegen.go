@@ -96,7 +96,7 @@ type ZExt_NodesWork struct {
 
 	vertexSink []int
 
-	stkBestPick *StkNode
+	stkRoot *StkNode
 
 	zdoomVertexHeader *ZdoomNode_VertexHeader
 	zdoomVertices     []ZdoomNode_Vertex
@@ -150,15 +150,7 @@ func ZExt_NodesGenerator(input *NodesInput) {
 			Log.Printf("Relaxed vanilla nodes target (-nc=V) does not produce any effect in non-multi-trees modes.\n")
 		}
 	}
-	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED &&
-		(input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
-			input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
 
-		input.stkNode = false
-		if !ZExt_isZDoomNodes() {
-			Log.Error("Building in --stknode mode is not supported for \"vanilla with Zdoom nodes fallback\", disabling stknode.\n")
-		}
-	}
 	if config.Ableist &&
 		input.multiTreeMode != MULTITREE_NOTUSED && (input.nodeType == NODETYPE_VANILLA_OR_ZEXTENDED ||
 		input.nodeType == NODETYPE_VANILLA_OR_ZCOMPRESSED) {
@@ -386,32 +378,35 @@ func ZExt_NodesGenerator(input *NodesInput) {
 	}
 
 	var rootNode *NodeInProcess
-	var stkRoot *StkNode
 	treeCount := 0
 	if input.multiTreeMode == MULTITREE_NOTUSED {
-		if input.stkNode {
+		if cloneEarly {
 
-			stkRoot = ZExt_StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
-			rootNode = getNodeInProcess(stkRoot)
-		} else {
-			if cloneEarly {
-
-				passthrough := &MultiformatPassthrough{
-					input:         input,
-					solidMap:      solidMap,
-					linesForZdoom: linesForZdoom,
-					start:         start,
-				}
-				rootNode = ZExt_VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
-					initialSuper, oldNodeType, passthrough)
-				if rootNode == nil {
-					return
-				}
+			passthrough := &ZExt_MultiformatPassthrough{
+				input:         input,
+				solidMap:      solidMap,
+				linesForZdoom: linesForZdoom,
+				start:         start,
+			}
+			if input.stkNode {
+				passthrough.createNode = ZExt_StkTestEntryPoint
 			} else {
+				passthrough.createNode = ZExt_CreateNode
+			}
+			rootNode = ZExt_VanillaOrZdoomFormat_Create(&workData, rootSeg, rootBox,
+				initialSuper, oldNodeType, passthrough)
+			if rootNode == nil {
+				return
+			}
+		} else {
+			if input.stkNode {
 
+				rootNode = ZExt_StkTestEntryPoint(&workData, rootSeg, rootBox, initialSuper)
+			} else {
 				rootNode = ZExt_CreateNode(&workData, rootSeg, rootBox, initialSuper)
 			}
 		}
+
 	} else if input.multiTreeMode == MULTITREE_ROOT_ONLY {
 
 		if workData.sidenessCache.maxKnownAlias == 0 {
@@ -444,6 +439,15 @@ func ZExt_NodesGenerator(input *NodesInput) {
 				input:         input,
 				solidMap:      solidMap,
 			}
+		}
+
+		if input.stkNode {
+			if foreign == nil {
+				foreign = &ZExt_MTPForeignInput{
+					Action: MTP_FOREIGN_EXTRADATA,
+				}
+			}
+			foreign.rootFunc = ZExt_StkGenAll
 		}
 
 		rootNode, treeCount = ZExt_MTPSentinel_MakeBestBSPTree(&workData, rootBox,
@@ -488,31 +492,29 @@ func ZExt_NodesGenerator(input *NodesInput) {
 		workData.upgradeToDeep()
 	}
 
-	if input.stkNode {
+	if input.stkNode && workData.stkRoot != nil {
 
-		if uintptr(unsafe.Pointer(stkRoot)) != uintptr(unsafe.Pointer(rootNode)) {
+		if uintptr(unsafe.Pointer(workData.stkRoot)) != uintptr(unsafe.Pointer(rootNode)) {
 			Log.Panic("Invalid root: stkRoot != rootNode (programmer error)")
 		}
-		AssertStkNodeIntegrity(stkRoot)
+		AssertStkNodeIntegrity(workData.stkRoot)
 	}
 
-	if input.stkNode && input.multiTreeMode == MULTITREE_NOTUSED {
+	if input.stkNode && (input.multiTreeMode == MULTITREE_NOTUSED ||
+		input.multiTreeMode == MULTITREE_ROOT_ONLY) {
 
-		if stkRoot == nil {
+		if workData.stkRoot == nil {
 
 			Log.Printf("Impossible to do rearrangement -- StkNode data not established (programmer error)\n")
 			Log.Printf("Rearrangement step skipped, program will proceed fine\n")
 		} else {
 			if workData.nodeType == NODETYPE_VANILLA {
 
-				workData.RearrangeBSPVanilla(stkRoot, pristineVertexCache,
-					pristineVertexMap)
+				workData.RearrangeBSPVanilla(pristineVertexCache, pristineVertexMap)
 			} else if workData.nodeType == NODETYPE_DEEP {
-				workData.RearrangeBSPDeep(stkRoot, pristineVertexCache,
-					pristineVertexMap)
+				workData.RearrangeBSPDeep(pristineVertexCache, pristineVertexMap)
 			} else {
-				workData.RearrangeBSPExtended(stkRoot, pristineVertexCache,
-					pristineVertexMap)
+				workData.RearrangeBSPExtended(pristineVertexCache, pristineVertexMap)
 			}
 		}
 	}
@@ -1689,7 +1691,7 @@ func (w *ZExt_NodesWork) GetInitialStateClone() *ZExt_NodesWork {
 	}
 
 	newW.qallocSupers = nil
-	newW.stkBestPick = nil
+	newW.stkRoot = nil
 
 	if w.parts != nil {
 		newW.parts = make([]*ZExt_NodeSeg, 0)
@@ -4235,6 +4237,7 @@ type ZExt_MTPForeignInput struct {
 	solidMap      *Blockmap
 	rootFunc      ZExt_CreateRootNodeForPick
 	reportStr     string
+	announceStr   string
 }
 
 type ZExt_CreateRootNodeForPick func(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
@@ -4245,7 +4248,12 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	foreign *ZExt_MTPForeignInput) (*NodeInProcess, int) {
 
 	rootFunc := ZExt_MTP_CreateRootNode
+	if foreign != nil && foreign.rootFunc != nil {
+		rootFunc = foreign.rootFunc
+	}
+
 	reportStr := "Multi-tree: processed %d/%d trees\n"
+	announceStr := "Multi-tree crunch threads are launched -- waiting for completion reports.\n"
 
 	if foreign == nil || foreign.Action == MTP_FOREIGN_EXTRADATA {
 		Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
@@ -4255,11 +4263,12 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 		case MTP_FOREIGN_EXTRADATA:
 			Log.Panic("MTP_FOREIGN_EXTRADATA was supposed to be handled in another branch (programmer error)\n")
 		case MTP_FOREIGN_THIS_ONE_LINEDEF:
-			rootNode := ZExt_MTP_OneTree(w, w.allSegs[0], bbox, super, foreign.LineIdx)
+			rootNode := ZExt_MTP_OneTree(w, w.allSegs[0], bbox, super, foreign.LineIdx,
+				rootFunc)
 			return rootNode, 1
-		case MTP_FOREIGN_CUSTOM_ROOT_FUNC:
-			rootFunc = foreign.rootFunc
+		case MTP_FOREIGN_CUSTOM_LABEL:
 			reportStr = foreign.reportStr
+			announceStr = foreign.announceStr
 		default:
 			Log.Panic("Unknown foreign action for MTPSentinel: %d (programmer error)\n", foreign.Action)
 		}
@@ -4364,6 +4373,8 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	treesDone := 0
 	maxTrees := len(rootSegCandidates)
 
+	Log.Printf(announceStr)
+
 	var bestResult, bestVanillaResult, bestStrictVanillaResult *ZExt_MTPWorker_Result
 	for len(branches) > 0 {
 		chi, recv, recvOk := reflect.Select(branches)
@@ -4430,7 +4441,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 		bestResult = bestVanillaResult
 	}
 
-	Log.Printf("Multi-tree finished processing trees (%d out of %d - should be equal)", treesDone,
+	Log.Printf("Finished processing trees (%d out of %d - should be equal)", treesDone,
 		lastFedIdx+1)
 
 	if vanillaBias && bestVanillaResult == nil {
@@ -4466,6 +4477,7 @@ func ZExt_MTPSentinel_MakeBestBSPTree(w *ZExt_NodesWork, bbox *NodeBounds,
 	oldLines := w.lines
 	*w = *(bestResult.workData)
 	oldLines.AssignFrom(w.lines)
+	w.lines = oldLines
 	return bestResult.bspTree, treesDone
 }
 
@@ -4740,7 +4752,7 @@ func ZExt_zoneAllocSupers(sz int, pseudoSuper *ZExt_Superblock) *ZExt_Superblock
 }
 
 func ZExt_MTP_OneTree(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
-	super *ZExt_Superblock, lineIdx uint16) *NodeInProcess {
+	super *ZExt_Superblock, lineIdx uint16, rootFunc ZExt_CreateRootNodeForPick) *NodeInProcess {
 	cur := w.allSegs[0].Linedef
 	idx := 0
 	for ; idx < len(w.allSegs); idx++ {
@@ -4752,7 +4764,7 @@ func ZExt_MTP_OneTree(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 	if cur != lineIdx {
 		Log.Panic("Seg from linedef %d is not found\n", lineIdx)
 	}
-	return ZExt_MTP_CreateRootNode(w, ts, bbox, super, idx)
+	return rootFunc(w, ts, bbox, super, idx)
 }
 
 func ZExt_MTP_ZenRootEnumerate(w *ZExt_NodesWork, bbox *NodeBounds) []int {
@@ -4775,6 +4787,16 @@ func ZExt_MTP_ZenRootEnumerate(w *ZExt_NodesWork, bbox *NodeBounds) []int {
 
 	Log.Merge(w2.mlog, "")
 	return res
+}
+
+type ZExt_CreateNodeFunc func(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess
+
+type ZExt_MultiformatPassthrough struct {
+	linesForZdoom WriteableLines
+	start         time.Time
+	input         *NodesInput
+	solidMap      *Blockmap
+	createNode    ZExt_CreateNodeFunc
 }
 
 func (w *ZExt_NodesWork) isUnsignedOverflow() bool {
@@ -5169,7 +5191,7 @@ func ZExt_isZDoomNodes() bool {
 
 func ZExt_VanillaOrZdoomFormat_Create(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 	super *ZExt_Superblock, oldNodeType int,
-	passthrough *MultiformatPassthrough) *NodeInProcess {
+	passthrough *ZExt_MultiformatPassthrough) *NodeInProcess {
 
 	Log.Panic("Unreachable code called: VanillaOrZdoomFormat_Create in Zdoom nodes generator (programmer error)\n")
 	return nil
@@ -6584,9 +6606,10 @@ type ZExt_RearrangeTracker struct {
 	vertexMap          *ZExt_VertexMap
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPVanilla(rootNode *StkNode,
-	pristineVertexCache map[SimpleVertex]int,
+func (w *ZExt_NodesWork) RearrangeBSPVanilla(pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *ZExt_VertexMap) {
+
+	rootNode := w.stkRoot
 
 	track := &ZExt_RearrangeTracker{
 		totals:      &NodesTotals{},
@@ -6753,9 +6776,9 @@ func (w *ZExt_NodesWork) identifyLinedefVertices(track *ZExt_RearrangeTracker) b
 	return true
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPDeep(node *StkNode,
-	pristineVertexCache map[SimpleVertex]int,
+func (w *ZExt_NodesWork) RearrangeBSPDeep(pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *ZExt_VertexMap) {
+	rootNode := w.stkRoot
 
 	track := &ZExt_RearrangeTracker{
 		totals:         &NodesTotals{},
@@ -6769,8 +6792,8 @@ func (w *ZExt_NodesWork) RearrangeBSPDeep(node *StkNode,
 		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
 		return
 	}
-	w.rearrangeVertices(node, track)
-	w.rearrangeDeep(node, track)
+	w.rearrangeVertices(rootNode, track)
+	w.rearrangeDeep(rootNode, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
 		track.cntVerts != w.lines.GetVerticesCount() {
@@ -6837,9 +6860,9 @@ func (w *ZExt_NodesWork) renumberDeepSegVertices(seg *DeepSeg,
 	seg.EndVertex = uint32(track.verticeRenumbering[e])
 }
 
-func (w *ZExt_NodesWork) RearrangeBSPExtended(node *StkNode,
-	pristineVertexCache map[SimpleVertex]int,
+func (w *ZExt_NodesWork) RearrangeBSPExtended(pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *ZExt_VertexMap) {
+	rootNode := w.stkRoot
 
 	track := &ZExt_RearrangeTracker{
 		totals:          &NodesTotals{},
@@ -6850,8 +6873,8 @@ func (w *ZExt_NodesWork) RearrangeBSPExtended(node *StkNode,
 		vertices:        make([]ZExt_NodeVertex, 0, cap(w.vertices)),
 	}
 	w.initTranslateVectorForExtended(track)
-	w.rearrangeExtendedVertices(node, track)
-	w.rearrangeExtended(node, track)
+	w.rearrangeExtendedVertices(rootNode, track)
+	w.rearrangeExtended(rootNode, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
 		uint32(track.cntVerts) != uint32(len(track.vertices)) {
@@ -6995,6 +7018,8 @@ type ZExt_StkQueue struct {
 	cur        int
 
 	tmp *ZExt_StkQueueTask
+
+	pickSegIdx int
 }
 
 type ZExt_StkQueueTask struct {
@@ -7012,15 +7037,22 @@ type ZExt_StkQueueTask struct {
 	node         *StkNode
 }
 
-func ZExt_StkTestEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *StkNode {
+func ZExt_StkTestEntryPoint(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock) *NodeInProcess {
+	return ZExt_StkGenAll(w, ts, bbox, super, -1)
+}
+
+func ZExt_StkGenAll(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds, super *ZExt_Superblock, pickSegIdx int) *NodeInProcess {
 	pqueue := new(*ZExt_StkQueue)
 	ZExt_StkInitOrReinit(w, pqueue)
 	queue := *pqueue
 
 	queue.DepthLimit = config.TreeReach
+	queue.pickSegIdx = pickSegIdx
 	queue.Enqueue(STK_QUEUE_REGULARNODE, ts, bbox, super, false)
 
-	return ZExt_StkCreateNode(w, ts, bbox, super, queue)
+	node := ZExt_StkCreateNode(w, ts, bbox, super, queue)
+	w.stkRoot = node
+	return getNodeInProcess(node)
 }
 
 func ZExt_StkInitOrReinit(w *ZExt_NodesWork, pqueue **ZExt_StkQueue) {
@@ -7049,6 +7081,11 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 	b := true
 	var firstRes *StkNode
 	task := queue.Dequeue()
+	pickSegIdx := -1
+	if queue != nil && queue.pickSegIdx >= 0 {
+		pickSegIdx = queue.pickSegIdx
+		queue.pickSegIdx = -1
+	}
 	for b {
 		singleSectorMode := false
 		if task != nil {
@@ -7076,6 +7113,12 @@ func ZExt_StkCreateNode(w *ZExt_NodesWork, ts *ZExt_NodeSeg, bbox *NodeBounds,
 		if singleSectorMode {
 			w.stkDivisorSS(w, ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)
+		} else if pickSegIdx >= 0 {
+
+			partsegs = append(partsegs, ZExt_getPartSeg(ts, w.allSegs[pickSegIdx]))
+			w.MTP_DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
+				&leftsSuper, w.allSegs[pickSegIdx])
+			pickSegIdx = -1
 		} else {
 			w.DivideSegs(ts, &rights, &lefts, bbox, super, &rightsSuper,
 				&leftsSuper, &partsegs)

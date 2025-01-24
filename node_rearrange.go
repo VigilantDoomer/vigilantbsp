@@ -59,9 +59,10 @@ type RearrangeTracker struct {
 // so that the wad output matches what the traditional method (recursion) would
 // produce. Only for levels within vanilla seg and subsector count limits,
 // though
-func (w *NodesWork) RearrangeBSPVanilla(rootNode *StkNode,
-	pristineVertexCache map[SimpleVertex]int,
+func (w *NodesWork) RearrangeBSPVanilla(pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *VertexMap) {
+
+	rootNode := w.stkRoot
 
 	track := &RearrangeTracker{
 		totals:      &NodesTotals{},
@@ -238,9 +239,9 @@ func (w *NodesWork) identifyLinedefVertices(track *RearrangeTracker) bool {
 }
 
 // RearrangeBSPDeep - see RearrangeBSPVanilla's description
-func (w *NodesWork) RearrangeBSPDeep(node *StkNode,
-	pristineVertexCache map[SimpleVertex]int,
+func (w *NodesWork) RearrangeBSPDeep(pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *VertexMap) {
+	rootNode := w.stkRoot
 	// FIXME Mixing uint32 and int for indexing vertices
 	// Investigate impact - might need to build map that requires vertice indices
 	// larger than int32, in 32-bit address space, maybe we have trouble
@@ -257,8 +258,8 @@ func (w *NodesWork) RearrangeBSPDeep(node *StkNode,
 		Log.Printf("RearrangeBSP: cancelled because of incorrect linedef->vertice references\n")
 		return
 	}
-	w.rearrangeVertices(node, track)
-	w.rearrangeDeep(node, track)
+	w.rearrangeVertices(rootNode, track)
+	w.rearrangeDeep(rootNode, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
 		track.cntVerts != w.lines.GetVerticesCount() {
@@ -331,9 +332,9 @@ func (w *NodesWork) renumberDeepSegVertices(seg *DeepSeg,
 // value, but zdoomVertexHeader.NumExtendedVertices does not (is set to zero
 // instead) and is only set *much* later, when extended nodes are about to get
 // written
-func (w *NodesWork) RearrangeBSPExtended(node *StkNode,
-	pristineVertexCache map[SimpleVertex]int,
+func (w *NodesWork) RearrangeBSPExtended(pristineVertexCache map[SimpleVertex]int,
 	pristineVertexMap *VertexMap) {
+	rootNode := w.stkRoot
 	// FIXME Mixing uint32 and int for indexing vertices
 	// Investigate impact - might need to build map that requires vertice indices
 	// larger than int32, in 32-bit address space, maybe we have trouble
@@ -347,8 +348,8 @@ func (w *NodesWork) RearrangeBSPExtended(node *StkNode,
 		vertices:        make([]NodeVertex, 0, cap(w.vertices)),
 	}
 	w.initTranslateVectorForExtended(track)
-	w.rearrangeExtendedVertices(node, track)
-	w.rearrangeExtended(node, track)
+	w.rearrangeExtendedVertices(rootNode, track)
+	w.rearrangeExtended(rootNode, track)
 	if w.totals.numSegs != track.totals.numSegs ||
 		w.totals.numSSectors != track.totals.numSSectors ||
 		uint32(track.cntVerts) != uint32(len(track.vertices)) {

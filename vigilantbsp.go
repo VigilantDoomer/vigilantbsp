@@ -201,6 +201,13 @@ func main() {
 	if (zerosToInsert > 0) && (le[0].Size == 0) {
 		// And if first entry in directory is a lump of zero size, 8 ZERO bytes may
 		// become available! Remember to set offset to 0 for that lump, though
+		// 2025-01-23 this means that if we could create lump at that place,
+		// we could have had an error, as new lumps are created with zero size as
+		// well, but they don't stay that way. Fortunately, this never happens for
+		// as long as we only make lumps inside level, where they are always preceded
+		// by an existing level marker
+		// TODO insert a safeguard nonetheless for sanity's sake -- test if entry was
+		// pre-existing
 		decr := uint32(8)
 		ZeroOffsetFirstLump = true
 		if zerosToInsert > 8 {

@@ -296,11 +296,14 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 	return leOut
 }
 
-// NOTE level.go doesn't use validities. They are for UpdateDirectoryAndSchedule
-// use. Names can be parsed out of le[action.DirIndex].Name[:], where action
-// corresponds to scheduleLump with Level != nil
-// For isInputWad == true, initializes InputWad global variable. Loading input wad
-// is only valid once, next call with isInputWad==true will bomb out
+// LoadWadDirectory parses lumps list, establishes which lumps are level lumps.
+// - isInputWad == true should only be used for a single input wad, on the basis of
+// which output is produced. rejectsize and troll must then be provided.
+// - isInputWad == false is used for wads loaded as a resource, for example, to source
+// REJECT lump for RMB option NOPROCESS. Such wads usually intended to be read but
+// never written, their role is secondary. Consequently, for them rejectsize and troll
+// should be nil, eject == false, RMB == nil (as it is not these wads to which RMB
+// applies)
 func LoadWadDirectory(isInputWad bool, le []LumpEntry, rejectsize map[int]uint32,
 	troll *Troll, eject bool, RMB *LoadedRMB) *WadDir {
 
@@ -445,11 +448,12 @@ func LoadWadDirectory(isInputWad bool, le []LumpEntry, rejectsize map[int]uint32
 		lvlName := GetLumpName(le, action)
 		Log.Error("The last UDMF level \"%s\" parsed was absent ENDMAP marker (reached end of wad directory without finding ENDMAP).\n",
 			lvlName)
-		Log.Error("It is thus invalid UDMF level and won't be rebuilt\n")
+		Log.Error("It will be ignored (not considered a level)\n")
 		// unroll it
 		prev := action
 		for _, subaction := range action.Level {
 			prev.Next = subaction
+			prev = subaction
 		}
 		action.Level = nil
 		validities = validities[:len(validities)-1]
@@ -472,10 +476,8 @@ func (pw *PinnedWad) LookupLevel(lumpName string) *ScheduledLump {
 	}
 	schedule := pw.scheduleRoot
 	for {
-		if schedule.Level != nil {
-			if GetLumpName(pw.le, schedule) == lumpName {
-				return schedule
-			}
+		if schedule.Level != nil && GetLumpName(pw.le, schedule) == lumpName {
+			return schedule
 		}
 
 		schedule = schedule.Next

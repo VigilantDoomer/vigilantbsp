@@ -370,10 +370,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 
 				detailFriendliness: config.NodeDetailFriendliness, // global config
 				cacheSideness:      cacheSideness,
-				stkNode: (config.MultiTreeMode == MULTITREE_NOTUSED &&
-					config.StkNode) ||
-					(config.MultiTreeMode == MULTITREE_HARD), // global config
-				width: treeWidth,
+				stkNode:            config.MultiTreeMode == MULTITREE_HARD || config.StkNode, // global config
+				width:              treeWidth,
 			}
 			if nodeType == NODETYPE_DEEP || nodeType == NODETYPE_VANILLA ||
 				nodeType == NODETYPE_VANILLA_RELAXED ||

@@ -69,15 +69,19 @@ type MTPForeignInput struct {
 	solidMap      *Blockmap
 	rootFunc      CreateRootNodeForPick
 	reportStr     string
+	announceStr   string
 }
 
 // preparation for... something. Used to be hardcoded to MTP_CreateRootNode
+// ok, --stknode now already uses it since it can be now used with plain multi-tree,
+// but it is originally intended for mega-tree, and will indeed be used there once
+// they are implemented
 type CreateRootNodeForPick func(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	pseudoSuper *Superblock, pickSegIdx int) *NodeInProcess
 
 const MTP_FOREIGN_EXTRADATA = 0
 const MTP_FOREIGN_THIS_ONE_LINEDEF = 1
-const MTP_FOREIGN_CUSTOM_ROOT_FUNC = 2
+const MTP_FOREIGN_CUSTOM_LABEL = 2
 
 // To avoid running out of memory, there is a limit on the number of workers
 // that can be designated in auto-mode (but this limit will be ignored if user
@@ -94,7 +98,12 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	foreign *MTPForeignInput) (*NodeInProcess, int) {
 
 	rootFunc := MTP_CreateRootNode
+	if foreign != nil && foreign.rootFunc != nil { // assign
+		rootFunc = foreign.rootFunc
+	}
+
 	reportStr := "Multi-tree: processed %d/%d trees\n"
+	announceStr := "Multi-tree crunch threads are launched -- waiting for completion reports.\n"
 
 	if foreign == nil || foreign.Action == MTP_FOREIGN_EXTRADATA {
 		Log.Printf("Nodes builder: info: you have selected multi-tree mode with bruteforce for root partition only.\n")
@@ -104,11 +113,12 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 		case MTP_FOREIGN_EXTRADATA:
 			Log.Panic("MTP_FOREIGN_EXTRADATA was supposed to be handled in another branch (programmer error)\n")
 		case MTP_FOREIGN_THIS_ONE_LINEDEF:
-			rootNode := MTP_OneTree(w, w.allSegs[0], bbox, super, foreign.LineIdx)
+			rootNode := MTP_OneTree(w, w.allSegs[0], bbox, super, foreign.LineIdx,
+				rootFunc)
 			return rootNode, 1
-		case MTP_FOREIGN_CUSTOM_ROOT_FUNC:
-			rootFunc = foreign.rootFunc
+		case MTP_FOREIGN_CUSTOM_LABEL:
 			reportStr = foreign.reportStr
+			announceStr = foreign.announceStr
 		default:
 			Log.Panic("Unknown foreign action for MTPSentinel: %d (programmer error)\n", foreign.Action)
 		}
@@ -238,6 +248,8 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	treesDone := 0
 	maxTrees := len(rootSegCandidates)
 
+	Log.Printf(announceStr) // ... crunch threads are launched -- waiting for completion reports.
+
 	// Now peek results of workers as they come, feeding next input to every
 	// worker that delivers result until no more inputs to try
 	var bestResult, bestVanillaResult, bestStrictVanillaResult *MTPWorker_Result
@@ -309,7 +321,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 		bestResult = bestVanillaResult
 	}
 
-	Log.Printf("Multi-tree finished processing trees (%d out of %d - should be equal)", treesDone,
+	Log.Printf("Finished processing trees (%d out of %d - should be equal)", treesDone,
 		lastFedIdx+1)
 
 	// Assess compromises made
@@ -349,6 +361,7 @@ func MTPSentinel_MakeBestBSPTree(w *NodesWork, bbox *NodeBounds,
 	oldLines := w.lines // !!! level.go retains reference to old w.lines
 	*w = *(bestResult.workData)
 	oldLines.AssignFrom(w.lines) // so must clobber the data in old w.lines with the new one
+	w.lines = oldLines           // make sure it points to the actual, so that --stknode works
 	return bestResult.bspTree, treesDone
 }
 
@@ -717,7 +730,7 @@ func zoneAllocSupers(sz int, pseudoSuper *Superblock) *Superblock {
 }
 
 func MTP_OneTree(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
-	super *Superblock, lineIdx uint16) *NodeInProcess {
+	super *Superblock, lineIdx uint16, rootFunc CreateRootNodeForPick) *NodeInProcess {
 	cur := w.allSegs[0].Linedef
 	idx := 0
 	for ; idx < len(w.allSegs); idx++ {
@@ -729,7 +742,7 @@ func MTP_OneTree(w *NodesWork, ts *NodeSeg, bbox *NodeBounds,
 	if cur != lineIdx {
 		Log.Panic("Seg from linedef %d is not found\n", lineIdx)
 	}
-	return MTP_CreateRootNode(w, ts, bbox, super, idx)
+	return rootFunc(w, ts, bbox, super, idx)
 }
 
 func MTP_ZenRootEnumerate(w *NodesWork, bbox *NodeBounds) []int {

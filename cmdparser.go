@@ -263,6 +263,9 @@ func (c *ProgramConfig) FromCommandLine() bool {
 							return false
 						}
 					}
+				} else if bytes.Equal([]byte(arg), []byte("--hashlump")) {
+					// print hashes to all level lumps that got modified
+					c.HashLumps = true
 				} else if bytes.Equal([]byte(arg), []byte("--eject")) {
 					// user requested to transfer only rebuilt maps into new file
 					// and omit all other lumps

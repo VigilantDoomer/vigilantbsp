@@ -2624,6 +2624,18 @@ took 2h 22 m 35 seconds (with acceleration implicitly on as its the
 new default, peak memory usage around 1Gb)
 
 
+--stknode
+For developers only, no benefits to end-user. Tests machinery which
+is intended to be used to implement hard multi-tree. Should result in
+the same output as without it (provided both are run in deterministic
+mode), but may fail to be so for Zdoom extended nodes far as I recall,
+as Zdoom extended nodes use a grid to which they snap vertices that
+are too close, so build order of nodes (which is what this parameter
+changes) matters, and one can't just recreate original vertices in
+different order, cause this may affect convexity of the existing
+subsectors.
+
+
 --eject
 Produce output file containing only rebuilt levels and NO other lumps.
 Requires to specify output file via -o parameter. Won't include levels
@@ -2634,6 +2646,9 @@ It is possible to copy select levels without actually rebuilding them
 
 	vigilantbsp -d -b- -n- -r- source.wad -m:map05+map07+map08+map25+map29 -o selected-levels-only.wad --eject
 
+Note: this function currently does not recognize lumps that VigilantBSP
+doesn't process or output, as part of the level, such as GL-related
+lumps and Eternity ExtraData lump. I'll be fixing this in the future.
 
 
 Closing comments in regards to --memprofile and --cpuprofile options:
