@@ -1,4 +1,4 @@
-// Copyright (C) 2022, VigilantDoomer
+// Copyright (C) 2022-2025, VigilantDoomer
 //
 // This file is part of VigilantBSP program.
 //
@@ -80,7 +80,7 @@ func ConvertAndWriteDeepNodes(data []DeepNode, curPos *uint32, fout *os.File,
 	*curPos = *curPos + uint32(dataLen+sigCnt)
 }
 
-// non-threadsafe encode of cryptographic hash, I assume
+// non-threadsafe encode of cryptographic hash, I presume
 func Hash(data []byte) string {
 	hsh := sha256.New()
 	hsh.Write(data)

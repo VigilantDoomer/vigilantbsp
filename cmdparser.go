@@ -187,6 +187,10 @@ func (c *ProgramConfig) FromCommandLine() bool {
 					c.StraightNodes = true
 				} else if bytes.Equal([]byte(arg), []byte("--disableudmf")) {
 					c.DisableUDMF = true // hopefully no one will need to use it
+					// well, actually v0.91 releases with it disabled by default and
+					// no way to reenable, lol. Cause I have not finished
+					// implementation and decided to move the whole UDMF parsing and
+					// building reject for UDMF to v0.92
 				} else if bytes.HasPrefix([]byte(arg), []byte("--detailnodes")) {
 					// Parameter to control whether use more accurate
 					// doLinesIntersect check. Does not affect extended nodes
@@ -920,10 +924,32 @@ func (c *ProgramConfig) parseNodesParams(p []byte) {
 				if nos.whichType != ARG_IS_NUMBER {
 					Log.Error("Width (-nw) must be a numeric value.\n")
 				} else {
-					if nos.value < -1 {
-						Log.Error("Width (-nw) must be not less than -1. (-1 means unlimited width, 0 means auto)")
+					if nos.value < 2 && nos.value != 0 { // 0 means auto, effectively 2
+						Log.Error("Width (-nw) must be not less than 2.")
+						// -1 might be supported in the future, to mean try all
+						// partitions that are tied for best score
 					} else {
 						c.TreeWidth = nos.value
+					}
+				}
+				p = rest
+
+			}
+		case 'r':
+			{
+				nos, rest := readNumeric("-nr", p[1:])
+				if nos.whichType != ARG_IS_NUMBER {
+					Log.Error("Reach (-nr) must be a numeric value.\n")
+				} else {
+					if nos.value < 1 {
+						Log.Error("Reach (-nr) must be not less than 1.\n")
+						// -1 might be supported in the future, to mean continue
+						// to investigate up to width number of partitions that are
+						// tied for best score basically until the end. Given that
+						// some stuff branches very deep, you might not live long
+						// enough to see the process complete
+					} else {
+						c.TreeReach = nos.value
 					}
 				}
 				p = rest
