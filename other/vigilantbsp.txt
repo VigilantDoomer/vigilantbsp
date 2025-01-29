@@ -14,7 +14,9 @@ Document version
 ================
 
 The current document is up-to-date with 0.91 version of
-VigilantBSP.
+VigilantBSP. Next version, 0.92 is currently under way and
+parts of documents may (or may not) have been updated to
+reflect pending changes in development version.
 
 Description
 ===========

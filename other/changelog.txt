@@ -1,5 +1,8 @@
 Changelog for VigilantBSP
 
+v0.92 (in development)
+- Bug fix: concurrency bug between blockmap and nodes builder when linedefs vertices don't precede seg vertices (from previous nodebuilding) in VERTEX lump, but are mingled with each other
+
 v0.91
 - New feature: allow user to enable blockmap subset compression variants conditionally by placing a question mark after respective options.
 - Change: among working blockmaps with EQUAL sizes, when dummy linedef is enabled yet allowed to be non-zero (default), prefer blockmap with zero dummy linedef unless its too long.

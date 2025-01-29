@@ -73,6 +73,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 	var hexenLinedefs []HexenLinedef
 	var absLines AbstractLines
 	var solidLines SolidLines
+	var blockmapLines WriteableLines
 	l.newLines = nil
 	var linesToIgnore []bool
 	var sidedefs []Sidedef
@@ -218,35 +219,35 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 					}
 				}
 
-				absLines = &DoomLinedefs{
+				origLines := &DoomLinedefs{
 					linedefs: linedefs,
 					vertices: vertices,
 				}
+
 				solidLines = &DoomSolidLinedefs{
 					linedefs: linedefs,
 					vertices: vertices,
 				}
-				l.newLines = &DoomLinedefs{
-					linedefs: linedefs,
-					vertices: vertices,
-				}
+				absLines = origLines
+				l.newLines = shallowCopy(origLines)
+				blockmapLines = shallowCopy(origLines)
+				// TODO glLines = shallowCopy(origLines)
+
 			} else { // FORMAT_HEXEN
-				absLines = &HexenLinedefs{
+				origLines := &HexenLinedefs{
 					linedefs: hexenLinedefs,
 					vertices: vertices,
-					things:   nil,
-					sidedefs: nil,
 				}
+
 				solidLines = &HexenSolidLinedefs{
 					linedefs: hexenLinedefs,
 					vertices: vertices,
 				}
-				l.newLines = &HexenLinedefs{
-					linedefs: hexenLinedefs,
-					vertices: vertices,
-					things:   nil, // to be assigned!
-					sidedefs: nil, // to be assigned!
-				}
+				absLines = origLines
+				l.newLines = shallowCopy(origLines)
+				blockmapLines = shallowCopy(origLines)
+				// TODO glLines = shallowCopy(origLines)
+
 			}
 
 			// We can generate blockmap! Or several...
@@ -272,7 +273,7 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 			Log.Printf("Generating BLOCKMAP...\n")
 			l.BlockmapLumpChannel = make(chan []byte)
 			go BlockmapGenerator(BlockmapInput{
-				lines:           l.newLines,
+				lines:           blockmapLines,
 				bounds:          bounds,
 				XOffset:         config.BlockmapXOffset,
 				YOffset:         config.BlockmapYOffset,
@@ -287,6 +288,8 @@ func (l *Level) DoLevel(le []LumpEntry, idx int, rejectsize map[int]uint32,
 		// polyobjects are
 		if action.LevelFormat == FORMAT_HEXEN && loadedLinedefsAndVertices &&
 			!loadedThings && hexenThings != nil && sidedefs != nil {
+			// TODO when will have GL nodes, they will need this initialization
+			// too. Lines for blockmap and reject don't need this
 			l.newLines.(*HexenLinedefs).things = hexenThings
 			l.newLines.(*HexenLinedefs).sidedefs = sidedefs
 			loadedThings = true
@@ -942,4 +945,12 @@ func DistanceTwoPoints(sx, sy, ex, ey int16) float64 {
 	dx := float64(sx) - float64(ex)
 	dy := float64(sy) - float64(ey)
 	return math.Sqrt(dx*dx + dy*dy)
+}
+
+// shallowCopy returns a new pointer (to another allocation of struct), struct data
+// is copied naively (non-deep)
+func shallowCopy[T any](pstruc *T) *T {
+	res := new(T)
+	*res = *pstruc
+	return res
 }
