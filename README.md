@@ -82,6 +82,11 @@ See the documentation file README.txt for more information.
 
 ```
 
+## Notice about the pulled down v0.91 release
+
+2025 Feb, 05
+I had to pull down v0.91 release because I've found a serious bug in it that will prevent building levels when they don't have NODES, REJECT, or BLOCKMAP lumps yet. It was introduced precisely in v0.91, and I will upload a v0.92 soon, after the necessary round of testing is done. The impact is severe because it blocks building from a editor as well (in so far as editors make a copy of the wad with only source lumps for the specific level, and none of the other lumps that they expect nodebuilder to build). I am sorry, was not feeling well at the end of January, and should not have pushed for v0.91 release in such physical condition as I had.
+
 ## Building from source
 
 Use tagged releases of VigilantBSP to build from source,
