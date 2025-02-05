@@ -170,14 +170,15 @@ func CanRebuildThisLevel(levelName []byte) bool {
 // lumps in scheduleRoot, so that it is copied without changes and is ignored
 // NOTE is implied the order of lumps as encountered in scheduleRoot and le
 // is identical
-func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
+func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot **ScheduledLump,
 	validities []LevelValidity) []LumpEntry {
 	// Will be updated
 	nSize := len(le)
 	curOut := 0 // cursor
 	curLevel := 0
 	leOut := make([]LumpEntry, nSize)
-	scheduleEntry := cloneSchedule(scheduleRoot)
+	scheduleEntry := cloneSchedule(*scheduleRoot)
+	newScheduleRoot := scheduleEntry
 	deltaCur := 0 // so as to update schedule to lump entry referencies for lumps not inside a level
 	for scheduleEntry != nil {
 		if scheduleEntry.Drop {
@@ -293,6 +294,7 @@ func UpdateDirectoryAndSchedule(le []LumpEntry, scheduleRoot *ScheduledLump,
 		scheduleEntry = nextScheduleEntry
 	}
 	leOut = leOut[:nSize]
+	*scheduleRoot = newScheduleRoot
 	return leOut
 }
 

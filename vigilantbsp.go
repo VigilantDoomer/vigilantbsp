@@ -150,7 +150,7 @@ func main() {
 	// Now resize directory, add (or even delete) entries where needed, and place
 	// them in correct order. Levels missing mandatory lumps will be removed
 	// from processing and made to be just copied instead
-	le = UpdateDirectoryAndSchedule(le, ScheduleRoot, validities)
+	le = UpdateDirectoryAndSchedule(le, &ScheduleRoot, validities)
 	wh.LumpCount = uint32(len(le))
 
 	lvls = FindValidLevels(ScheduleRoot)
